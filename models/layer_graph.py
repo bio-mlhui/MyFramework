@@ -179,7 +179,6 @@ class Graph_Layer_gatHeadv2(nn.Module):
         x2 = self.norm(self.dropout(x + x2), batch=batch_id[:len(x2)])
         return x2, edge_attr
 
-
 # 加上Norm,
 class Graph_Layer_v1_norm(geo_nn.MessagePassing):
     def __init__(self,
@@ -344,6 +343,102 @@ class Graph_Layer_v1_norm_edgeUpdate(geo_nn.MessagePassing):
         message = self.message_linear(message)  # E c
         return message
 
+class Graph_Layer_v1bi(geo_nn.MessagePassing):
+    def __init__(self,
+                 d_model,
+                 flow,
+                 aggr):
+        super().__init__(aggr=aggr, 
+                         flow=flow)   
+        self.node_linear = nn.Linear(d_model, d_model, bias=False) 
+        self.edge_linear = nn.Linear(d_model, d_model, bias=False)
+        self.message_linear = nn.Linear(3*d_model, d_model)
+    
+    def reset_parameters(self):
+        self.message_linear.bias.data.zero_()
+    
+    def forward(self, x, edge_index, edge_attr, memory, batch_id):
+        x2 = self.node_linear(x)
+        edge_attr_2 = self.edge_linear(edge_attr)
+        
+        
+        x2 = self.propagate(edge_index, size=None,  # keywords
+                             x=x2, edge_attr=edge_attr_2) # arguments
+    
+        # residual
+        return x2 + x, edge_attr
+    
+  
+    def message(self, x_j, x_i, edge_attr):
+        message = torch.cat([x_j, x_i, edge_attr], dim=-1) # E 3*dim
+        message = self.message_linear(message)  # E c
+        return message
+class Graph_Layer_bidirection(nn.Module):
+    def __init__(self,
+                 d_model,
+                 aggr
+                 ) -> None:
+        super().__init__()
+        self.source_to_target_conv = Graph_Layer_v1bi(d_model=d_model, flow='source_to_target', aggr=aggr)
+        self.target_to_source_conv = Graph_Layer_v1bi(d_model=d_model, flow='target_to_source', aggr=aggr)
+        
+    def forward(self, x, edge_index, edge_attr,memory, batch_id):
+        """
+        x: num_nodes c
+        edge_index: 2 num_edges
+        edge_attr: num_edges 2*c
+        """
+        tgt2src_nodes_feats, _ = self.target_to_source_conv(x=x.clone(),
+                                                        edge_attr=edge_attr.clone(),
+                                                        edge_index=edge_index, memory=memory, batch_id=batch_id)
+        src2tgt_nodes_feats, _ = self.source_to_target_conv(x=x.clone(),
+                                                        edge_attr=edge_attr.clone(),
+                                                        edge_index=edge_index, memory=memory, batch_id=batch_id)
+          
+        return (src2tgt_nodes_feats + tgt2src_nodes_feats ) / 2, edge_attr
+
+
+
+class Graph_Layer_gatHeadFullStep(nn.Module):
+    def __init__(self, d_model, nhead, flow, aggr,):
+        super().__init__()
+        self.self_attn = geo_nn.GATConv(in_channels=d_model,
+                                        out_channels=d_model,
+                                        add_self_loops=False,
+                                        hedas=nhead,
+                                        dropout=0.0,
+                                        flow=flow,
+                                        aggr=aggr
+                                        )
+        self.norm = geo_nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(0.1)
+        self._reset_parameters()
+        
+    def _reset_parameters(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+
+    def forward(self, x, edge_index, edge_attr, memory, batch_id):
+        dgl_graph = dgl.graph((edge_index[0, :], edge_index[1, :]))
+        try:
+            traversal_order = dgl.topological_nodes_generator(dgl_graph)
+        except:
+            exit()
+        orders = []
+        for idx, frontier in enumerate(traversal_order):
+            src, tgt, eid =  dgl_graph.in_edges(frontier.to(x.device), form='all')
+            if idx == 0:
+                assert len(src) == 0 and len(tgt) == 0 and len(eid) == 0
+                continue
+            orders.append(eid)
+        
+        x2 = x.clone()
+        for edge_order in orders: 
+            x2 = self.self_attn(x2, edge_index[:, edge_order], edge_attr[edge_order, :]) # arguments
+
+        return self.norm(self.dropout(x + x2), batch=batch_id[:len(x2)]), edge_attr
+
 
 # norm
 # 使用memory
@@ -434,59 +529,79 @@ class Graph_Layer_v3(geo_nn.MessagePassing):
         return message
 
 
-class Graph_Layer_v1bi(geo_nn.MessagePassing):
+import dgl
+class Graph_Layer_v3_fullstep(geo_nn.MessagePassing):
     def __init__(self,
                  d_model,
-                 flow,
-                 aggr):
-        super().__init__(aggr=aggr, 
+                 flow,):
+        super().__init__(aggr=V3_Aggregation(),
                          flow=flow)   
         self.node_linear = nn.Linear(d_model, d_model, bias=False) 
-        self.edge_linear = nn.Linear(d_model, d_model, bias=False)
         self.message_linear = nn.Linear(3*d_model, d_model)
+        self.norm = geo_nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(0.1)
     
     def reset_parameters(self):
         self.message_linear.bias.data.zero_()
     
     def forward(self, x, edge_index, edge_attr, memory, batch_id):
-        x2 = self.node_linear(x)
-        edge_attr_2 = self.edge_linear(edge_attr)
+        device = x.device          
+        x2 = self.node_linear(x)  # |V| c
         
+        video_mem = memory['video_mem'] # |E| hw c
+        video_mem += memory['video_mem_pos']
+        video_pad_mask = memory['video_mem_pad_mask']
         
-        x2 = self.propagate(edge_index, size=None,  # keywords
-                             x=x2, edge_attr=edge_attr_2) # arguments
+        dgl_graph = dgl.graph((edge_index[0, :], edge_index[1, :]))
+        try:
+            traversal_order = dgl.topological_nodes_generator(dgl_graph)
+        except:
+            exit()
+        orders = []
+        for idx, frontier in enumerate(traversal_order):
+            src, tgt, eid =  dgl_graph.in_edges(frontier.to(device), form='all')
+            if idx == 0:
+                assert len(src) == 0 and len(tgt) == 0 and len(eid) == 0
+                continue
+            orders.append(eid)
+            
+        for edge_order in orders: 
+            x2 = self.propagate(edge_index[:, edge_order], 
+                                size=None,  # keywords
+                                x=x2, 
+                                edge_attr=edge_attr[edge_order, :], 
+                                video_mem={'feat': video_mem[edge_order, :], 
+                                           'pad': video_pad_mask[edge_order, :]}) # arguments
     
         # residual
-        return x2 + x, edge_attr
+        return self.norm(self.dropout(x2 + x), 
+                         batch=batch_id[:len(x)]), edge_attr
     
-  
+    def aggregate(self, inputs: Tensor, x:Tensor, video_mem:Tensor, index: Tensor, 
+                  ptr: Optional[Tensor] = None,
+                  dim_size: Optional[int] = None) -> Tensor:
+        return self.aggr_module(inputs, index, ptr=ptr, dim_size=dim_size,
+                                dim=self.node_dim, kwargs={'video_mem':video_mem, 'x':x})
+   
+
     def message(self, x_j, x_i, edge_attr):
         message = torch.cat([x_j, x_i, edge_attr], dim=-1) # E 3*dim
         message = self.message_linear(message)  # E c
         return message
-class Graph_Layer_bidirection(nn.Module):
-    def __init__(self,
-                 d_model,
-                 aggr
-                 ) -> None:
-        super().__init__()
-        self.source_to_target_conv = Graph_Layer_v1bi(d_model=d_model, flow='source_to_target', aggr=aggr)
-        self.target_to_source_conv = Graph_Layer_v1bi(d_model=d_model, flow='target_to_source', aggr=aggr)
-        
-    def forward(self, x, edge_index, edge_attr,memory, batch_id):
-        """
-        x: num_nodes c
-        edge_index: 2 num_edges
-        edge_attr: num_edges 2*c
-        """
-        tgt2src_nodes_feats, _ = self.target_to_source_conv(x=x.clone(),
-                                                        edge_attr=edge_attr.clone(),
-                                                        edge_index=edge_index, memory=memory, batch_id=batch_id)
-        src2tgt_nodes_feats, _ = self.source_to_target_conv(x=x.clone(),
-                                                        edge_attr=edge_attr.clone(),
-                                                        edge_index=edge_index, memory=memory, batch_id=batch_id)
-          
-        return (src2tgt_nodes_feats + tgt2src_nodes_feats ) / 2, edge_attr
+
+@register_graphLayer
+def graph_layer_inferfullstep(configs):
+    return Graph_Layer_v3_fullstep(
+        d_model=configs['d_model'],
+        flow=configs['flow']
+    )
+ 
+@register_graphLayer
+def graph_layer_gatHeadFullStep(configs):
+    return Graph_Layer_gatHeadFullStep(d_model=configs['d_model'],
+                                        nhead=configs['nhead'],
+                                        flow=configs['flow'],
+                                        aggr=configs['aggr'])
 
  
 @register_graphLayer

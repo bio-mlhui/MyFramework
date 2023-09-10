@@ -112,7 +112,7 @@ if __name__=="__main__":
             'name': args.schedule_model_configs,
             'id': f'{args.task}_{args.group}_{args.schedule_model_configs}',
             'mode': 'online',
-            'resume': 'must',
+            'resume': 'allow',
             'configs': copy.deepcopy(configs)
         }
         configs['trainer_ckpt'] = args.trainer_ckpt

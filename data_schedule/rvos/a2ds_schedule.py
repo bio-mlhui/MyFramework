@@ -584,7 +584,7 @@ class A2DS_Dataset(DatasetWithAux):
         
         self.split = split
         collator_kwargs = {}
-        if text_aux_version == 1:
+        if text_aux_version == 1 or text_aux_version == 2 or text_aux_version == 3:
             collator_kwargs['tokenizer'] = self.tokenizer
         self.collator = Collator(split=split,
                                  text_aux_version=text_aux_version,

@@ -307,12 +307,11 @@ class DatasetWithAux(Dataset):
             }
             
         elif self.text_aux_version == 2:
-            amrs = [linamr_dict['amr_tree_string_linearized']]
-            sents = [self.prefix + text_query]
-
+            amrs =  [self.text_aux_by_auxid[text_auxid]['amr_tree_string_linearization_dict']['amr_tree_string_linearized']]
+            sents = [self.prefix + text_auxid]
             # tokenize句子
             # <s> text </s>  # 0 ... 2
-            # dict["input_ids": list[list[int] ], ]
+            # dict["input_ids": list[list[int] ], "attention_masks" ]
             model_inputs = self.tokenizer(sents, max_length=self.max_src_length, padding=False, truncation=True)
             for input_id in model_inputs['input_ids']: # [list[int]]
                 if len(input_id) > self.max_src_length - 10:
@@ -455,6 +454,16 @@ class DatasetWithAux(Dataset):
         if self.video_aux_version == 0:
             return {}
 
+def padding_func(features, padding_side="right", pad_token_id=1, key="label"):
+    assert key in features[0].keys(), f"{key} not in {features[0].keys()}"
+    max_label_length = max(len(feature[key]) for feature in features)
+    for feature in features:
+        remainder = [pad_token_id] * (max_label_length - len(feature[key]))
+        feature[key] = (
+            feature[key] + remainder if padding_side == "right" else remainder + feature[key]
+        )
+    return
+
 class CollatorWithAux:
     def __init__(self, 
                  text_aux_version,
@@ -464,6 +473,10 @@ class CollatorWithAux:
         if text_aux_version == 1:
             self.tokenizer = kwargs['tokenizer']
             self.label_pad_token_id = -100
+        if text_aux_version == 2:
+            self.tokenizer = kwargs['tokenizer']
+            self.label_pad_token_id = -100
+            
         elif text_aux_version == 3:
             self.tokenizer = kwargs['tokenizer']
             self.label_pad_token_id = -100
@@ -514,6 +527,8 @@ class CollatorWithAux:
                                             return_tensors='pt')
             return {
                 'model_inputs': model_inputs, 
+                'exist_queries':  [s['exist_queries'] for s in auxiliary],
+                'sample_idx': [s['sample_idx'] for s in auxiliary]
             }
               
     def v3_pad_model_inputs(self, features):
@@ -521,19 +536,19 @@ class CollatorWithAux:
             features,
             padding_side=self.tokenizer.padding_side,
             pad_token_id=self.label_pad_token_id,
-            key="labels",
+            key="labels", # 对amr </g>进行Pading
         )
         padding_func(
             features,
             padding_side=self.tokenizer.padding_side,
             pad_token_id=self.tokenizer.pad_token_id,
-            key="joint_ids",
+            key="joint_ids", # 对<s> text </s> <g> amr </g>进行padding
         )
         padding_func(
             features,
             padding_side=self.tokenizer.padding_side,
             pad_token_id=self.tokenizer.pad_token_id,
-            key="seg_ids",
+            key="seg_ids", # 对0是text, 1是amr进行padding(1)
         )
         padding_func(
             features,

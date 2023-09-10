@@ -1140,6 +1140,12 @@ class AMR_v1(AMR_v0):
         assert (amr_token_feats.flatten(0, 1)[amr_token_seg_ids.flatten()==0]).sum() == 0
         return amrs, amr_token_feats, amr_token_seg_ids      
 
+
+# linamr
+class AMR_v2(AMR_v0):
+    pass
+
+
 # 改成3d proj
 
 # 改成matching
@@ -1454,7 +1460,7 @@ class Text_V0(nn.Module):
         # 抽视频的特征 b t c h w
         multiscales, multiscales_pad_masks, multiscales_poses = self.encode_video(samples)
         # 抽文本的特征 max b c,  b max, b c 
-        token_feats, token_pad_masks, token_sentence_feats = self.encode_text(text_queries, device)
+        token_feats, token_pad_masks, token_sentence_feats = self.encode_text(text_queries, auxiliary, device)
         token_pos = self.text_pos_embed(token_pad_masks, hidden_dim=token_feats.shape[-1]).permute(2, 0, 1)
         
         for lvl, (feat, pad_mask, poses) in enumerate(zip(multiscales, multiscales_pad_masks, multiscales_poses)):
@@ -1780,6 +1786,233 @@ class Text_V0(nn.Module):
             
         return indices
 
+class Text_v0linamr(Text_V0):
+    def __init__(self, 
+                 d_model=256,
+                 max_stride=64,
+                 pt_dir='/home/xhh/pt',
+                 # video encoder
+                 swint_pretrained_path='pretrained_swin_transformer/swin_tiny_patch244_window877_kinetics400_1k.pth',
+                 swint_freeze=True,
+                 swint_runnning_mode='train',
+                 video_projs = [
+                    {'name': 'conv2d', 'in_channels': 96,  'out_channels': 256, 'kernel_size': 3, 'padding':1, 'bias':True,},
+                    {'name': 'conv2d', 'in_channels': 192, 'out_channels': 256, 'kernel_size': 1, 'bias':True,},
+                    {'name': 'conv2d', 'in_channels': 384, 'out_channels': 256, 'kernel_size': 1, 'bias':True,},
+                    {'name': 'conv2d', 'in_channels': 768, 'out_channels': 256, 'kernel_size': 1, 'bias':True,},
+                    {'name': 'conv2d', 'in_channels': 768, 'out_channels': 256, 'kernel_size': 3, 'stride':2, 'padding': 1, \
+                        'bias':True,}],
+                video_feat_scales=[[1,4],[1,8],[1,16],[1,32], [1,64]],
+
+                # amrtext
+                roberta_freeze = True,
+                linamrbart_freeze=True,
+                text_proj = {
+                    'name': 'FeatureResizer',
+                    'input_feat_size': 768,
+                    'output_feat_size': 256,
+                    'dropout':0.1,
+                    'do_ln':True},
+                how_to_encode_linamr='encoder decoder',
+                linamr_proj = {
+                    'name': 'FeatureResizer',
+                    'input_feat_size': 1024,
+                    'output_feat_size': 256,
+                    'dropout':0.1,
+                    'do_ln':True},
+                linamr_text_sentence_level_proj = {
+                    'name': 'FeatureResizer',
+                    'input_feat_size': 1792, # + 768 = 1792
+                    'output_feat_size': 256,
+                    'dropout':0.1,
+                    'do_ln':True},
+                fusion={
+                    'name': 'VisionLanguageFusionModule',
+                    'd_model':256,
+                    'nheads': 8,
+                    'dropout':0.},
+                parsing_encoder={
+                    'name':'deform_video_2d_fpn',
+                    'd_ffn': 2048,
+                    'dropout':0.,
+                    'activation': 'relu',
+                    'nheads': 8,
+                    'fused_scales':[[1,8],[1,16],[1,32],[1,64]],
+                    'fpn_strides': [[1,4],[1,8]],
+                    'npoints':4,
+                    'nlayers': 6,},
+            
+                loss_weight={'refdecoder_mask': 5,
+                             'refdecoder_dice': 5,
+                             'refdecoder_refer': 2,
+                             'refdecoder_giou': 2,
+                             'refdecoder_bbox': 5,
+                            # 现在的模型只有decoder有loss
+                            # 其他的module是否有loss
+                 },
+                tasks = {'refdecoder_refseg': {'layer_weights': {-1:1., 0:1., 1:1., 2:1., 3:1., 4:1., 5:1., 6:1., 7:1., 8:1.,},
+                                                'refer_class_weight': [1, 0.1],
+                                                'matching_costs': {'refer': 2, 'mask': 5, 'dice': 5, 'box': 5, 'giou': 2 },
+                                                },
+                },
+                refdecoder={ 
+                    'nqueries': 5,
+                    'nlayers': 9,
+                    'cross_layer':{
+                        'name': 'cross_attention',
+                        'd_model': 256,
+                        'nhead': 8,
+                        'dropout': 0.,
+                    },
+                    'self_layer':{
+                        'name': 'self_attention',
+                        'd_model': 256,
+                        'd_model': 256,
+                        'nhead': 8,
+                        'dropout': 0.,
+                    },
+                    'ffn_layer':{
+                        'name': 'ffn',
+                        'd_model': 256,
+                    },
+                    'used_scales': [[1,32],[1,16],[1,8]],
+                    'conved_scale': [1,4],
+                    'mask_out_stride': 4,
+                    'mask_threshold': 0.5,
+                    },
+                ) -> None:
+        super().__init__(d_model, max_stride, pt_dir, swint_pretrained_path, swint_freeze, swint_runnning_mode, video_projs, video_feat_scales, roberta_freeze, text_proj, fusion, parsing_encoder, loss_weight, tasks, refdecoder)
+        
+        # from transformers import RobertaModel, RobertaTokenizerFast
+        # self.roberta = RobertaModel.from_pretrained(os.path.join(pt_dir, 'roberta_base'))
+        # self.roberta_tokenizer = RobertaTokenizerFast.from_pretrained(os.path.join(pt_dir, 'roberta_base'))
+        # if roberta_freeze:
+        #     for p in self.roberta.parameters():
+        #         p.requires_grad_(False)
+        
+        # 
+        # self.txt_proj = FeatureResizer(**text_proj)
+        # self.text_pos_embed = build_position_encoding(position_embedding_name='1d')
+    
+        from .amr_utils.utils import BartForConditionalGeneration
+        self.linamr_model = BartForConditionalGeneration.from_pretrained(os.path.join(pt_dir, 'amr', 'AMRBART_pretrain'))
+        from .amr_utils.tokenization_bart import AMRBartTokenizer
+        self.linamr_tokenizer : AMRBartTokenizer = AMRBartTokenizer.from_pretrained(os.path.join(pt_dir, 'amr', 'AMRBART_pretrain'))
+        if linamrbart_freeze:
+            for p in self.linamr_model.parameters():
+                p.requires_grad_(False)
+        
+        assert linamr_proj.pop('name') == 'FeatureResizer'
+        self.linamr_proj = FeatureResizer(**linamr_proj)
+        assert linamr_text_sentence_level_proj.pop('name') == 'FeatureResizer'
+        self.linamr_text_sentence_level_proj = FeatureResizer(**linamr_text_sentence_level_proj)
+        self.how_to_encode_linamr = how_to_encode_linamr
+    
+    def linamr_model_forward(self, model_inputs, device):
+        # input_ids: <s> text </s>
+        # srcEtgt_ids: <s> text </s> <g> <MASK> </g>
+        # Esrctgt_ids: <s> <MASK> </s> <g> amr </g>
+        # labels: amr </g>
+        # joint_ids: <s> text </s> <g> amr </g>
+        if self.how_to_encode_linamr == 'encoder':
+            # Esrctgt, label
+            bart_input = model_inputs["Esrctgt_ids"] # b max
+            attention_mask = bart_input.ne(self.linamr_tokenizer.pad_token_id).int() 
+            bart_input = bart_input.to(device) # <s> <MASK> </s> <g> amr </g> pad
+            attention_mask = attention_mask.to(device) # 0代表padding的位置
+            # <s> <MASK> </s> <g> amr </g> pad
+            encoder_outputs = self.linamr_model.model.encoder(
+                input_ids=bart_input,
+                attention_mask=attention_mask,
+            ).last_hidden_state
+            amr_embeds = encoder_outputs[:, 3:]
+            amr_pad_masks = ~(attention_mask[:, 3:].bool())
+            amr_sentence_level_embed = amr_embeds[:, 0] # b c
+            return amr_embeds, amr_pad_masks, amr_sentence_level_embed 
+        
+        elif self.how_to_encode_linamr == 'encoder decoder':
+            # <s> <MASK> </s> <g> amr </g> pad
+            bart_input = model_inputs["Esrctgt_ids"] # b max
+            attention_mask = bart_input.ne(self.linamr_tokenizer.pad_token_id).int()      
+            # amr </g> pad pad
+            labels = model_inputs["labels"] # b max
+            
+            dec_input = labels.new_zeros(labels.size(0), labels.size(1))
+            # <g> amr </g> pad -> amr </g> pad pad
+            dec_input[:, 1:] = labels[:, :-1].clone()
+            dec_input[:, 0] = self.linamr_tokenizer.amr_bos_token_id 
+ 
+            decoder_input_pad_mask = (dec_input == -100) 
+            dec_input.masked_fill_(decoder_input_pad_mask, self.linamr_tokenizer.pad_token_id)
+            
+            bart_input = bart_input.to(device) # <s> <MASK> </s> <g> amr </g> pad
+            attention_mask = attention_mask.to(device) # 0代表padding的位置
+            labels = labels.to(device) # amr </g> -100
+            dec_input = dec_input.to(device) # <g> amr </g> pad
+            # self.tokenizer.decode([self.model.lm_head(decoder_output[0][i]).argmax().item() for i in range(len(decoder_output[0]))])
+            # amr </g> pad
+            amr_embeds = self.linamr_model(input_ids=bart_input,
+                                    attention_mask=attention_mask,
+                                    decoder_input_ids=dec_input,
+                                    labels=labels)
+            amr_embeds_pad_mask = decoder_input_pad_mask[:, 1:]
+            amr_embeds_pad_mask = F.pad(amr_embeds_pad_mask.float(), [0, 1], value=1.0).bool()
+            return amr_embeds, amr_embeds_pad_mask
+        
+        elif self.how_to_encode_linamr == 'amr+text_encoder amr_decoder':
+            # joint, label
+            pass
+        elif self.how_to_encode_linamr == 'amr+text_encoder amr+text_decoder':
+            bart_input = model_inputs["joint_ids"]
+            seg_ids = model_inputs['seg_ids'] # 0: text, 1: graph
+            labels = model_inputs["joint_ids"].clone()
+            labels.masked_fill_(labels == self.tokenizer.pad_token_id, -100)
+            labels = labels[:, 1:]                                                  # w1, w2, .., wn <\s>
+            dec_input = model_inputs["joint_ids"].clone()
+            dec_input = dec_input[:, :-1]                                           # <s> w1 w2, ..., wn
+            attention_mask = bart_input.ne(self.tokenizer.pad_token_id).int()          # attention mask
+            
+            # text </s> <g> amr </g>
+            decoder_output = self.linamr_model(input_ids=bart_input,
+                                        attention_mask=attention_mask,
+                                        decoder_input_ids=dec_input,
+                                        labels=labels).decoder_hidden_states
+            decoder_output = self.text_proj(decoder_output)
+            text_feat = decoder_output
+            
+            return decoder_output, meta_dict['each_token_length'], text_feat, None
+     
+
+    def encode_text(self, text_queries, auxiliary, device):
+        tokenized = self.roberta_tokenizer.batch_encode_plus(text_queries, padding="longest", return_tensors="pt").to(device)
+        encoded_text = self.roberta(**tokenized)
+        # encoded_text.last_hidden_state: [batch_size, length, 768]
+        # encoded_text.pooler_output: [batch_size, 768]
+        text_attention_mask = tokenized.attention_mask.ne(1).bool()
+        # text_attention_mask: [batch_size, length]
+        text_features = encoded_text.last_hidden_state 
+        text_features = self.txt_proj(text_features)  
+        text_masks = text_attention_mask              
+
+        text_sentence_features = encoded_text.pooler_output  
+        # max b c, b max, b c
+        text_seq2seq_feats = text_features.permute(1,0,2) # max b c
+        text_seq2seq_pad_masks = text_masks # b max
+        text_seq2seq_sent_feats = text_sentence_features  # b c
+        
+        
+        # dict["input_ids", "labels", "joint_ids"]
+        linamr_feats, linamr_pad_masks, linamr_sentence_feats \
+            = self.linamr_model_forward(auxiliary['model_inputs'], device=device)
+                
+        linamr_feats = self.linamr_proj(linamr_feats).permute(1,0,2) # max b c
+        
+        # s b c, b s, b c
+        return torch.cat([text_seq2seq_feats, linamr_feats], dim=0),\
+            torch.cat([text_seq2seq_pad_masks, linamr_pad_masks], dim=1),\
+                self.linamr_text_sentence_level_proj(torch.cat([text_seq2seq_sent_feats, linamr_sentence_feats], dim=1))
+        
+
 
 class Text_V0_nearestInterpolatePost(Text_V0):
     def __init__(self, d_model=256, max_stride=64, pt_dir='/home/xhh/pt', swint_pretrained_path='pretrained_swin_transformer/swin_tiny_patch244_window877_kinetics400_1k.pth', swint_freeze=True, swint_runnning_mode='train', video_projs=[{ 'name': 'conv2d','in_channels': 96,'out_channels': 256,'kernel_size': 3,'padding': 1,'bias': True }, { 'name': 'conv2d','in_channels': 192,'out_channels': 256,'kernel_size': 1,'bias': True }, { 'name': 'conv2d','in_channels': 384,'out_channels': 256,'kernel_size': 1,'bias': True }, { 'name': 'conv2d','in_channels': 768,'out_channels': 256,'kernel_size': 1,'bias': True }, { 'name': 'conv2d','in_channels': 768,'out_channels': 256,'kernel_size': 3,'stride': 2,'padding': 1,'bias': True }], video_feat_scales=[[1, 4], [1, 8], [1, 16], [1, 32], [1, 64]], roberta_freeze=True, text_proj={ 'name': 'FeatureResizer','input_feat_size': 768,'output_feat_size': 256,'dropout': 0.1,'do_ln': True }, fusion={ 'name': 'VisionLanguageFusionModule','d_model': 256,'nheads': 8,'dropout': 0 }, parsing_encoder={ 'name': 'deform_video_2d_fpn','d_ffn': 2048,'dropout': 0,'activation': 'relu','nheads': 8,'fused_scales': [[1, 8], [1, 16], [1, 32], [1, 64]],'fpn_strides': [[1, 4], [1, 8]],'npoints': 4,'nlayers': 6 }, loss_weight={ 'refdecoder_mask': 5,'refdecoder_dice': 5,'refdecoder_refer': 2,'refdecoder_giou': 2,'refdecoder_bbox': 5 }, tasks={ 'refdecoder_refseg': { 'layer_weights': { -1: 1,0: 1,1: 1,2: 1,3: 1,4: 1,5: 1,6: 1,7: 1,8: 1 },'refer_class_weight': [1, 0.1],'matching_costs': { 'refer': 2,'mask': 5,'dice': 5,'box': 5,'giou': 2 } } }, refdecoder={ 'nqueries': 5,'nlayers': 9,'cross_layer': { 'name': 'cross_attention','d_model': 256,'nhead': 8,'dropout': 0 },'self_layer': { 'name': 'self_attention','d_model': 256,'d_model': 256,'nhead': 8,'dropout': 0 },'ffn_layer': { 'name': 'ffn','d_model': 256 },'used_scales': [[1, 32], [1, 16], [1, 8]],'conved_scale': [1, 4],'mask_out_stride': 4,'mask_threshold': 0.5 }) -> None:
@@ -1909,10 +2142,7 @@ class Text_V0_EvalAsemble(Text_V0):
             'query_pred_masks': by_batch_mask_preds, # [n t' h w], batch
             'query_pred_is_referred_prob': by_batch_preds_probs, # [n t'], batch
         }
-   
-    
 
-######################################################################
 # representation上: 加上一个obj_decoder, obj_queries作为memory加到ref_decoder
 class Text_V0_V1(Text_V0):
     def __init__(self, 
@@ -2819,6 +3049,46 @@ def text_v0(device, configs):
         {"params": [p for n, p in model.named_parameters() if ("video_swint" in n) and p.requires_grad],
             "lr": configs['optimization']['vid_backbone_lr']},
         {"params": [p for n, p in model.named_parameters() if ("roberta" in n) and p.requires_grad],
+            "lr": configs['optimization']['text_backbone_lr']}, 
+    ] # CHECK params dict every run
+    optimizer = get_optimizer(param_dicts=param_dicts, configs=configs['optimization']['optimizer'])
+
+    return model, optimizer 
+
+
+@register_model
+def text_v0linamr(device, configs):
+    model = Text_v0linamr(
+        d_model=configs['d_model'],
+        pt_dir=configs['pt_dir'],
+        max_stride=configs['max_stride'],
+        swint_pretrained_path=configs['swint_pretrained_path'],
+        swint_freeze=configs['swint_freeze'],
+        swint_runnning_mode=configs['swint_runnning_mode'],
+        video_projs=configs['video_projs'],
+        video_feat_scales=configs['video_feat_scales'],
+        roberta_freeze=configs['roberta_freeze'],
+        linamr_proj=configs['linamr_proj'],
+        linamr_text_sentence_level_proj=configs['linamr_text_sentence_level_proj'],
+        how_to_encode_linamr=configs['how_to_encode_linamr'],
+        linamrbart_freeze=configs['linamrbart_freeze'],
+        text_proj=configs['text_proj'],
+        fusion=configs['fusion'],
+        parsing_encoder=configs['parsing_encoder'],
+        loss_weight=configs['loss_weight'],
+        tasks=configs['tasks'],
+        refdecoder=configs['refdecoder']
+        
+    )
+    model.to(device)
+
+
+    param_dicts = [
+        {"params": [p for n, p in model.named_parameters() 
+                    if (("video_swint" not in n) and ("roberta" not in n) and p.requires_grad)]},
+        {"params": [p for n, p in model.named_parameters() if ("video_swint" in n) and p.requires_grad],
+            "lr": configs['optimization']['vid_backbone_lr']},
+        {"params": [p for n, p in model.named_parameters() if (("roberta" in n) or ("linamr_model" in n)) and p.requires_grad],
             "lr": configs['optimization']['text_backbone_lr']}, 
     ] # CHECK params dict every run
     optimizer = get_optimizer(param_dicts=param_dicts, configs=configs['optimization']['optimizer'])
