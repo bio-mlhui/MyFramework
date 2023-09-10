@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="overtop">
+    <roleset id="overtop.01" name="surpass">
+      <aliases>
+        <alias pos="v">overtop</alias>
+      </aliases>
+      <roles>
+        <role descr="surpasser" f="PAG" n="0" />
+        <role descr="surpassed" f="PPT" n="1" />
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-" />
+        <usage resource="PropBank" version="2.1.5" inuse="-" />
+        <usage resource="PropBank" version="3.1" inuse="+" />
+        <usage resource="PropBank" version="3.4" inuse="+" />
+        <usage resource="AMR" version="2019" inuse="-" />
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+" />
+        <usage resource="AMR" version="Spatial 1.0" inuse="-" />
+        <usage resource="AMR" version="THYME 1.0" inuse="-" />
+      </usagenotes>
+      <lexlinks />
+      <example name="overtop-v" src="Nostromo, Joseph Conrad">
+        <text>The one from the Provincial Assembly , more restless and uneasy in its corporate expression , was overtopped by the big face of Don Juste Lopez , soft and white , with prominent eyelids and wreathed in impenetrable solemnity as if in a dense cloud .</text>
+        <propbank>
+          <rel relloc="17">overtopped</rel>
+          <arg type="ARG1" start="0" end="15">The one from the Provincial Assembly , more restless and uneasy in its corporate expression ,</arg>
+          <arg type="ARG0" start="18" end="44">by the big face of Don Juste Lopez , soft and white , with prominent eyelids and wreathed in impenetrable solemnity as if in a dense cloud</arg>
+        </propbank>
+      </example>
+      <note>OVERTOP-V NOTES: Added by Julia for EWT.</note>
+    </roleset>
+  </predicate>
+</frameset>

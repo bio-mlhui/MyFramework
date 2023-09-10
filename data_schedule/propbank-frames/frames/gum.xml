@@ -1,0 +1,183 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="gum">
+    <roleset id="gum.01" name="fill, attach, or fix with gum or gum-like substance">
+      <aliases>
+        <alias pos="v">gum</alias>
+      </aliases>
+      <roles>
+        <role descr="Fixer" f="PAG" n="0">
+          <rolelinks>
+            <rolelink class="tape-22.4-1" resource="VerbNet" version="verbnet3.3">agent</rolelink>
+            <rolelink class="tape-22.4" resource="VerbNet" version="verbnet3.4">agent</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="First (or all in one constituent) thing gummed" f="PPT" n="1">
+          <rolelinks>
+            <rolelink class="tape-22.4-1" resource="VerbNet" version="verbnet3.3">patient</rolelink>
+            <rolelink class="tape-22.4" resource="VerbNet" version="verbnet3.4">patient</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="Thing arg1 is attached to with gum (when separate constituent)" f="PPT" n="2">
+          <rolelinks>
+            <rolelink class="tape-22.4-1" resource="VerbNet" version="verbnet3.3">co-patient</rolelink>
+            <rolelink class="tape-22.4" resource="VerbNet" version="verbnet3.4">co-patient</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="Gum itself, type of gum used, instrument" f="MNR" n="3">
+          <rolelinks>
+            <rolelink class="tape-22.4-1" resource="VerbNet" version="verbnet3.3">instrument</rolelink>
+            <rolelink class="tape-22.4" resource="VerbNet" version="verbnet3.4">instrument</rolelink>
+          </rolelinks>
+        </role>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="Attaching" confidence="0.8" resource="FrameNet" src="manual+strict-conv" version="1.7"/>
+        <lexlink class="tape-22.4-1" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3"/>
+        <lexlink class="tape-22.4" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+      </lexlinks>
+      <example name="No instrument, type of gum mentioned" src="web">
+        <text>I sewed the glasses on , and gummed the mustache to my face .</text>
+        <propbank>
+          <rel relloc="7">gummed</rel>
+          <arg type="ARG0" start="0" end="0">I</arg>
+          <arg type="ARG1" start="8" end="9">the mustache</arg>
+          <arg type="ARG2" start="10" end="12">to my face</arg>
+        </propbank>
+      </example>
+      <example name="With PP &quot;on&quot;" src="web">
+        <text>The buds looked as if they were gummed on to the lower side of the leaves .</text>
+        <propbank>
+          <rel relloc="7">gummed</rel>
+          <arg type="ARG1" start="5" end="5">they</arg>
+          <arg type="ARG2" start="8" end="15">on to the lower side of the leaves</arg>
+        </propbank>
+      </example>
+      <example name="All arguments, invented example" src="web">
+        <text>John gummed the handle to the toaster oven with cherry Big - League chew .</text>
+        <propbank>
+          <rel relloc="1">gummed</rel>
+          <arg type="ARG0" start="0" end="0">John</arg>
+          <arg type="ARG1" start="2" end="3">the handle</arg>
+          <arg type="ARG2" start="4" end="7">to the toaster oven</arg>
+          <arg type="ARG3" start="8" end="13">with cherry Big - League chew</arg>
+        </propbank>
+      </example>
+      <note>GUM-V NOTES: Roleset based on parallel additions to VN, PB and sense groupings. VN class 22.4-1. Framed by Claire. (from gum.01-v)</note>
+    </roleset>
+    <roleset id="gum.02" name="to chew without gums">
+      <aliases>
+        <alias pos="v">gum</alias>
+      </aliases>
+      <roles>
+        <role descr="chewer" f="PAG" n="0">
+          <rolelinks>
+            <rolelink class="chew-39.2-1" resource="VerbNet" version="verbnet3.3">agent</rolelink>
+            <rolelink class="chew-39.2" resource="VerbNet" version="verbnet3.4">agent</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="food" f="PPT" n="1">
+          <rolelinks>
+            <rolelink class="chew-39.2-1" resource="VerbNet" version="verbnet3.3">patient</rolelink>
+            <rolelink class="chew-39.2" resource="VerbNet" version="verbnet3.4">patient</rolelink>
+          </rolelinks>
+        </role>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="chew-39.2-1" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3"/>
+        <lexlink class="chew-39.2" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+      </lexlinks>
+      <example name="With secondary predication" src="web">
+        <text>She gummed the apple to death .</text>
+        <propbank>
+          <rel relloc="1">gummed</rel>
+          <arg type="ARG0" start="0" end="0">She</arg>
+          <arg type="ARG1" start="2" end="3">the apple</arg>
+          <arg type="ARGM-PRD" start="4" end="5">to death</arg>
+        </propbank>
+      </example>
+      <example name="Connative" src="web">
+        <text>The old man gummed at his wine - cup .</text>
+        <propbank>
+          <rel relloc="3">gummed</rel>
+          <arg type="ARG0" start="0" end="2">The old man</arg>
+          <arg type="ARG1" start="4" end="8">at his wine - cup</arg>
+        </propbank>
+      </example>
+      <note>GUM-V NOTES: Roleset based on parallel additions to VN, PB and sense groupings. Framed by Claire. VN entry chew-39.2-1. (from gum.02-v)</note>
+    </roleset>
+  </predicate>
+  <predicate lemma="gum_up">
+    <roleset id="gum_up.03" name="make sticky, metaphorically make a sticky situation">
+      <aliases>
+        <alias pos="v">gum_up</alias>
+      </aliases>
+      <roles>
+        <role descr="Cause of things becoming sticky" f="PAG" n="0">
+          <rolelinks>
+            <rolelink class="fill-9.8" resource="VerbNet" version="verbnet3.3">agent</rolelink>
+            <rolelink class="fill-9.8" resource="VerbNet" version="verbnet3.4">agent</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="Entity, situation made sticky" f="PPT" n="2">
+          <rolelinks>
+            <rolelink class="fill-9.8" resource="VerbNet" version="verbnet3.3">theme</rolelink>
+            <rolelink class="fill-9.8" resource="VerbNet" version="verbnet3.4">theme</rolelink>
+          </rolelinks>
+        </role>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="-"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="fill-9.8" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+      </lexlinks>
+      <example name="Literal, passive" src="web">
+        <text>The carbs are gummed up inside , and need to be aired out and cleaned .</text>
+        <propbank>
+          <rel relloc="3 4">gummed up</rel>
+          <arg type="ARG2" start="0" end="1">The carbs</arg>
+          <arg type="ARGM-LOC" start="5" end="5">inside</arg>
+        </propbank>
+      </example>
+      <example name="Metaphorical, active." src="web">
+        <text>He 's gummed up Atlantic City joint ventures in the past .</text>
+        <propbank>
+          <rel relloc="2 3">gummed up</rel>
+          <arg type="ARG0" start="0" end="0">He</arg>
+          <arg type="ARG2" start="4" end="7">Atlantic City joint ventures</arg>
+          <arg type="ARGM-TMP" start="8" end="10">in the past</arg>
+        </propbank>
+      </example>
+      <note>GUM_UP-V NOTES: Roleset based on parallel additions to VN, PB and sense groupings. Framed by Claire. No appropriate VN class found. (from gum.03-v)</note>
+    </roleset>
+  </predicate>
+</frameset>

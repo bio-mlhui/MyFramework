@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="infeasible">
+    <roleset id="infeasible.01" name="not possible to carry out, put into practice">
+      <aliases>
+        <alias pos="j">infeasible</alias>
+      </aliases>
+      <roles>
+        <role descr="thing that is not possible, feasible" f="PPT" n="1"/>
+        <role descr="whom it is infeasible for" f="GOL" n="2"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="-"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="-"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="-"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="-"/>
+      </usagenotes>
+      <lexlinks/>
+      <example name="With It EXP" src="BOLT P01, parts 2,3">
+        <text>Arguably Libya is a different matter entirely and it would be unconscionable to watch Gaddafi slaughter his own people , but it would be inappropriate and infeasible for Britain to go it alone</text>
+        <propbank>
+          <rel relloc="26">infeasible</rel>
+          <arg type="ARGM-MOD" start="22" end="22">would</arg>
+          <arg type="ARG1" start="27" end="32">for Britain to go it alone</arg>
+        </propbank>
+      </example>
+      <example name="Both args" src="web">
+        <text>I need my meat though ; it is infeasible for me to abandon meat for more than 2 days .</text>
+        <propbank>
+          <rel relloc="8">infeasible</rel>
+          <arg type="ARG2" start="9" end="10">for me</arg>
+          <arg type="ARG1" start="11" end="18">to abandon meat for more than 2 days</arg>
+        </propbank>
+      </example>
+      <note>INFEASIBLE-J NOTES: Roleset based on instances in BOLT P01, parts 2,3. Framed by Claire. Comparison to feasible-j.01. (from infeasible.01-j)</note>
+    </roleset>
+  </predicate>
+</frameset>

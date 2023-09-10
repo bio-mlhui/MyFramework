@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="disbelieve">
+    <roleset id="disbelieve.01" name="not believe">
+      <aliases>
+        <alias pos="v">disbelieve</alias>
+      </aliases>
+      <roles>
+        <role descr="non-believer" f="PPT" n="0">
+          <rolelinks>
+            <rolelink class="admire-31.2" resource="VerbNet" version="verbnet3.3">experiencer</rolelink>
+            <rolelink class="admire-31.2" resource="VerbNet" version="verbnet3.4">experiencer</rolelink>
+            <rolelink class="conjecture-29.5-1" resource="VerbNet" version="verbnet3.4">agent</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="thing not believed (in)" f="PAG" n="1">
+          <rolelinks>
+            <rolelink class="admire-31.2" resource="VerbNet" version="verbnet3.3">stimulus</rolelink>
+            <rolelink class="admire-31.2" resource="VerbNet" version="verbnet3.4">stimulus</rolelink>
+            <rolelink class="conjecture-29.5-1" resource="VerbNet" version="verbnet3.4">theme</rolelink>
+          </rolelinks>
+        </role>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="admire-31.2" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3"/>
+        <lexlink class="admire-31.2" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+        <lexlink class="conjecture-29.5-1" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+      </lexlinks>
+      <example name="direct disbelief" src="">
+        <text>Mrs. Borden would have had no reason to disbelieve him and he could have approached close enough to her to swing before she could cry out .</text>
+        <propbank>
+          <rel relloc="8">disbelieve</rel>
+          <arg type="ARG0" start="0" end="1">Mrs. Borden</arg>
+          <arg type="ARG1" start="9" end="9">him</arg>
+          <arg type="ARGM-CAU" start="5" end="6">no reason</arg>
+        </propbank>
+      </example>
+      <example name="intransitive" src="">
+        <text>Quint could n't blame Maggie for disbelieving .</text>
+        <propbank>
+          <rel relloc="6">disbelieving</rel>
+          <arg type="ARG0" start="4" end="4">Maggie</arg>
+        </propbank>
+      </example>
+      <example name="indirect disbelief" src="">
+        <text>Why do we not realize that no ideology believes so much in itself as it disbelieves in something else ?</text>
+        <propbank>
+          <rel relloc="15">disbelieves</rel>
+          <arg type="ARG0" start="14" end="14">it</arg>
+          <arg type="ARG1" start="16" end="18">in something else</arg>
+        </propbank>
+      </example>
+      <note>DISBELIEVE-V NOTES: Frames file for 'disbelieve' based on sentences in brown. (from disbelieve.01-v predicate notes)</note>
+    </roleset>
+  </predicate>
+</frameset>

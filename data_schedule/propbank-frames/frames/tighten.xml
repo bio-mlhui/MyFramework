@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="tighten">
+    <roleset id="tighten.01" name="(cause to) become tight(er)">
+      <aliases>
+        <alias pos="n">tightening</alias>
+        <alias pos="v">tighten</alias>
+      </aliases>
+      <roles>
+        <role descr="causer of tightening" f="PAG" n="0">
+          <rolelinks>
+            <rolelink class="other_cos-45.4" resource="VerbNet" version="verbnet3.3">agent</rolelink>
+            <rolelink class="other_cos-45.4" resource="VerbNet" version="verbnet3.4">agent</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="thing tightening" f="PPT" n="1">
+          <rolelinks>
+            <rolelink class="other_cos-45.4" resource="VerbNet" version="verbnet3.3">patient</rolelink>
+            <rolelink class="other_cos-45.4" resource="VerbNet" version="verbnet3.4">patient</rolelink>
+          </rolelinks>
+        </role>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="+"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="other_cos-45.4" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3"/>
+        <lexlink class="tighten-v.2" confidence="0.1" resource="onsense" src="annot-overlap" version="on5">24</lexlink>
+        <lexlink class="other_cos-45.4" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+      </lexlinks>
+      <example name="tighten-v: automatically generated" src="">
+        <text>`` They have to continue to tighten their belts , '' said Craig Kloner , an analyst at Goldman , Sachs &amp; Co .</text>
+        <propbank>
+          <rel relloc="6">tighten</rel>
+          <arg type="ARG0" start="1" end="1">They</arg>
+          <arg type="ARG1" start="7" end="8">their belts</arg>
+        </propbank>
+      </example>
+      <example name="tighten-v: thing tightening" src="">
+        <text>chest tightening</text>
+        <propbank>
+          <rel relloc="1">tightening</rel>
+          <arg type="ARG1" start="0" end="0">chest</arg>
+        </propbank>
+      </example>
+      <note>TIGHTEN-V NOTES: In theory this might take EXT, start and end points, but I reallydoubt it. Member of Vncls other_cos-45.4. (from tighten.01-v)</note>
+      <note>TIGHTENING-N NOTES: Based on temprel sentences. Comparison to tighten.01. Tighten is a member of VN class other_cos-45.4. Framed by Katie. (from tightening.01-n)</note>
+      <note>arg0 particular to the causative verb. (from tight.01-j)</note>
+    </roleset>
+  </predicate>
+  <predicate lemma="tighten_up">
+    <roleset id="tighten_up.02" name="get tight over">
+      <aliases>
+        <alias pos="v">tighten_up</alias>
+      </aliases>
+      <roles>
+        <role descr="thing getting tight" f="PAG" n="0"/>
+        <role descr="because of what" f="PPT" n="1"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="-"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="tighten-v.2" confidence="0.1" resource="onsense" src="annot-overlap" version="on5">3</lexlink>
+      </lexlinks>
+      <example name="tighten_up-v: Congress gettin' tight" src="">
+        <text>You 'd think all the stories about well - heeled communities and developers getting HUD grants would prompt Congress to tighten up on upscale housing subsidies .</text>
+        <propbank>
+          <rel relloc="20 21">tighten up</rel>
+          <arg type="ARG0" start="18" end="18">Congress</arg>
+          <arg type="ARG1" start="22" end="25">on upscale housing subsidies</arg>
+        </propbank>
+      </example>
+      <note>TIGHTEN_UP-V NOTES: (from tighten.02-v)</note>
+    </roleset>
+  </predicate>
+  <predicate lemma="tight">
+    <roleset id="tight.03" name="close, as friends">
+      <aliases>
+        <alias pos="j">tight</alias>
+      </aliases>
+      <roles>
+        <role descr="first (or all) friend(s)" f="PAG" n="1"/>
+        <role descr="second friend" f="COM" n="2"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="-"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks/>
+      <example name="tight-j: both args" src="internet">
+        <text>He is tight with chuck norris</text>
+        <propbank>
+          <rel relloc="2">tight</rel>
+          <arg type="ARG1" start="0" end="0">He</arg>
+          <arg type="ARG2" start="3" end="5">with chuck norris</arg>
+        </propbank>
+      </example>
+      <note>TIGHT-J NOTES: Added by Julia. (from tight.03-j)</note>
+    </roleset>
+    <roleset id="tight.04" name="stingy">
+      <aliases>
+        <alias pos="j">tight</alias>
+      </aliases>
+      <roles>
+        <role descr="miser" f="PAG" n="0"/>
+        <role descr="thing hoarded" f="PPT" n="1"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="-"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <example name="tight-j: both args" src="internet">
+        <text>Rod Stewart is unhappy Ronnie Wood still thinks he is ? tight ? with his money .</text>
+        <propbank>
+          <rel relloc="11">tight</rel>
+          <arg type="ARG0" start="8" end="8">he</arg>
+          <arg type="ARG1" start="13" end="15">with his money</arg>
+        </propbank>
+      </example>
+      <note>TIGHT-J NOTES: Added by Julia. Comparion to 'mean.02'. (from tight.02-j)</note>
+    </roleset>
+    <roleset id="tight.05" name="fastened securely, not loose">
+      <aliases>
+        <alias pos="j">tighter</alias>
+        <alias pos="j">tight</alias>
+        <alias pos="n">tightness</alias>
+      </aliases>
+      <roles>
+        <role descr="causer of tightness" f="CAU" n="0"/>
+        <role descr="thing fastened securely" f="PPT" n="1"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="-"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks/>
+      <example name="tight-j: lexical comparative with complex CXN" src="BOLT-6">
+        <text>The tighter the budget of material rewards is , the more precious spiritual rewards become ,</text>
+        <propbank>
+          <rel relloc="1">tighter</rel>
+          <arg type="ARGM-CXN" start="9" end="14">the more precious spiritual rewards become</arg>
+          <arg type="ARG1" start="2" end="6">the budget of material rewards</arg>
+        </propbank>
+      </example>
+      <example name="tight-j: " src="internet">
+        <text>My wallet 's too small for my fifties , and my diamond shoes are too tight !</text>
+        <propbank>
+          <rel relloc="15">tight</rel>
+          <arg type="ARG1" start="10" end="12">my diamond shoes</arg>
+          <arg type="ARGM-EXT" start="14" end="14">too</arg>
+        </propbank>
+      </example>
+      <note>TIGHTNESS-N NOTES: Added by Kristin based on THYME.</note>
+      <note>TIGHT-J NOTES: Added by Julia based on BOLT-6. (from tight.01-j)</note>
+      <note>TIGHTER-J NOTES: Automatically created by Julia as an alias file for unification. (from tighter.01-j)</note>
+    </roleset>
+  </predicate>
+</frameset>

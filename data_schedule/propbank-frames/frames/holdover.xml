@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="holdover">
+    <roleset id="holdover.01" name="keep">
+      <aliases>
+        <alias pos="v">holdover</alias>
+      </aliases>
+      <roles>
+        <role descr="causer of stay" f="PAG" n="0"/>
+        <role descr="entity remaining" f="PPT" n="1"/>
+        <role descr="kept where" f="LOC" n="2"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="-"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="-"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="-"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="-"/>
+      </usagenotes>
+      <example name="holdover-v: Arg 1 only" src="">
+        <text>Holdover to rule out recurrent tumor</text>
+        <propbank>
+          <rel relloc="0">Holdover</rel>
+          <arg type="ARGM-PRP" start="1" end="5">to rule out recurrent tumor</arg>
+        </propbank>
+      </example>
+      <note>HOLDOVER-V NOTES: Based on sentences in Temprel data. No VN or FN classes. Framed by Katie (from holdover.01-v)</note>
+    </roleset>
+  </predicate>
+</frameset>

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="itemize">
+    <roleset id="itemize.01" name="list each member of a group">
+      <aliases>
+        <alias pos="v">itemize</alias>
+      </aliases>
+      <roles>
+        <role descr="lister" f="PAG" n="0"/>
+        <role descr="items" f="PPT" n="1"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="+"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks/>
+      <example name="one example" src="">
+        <text>Charitable groups are trying to reinstate the write - off for contributions made by individuals who do n't itemize their deductions .</text>
+        <propbank>
+          <rel relloc="18">itemize</rel>
+          <arg type="ARG0" start="14" end="14">individuals</arg>
+          <arg type="R-ARG0" start="15" end="15">who</arg>
+          <arg type="ARGM-NEG" start="17" end="17">n't</arg>
+          <arg type="ARG1" start="19" end="20">their deductions</arg>
+        </propbank>
+      </example>
+      <note>ITEMIZE-V NOTES: No Verbnet entry. Checked by Julia, 10/2010. (from itemize.01-v)</note>
+    </roleset>
+  </predicate>
+</frameset>

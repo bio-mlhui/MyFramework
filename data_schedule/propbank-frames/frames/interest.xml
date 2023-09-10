@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="interest">
+    <roleset id="interest.01" name="provoke interest, exhibit curiosity">
+      <aliases>
+        <alias pos="v">interest</alias>
+        <alias pos="n">interest</alias>
+        <alias pos="n">interesting</alias>
+        <alias pos="j">interesting</alias>
+        <alias pos="j">interested</alias>
+        <alias pos="l">have_interest</alias>
+      </aliases>
+      <roles>
+        <role descr="agent, causer of interest" f="PAG" n="0">
+          <rolelinks/>
+        </role>
+        <role descr="interested entity" f="PPT" n="1">
+          <rolelinks>
+            <rolelink class="amuse-31.1" resource="VerbNet" version="verbnet3.3">experiencer</rolelink>
+            <rolelink class="amuse-31.1" resource="VerbNet" version="verbnet3.4">experiencer</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="interested in, interesting thing (non-agentive adj subjects, see ex)" f="VSP" n="2">
+          <rolelinks>
+            <rolelink class="amuse-31.1" resource="VerbNet" version="verbnet3.3">stimulus</rolelink>
+            <rolelink class="amuse-31.1" resource="VerbNet" version="verbnet3.4">stimulus</rolelink>
+          </rolelinks>
+        </role>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="+"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="Desiring" confidence="0.8" resource="FrameNet" src="manual+strict-conv" version="1.7"/>
+        <lexlink class="Experiencer_focus" confidence="0.8" resource="FrameNet" src="manual+strict-conv" version="1.7"/>
+        <lexlink class="Mental_stimulus_stimulus_focus" confidence="0.8" resource="FrameNet" src="manual+strict-conv" version="1.7"/>
+        <lexlink class="Mental_stimulus_exp_focus" confidence="0.8" resource="FrameNet" src="manual+strict-conv" version="1.7"/>
+        <lexlink class="amuse-31.1" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3"/>
+        <lexlink class="amuse-31.1" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+      </lexlinks>
+      <example name="interest-v: all args" src="">
+        <text>Mr. Guber and Mr. Peters planned to run the nearly dormant MGM studio , and the two even tried to interest Warner Bros. ' President Terry Semel in becoming a partner after he advised them on the deal .</text>
+        <propbank>
+          <rel relloc="20">interest</rel>
+          <arg type="ARG0" start="15" end="16">the two</arg>
+          <arg type="ARG1" start="21" end="26">Warner Bros. ' President Terry Semel</arg>
+          <arg type="ARG2" start="27" end="30">in becoming a partner</arg>
+        </propbank>
+      </example>
+      <example name="interest-v: arg2" src="">
+        <text>Mr. Sim considers the new unit 's operations `` fundamentally sound '' and adds that Barry Wright has been fairly successful in moving into markets that have n't interested larger competitors .</text>
+        <propbank>
+          <rel relloc="28">interested</rel>
+          <arg type="ARG2" start="24" end="24">markets</arg>
+          <arg type="R-ARG2" start="25" end="25">that</arg>
+          <arg type="ARGM-NEG" start="27" end="27">n't</arg>
+          <arg type="ARG1" start="29" end="30">larger competitors</arg>
+        </propbank>
+      </example>
+      <example name="interested-j: no arg2" src="">
+        <text>But neither the pilots nor the machinists appear interested .</text>
+        <propbank>
+          <rel relloc="8">interested</rel>
+          <arg type="ARG1" start="1" end="6">neither the pilots nor the machinists</arg>
+        </propbank>
+      </example>
+      <example name="interested-j: with arg2" src="">
+        <text>Jaguar assumed its recently customary place on the OTC most active list as its American depository receipts gained 1/4 to 11 7/8 on volume of 1.2 million shares and Daimler - Benz joined the list of companies interested in the British car maker .</text>
+        <propbank>
+          <rel relloc="37">interested</rel>
+          <arg type="ARG1" start="36" end="36">companies</arg>
+          <arg type="ARG2" start="38" end="42">in the British car maker</arg>
+        </propbank>
+      </example>
+      <example name="have_interest-l: Args 1 &amp; 2" src="">
+        <text>It is for those who have no interest in spiritual things and for those who kill their fathers or mothers or anyone else .</text>
+        <propbank>
+          <rel relloc="7">interest</rel>
+          <arg type="R-ARG1" start="4" end="4">who</arg>
+          <arg type="ARG1" start="3" end="3">those</arg>
+          <arg type="ARGM-LVB" start="5" end="5">have</arg>
+          <arg type="ARGM-NEG" start="6" end="6">no</arg>
+          <arg type="ARG2" start="8" end="10">in spiritual things</arg>
+        </propbank>
+      </example>
+      <example name="interest-n: arg1" src="internet">
+        <text>Pakistan was founded on the basis that Muslims felt their interests would not be guarded by a Hindu government , not as some spiritual Muslim homeland .</text>
+        <propbank>
+          <rel relloc="10">interests</rel>
+          <arg type="ARG1" start="9" end="9">their</arg>
+        </propbank>
+      </example>
+      <example name="interest-n" src="">
+        <text>-LRB- eg they have been kidnapped , and police seek public help to find them - or they have been murdered - or if they are alleged to have committed a very serious crime and are being tried as adults , or if it is in some way in the public interest . -RRB-</text>
+        <propbank>
+          <rel relloc="51">interest</rel>
+          <arg type="ARG1" start="50" end="50">public</arg>
+        </propbank>
+      </example>
+      <example name="interested-j: both args" src="internet">
+        <text>Seems Froch may be interested in taking on the winner , although personally I think he 'd have way too much for either of them at this stage of their careers .</text>
+        <propbank>
+          <rel relloc="4">interested</rel>
+          <arg type="ARG1" start="1" end="1">Froch</arg>
+          <arg type="ARGM-MOD" start="2" end="2">may</arg>
+          <arg type="ARG2" start="5" end="9">in taking on the winner</arg>
+        </propbank>
+      </example>
+      <example name="interesting-j: empty it, arg2" src="internet">
+        <text>It will be interesting to watch who takes what sides .</text>
+        <propbank>
+          <rel relloc="3">interesting</rel>
+          <arg type="ARGM-MOD" start="1" end="1">will</arg>
+          <arg type="ARG2" start="4" end="9">to watch who takes what sides</arg>
+        </propbank>
+      </example>
+      <example name="interesting-n: concatenated arg0" src="internet">
+        <text>While he did n't provide much to each scene , he was interesting to watch , obviously caring more about the overall performance than Brynner did .</text>
+        <propbank>
+          <rel relloc="12">interesting</rel>
+          <arg type="ARGM-ADV" start="0" end="8">While he did n't provide much to each scene</arg>
+          <arg type="ARG2" start="10" end="10">he</arg>
+          <arg type="ARGM-ADV" start="16" end="25">obviously caring more about the overall performance than Brynner did</arg>
+          <arg type="C-ARG2" start="13" end="14">to watch</arg>
+        </propbank>
+      </example>
+      <note>INTEREST-V NOTES: Frames file for 'interest' based on sentences in financial subcorpus. Verbnet class amuse-31.1. Comparison with 'surprise'. (from interest.01-v)</note>
+      <note>INTEREST-N NOTES: Roleset based on verb entry interest.01. Corresponds to Verbnet class 31.1. (from interest.01-n)</note>
+      <note>INTERESTED-J NOTES: Added by Julia based on BOLT-1, interest-v.01. Corresponds to VNcls amuse-31.1. (from interested.01-j)</note>
+      <note>INTERESTING-J NOTES: Added by Julia based on BOLT-1, interest-v.01. Corresponds to VNcls amuse-31.1. (from interesting.01-j)</note>
+    </roleset>
+  </predicate>
+</frameset>

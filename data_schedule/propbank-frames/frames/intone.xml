@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="intone">
+    <roleset id="intone.01" name="say solemnly">
+      <aliases>
+        <alias pos="v">intone</alias>
+        <alias pos="n">intonation</alias>
+      </aliases>
+      <roles>
+        <role descr="speaker" f="PAG" n="0">
+          <rolelinks>
+            <rolelink class="performance-26.7-1" resource="VerbNet" version="verbnet3.3">agent</rolelink>
+            <rolelink class="performance-26.7" resource="VerbNet" version="verbnet3.4">agent</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="utterance" f="PPT" n="1">
+          <rolelinks>
+            <rolelink class="performance-26.7-1" resource="VerbNet" version="verbnet3.3">theme</rolelink>
+            <rolelink class="performance-26.7" resource="VerbNet" version="verbnet3.4">theme</rolelink>
+          </rolelinks>
+        </role>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="+" />
+        <usage resource="PropBank" version="2.1.5" inuse="+" />
+        <usage resource="PropBank" version="3.1" inuse="+" />
+        <usage resource="PropBank" version="3.4" inuse="+" />
+        <usage resource="AMR" version="2019" inuse="+" />
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+" />
+        <usage resource="AMR" version="Spatial 1.0" inuse="+" />
+        <usage resource="AMR" version="THYME 1.0" inuse="+" />
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="performance-26.7-1" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3" />
+        <lexlink class="performance-26.7" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+      </lexlinks>
+      <example name="intone-v" src="">
+        <text>At another point he intones : `` Publicity is a small price to pay for secrecy . ''</text>
+        <propbank>
+          <rel relloc="4">intones</rel>
+          <arg type="ARGM-TMP" start="0" end="2">At another point</arg>
+          <arg type="ARG0" start="3" end="3">he</arg>
+          <arg type="ARG1" start="7" end="15">Publicity is a small price to pay for secrecy</arg>
+        </propbank>
+      </example>
+      <example name="intonation-n" src="">
+        <text>For pious Catholics , daily religious life also consisted of the intonation of prayers if there was a difficulty , illness , or natural calamity .</text>
+        <propbank>
+          <rel relloc="11">intonation</rel>
+          <arg type="ARG1" start="12" end="13">of prayers</arg>
+          <arg type="ARGM-ADV" start="14" end="24">if there was a difficulty , illness , or natural calamity</arg>
+        </propbank>
+      </example>
+      <note>INTONE-V NOTES: Based on WSJ. Member of VNcls performance-26.7-1. (from intone.01-v)</note>
+      <note>INTONATION-N NOTES: (from intonation.01-n)</note>
+    </roleset>
+  </predicate>
+</frameset>

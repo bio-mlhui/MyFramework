@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="adjacent">
+    <roleset id="adjacent.01" name="next to, evokes horizontal relationship">
+      <aliases>
+        <alias pos="j">adjacent</alias>
+        <alias pos="p">adjacent_to</alias>
+      </aliases>
+      <roles>
+        <role descr="first neighboring enity" f="SE1" n="1" />
+        <role descr="second neighboring entity, neighbors what/whom" f="SE2" n="2" />
+        <role descr="axis" f="AXS" n="3" />
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-" />
+        <usage resource="PropBank" version="2.1.5" inuse="-" />
+        <usage resource="PropBank" version="3.1" inuse="+" />
+        <usage resource="PropBank" version="3.4" inuse="+" />
+        <usage resource="AMR" version="2019" inuse="-" />
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+" />
+        <usage resource="AMR" version="Spatial 1.0" inuse="+" />
+        <usage resource="AMR" version="THYME 1.0" inuse="+" />
+      </usagenotes>
+      <lexlinks />
+      <example name="adjacent-p: A is next to B" src="">
+        <text>Focal microcalcifications are adjacent to the DCIS</text>
+        <propbank>
+          <rel relloc="3">adjacent</rel>
+          <arg type="ARG1" start="0" end="1">Focal microcalcifications</arg>
+          <arg type="ARG2" start="4" end="6">to the DCIS</arg>
+        </propbank>
+        <amr version="Spatial 1.0">
+          (a / adjacent-01
+            :ARG1 (m / microcalcification
+              :mod (f / focal))
+            :ARG2 (d / disease :wiki "Ductal_carcinoma_in_situ" :name (n / name :op1 "ductal" :op2 "carcinoma" :op3 "in" :op4 "situ")))
+        </amr>
+      </example>
+      <example name="adjacent-p" src="Minecraft">
+        <text>place them adjacent to those you just removed</text>
+        <propbank>
+          <rel relloc="2">adjacent</rel>
+          <arg type="ARG1" start="1" end="1">them</arg>
+          <arg type="ARG2" start="3" end="7">to those you just removed</arg>
+        </propbank>
+        <amr version="Spatial 1.0">
+          (p / place-01 :mode imperative
+            :ARG0 (y / you)
+            :ARG1 (t / they)
+            :ARG3 (s / space :pl +
+              :ARG1-of (a / adjacent-01
+                :ARG2 (t2 / thing :pl +
+                  :mod (t3 / that)
+                  :ARG1-of (r / remove-01
+                    :ARG0 y
+                    :time (j / just))))))
+        </amr>
+      </example>
+      <example name="adjacent-p" src="THYME-colon-dir">
+        <text>adjacent fat</text>
+        <propbank>
+          <rel relloc="0">adjacent</rel>
+          <arg type="ARG1" start="1" end="1">fat</arg>
+        </propbank>
+        <amr version="Spatial 1.0">
+          (a / anatomical-site :name (n / name :op1 "fat")
+            :ARG1-of (a2 / adjacent-01))
+        </amr>
+      </example>
+      <note>ADJACENT NOTES: updated for SpatialAMR, THYME-AMR</note>
+      <note>ADJACENT-J NOTES: Based on Sharp data. Comparison to neighbor.01. Neighbor.01 is a member of VN class contiguous_location-47.8. Framed by Katie. (from adjacent.01-j)</note>
+    </roleset>
+  </predicate>
+</frameset>

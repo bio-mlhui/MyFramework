@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="insult">
+    <roleset id="insult.01" name="call names, disparaging">
+      <aliases>
+        <alias pos="n">insult</alias>
+        <alias pos="j">insulting</alias>
+        <alias pos="v">insult</alias>
+      </aliases>
+      <roles>
+        <role descr="insulter" f="PAG" n="0">
+          <rolelinks>
+            <rolelink class="amuse-31.1" resource="VerbNet" version="verbnet3.3">stimulus</rolelink>
+            <rolelink class="judgment-33.1-1" resource="VerbNet" version="verbnet3.3">agent</rolelink>
+            <rolelink class="amuse-31.1" resource="VerbNet" version="verbnet3.4">stimulus</rolelink>
+            <rolelink class="judgment-33.1-1" resource="VerbNet" version="verbnet3.4">agent</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="insulted" f="PPT" n="1">
+          <rolelinks>
+            <rolelink class="amuse-31.1" resource="VerbNet" version="verbnet3.3">experiencer</rolelink>
+            <rolelink class="judgment-33.1-1" resource="VerbNet" version="verbnet3.3">theme</rolelink>
+            <rolelink class="amuse-31.1" resource="VerbNet" version="verbnet3.4">experiencer</rolelink>
+            <rolelink class="judgment-33.1-1" resource="VerbNet" version="verbnet3.4">theme</rolelink>
+          </rolelinks>
+        </role>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="+"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="Cause_emotion" confidence="0.8" resource="FrameNet" src="manual+strict-conv" version="1.7"/>
+        <lexlink class="Stimulus_focus" confidence="0.8" resource="FrameNet" src="manual+strict-conv" version="1.7"/>
+        <lexlink class="amuse-31.1" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3"/>
+        <lexlink class="judgment-33.1-1" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3"/>
+        <lexlink class="insult-n.1" confidence="0.1" resource="onsense" src="annot-overlap" version="on5">3</lexlink>
+        <lexlink class="amuse-31.1" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+        <lexlink class="judgment-33.1-1" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+      </lexlinks>
+      <example name="insult-v: your mother wears army boots" src="">
+        <text>Mr. Stanley is on trial over charges that he violated a proclamation , issued by the South African administrator general earlier this year , which made it a crime punishable by two years in prison for any person to `` insult , disparate or belittle '' the election commission .</text>
+        <propbank>
+          <rel relloc="40">insult</rel>
+          <arg type="ARG0" start="36" end="37">any person</arg>
+          <arg type="ARG1" start="46" end="48">the election commission</arg>
+        </propbank>
+      </example>
+      <example name="insult-n: arg 1" src="">
+        <text>an insult to the citizens of the Mississippi Delta</text>
+        <propbank>
+          <rel relloc="1">insult</rel>
+          <arg type="ARG1" start="2" end="8">to the citizens of the Mississippi Delta</arg>
+        </propbank>
+      </example>
+      <example name="insult-n: another arg 1 only" src="">
+        <text>an insult to China 's family planning policy</text>
+        <propbank>
+          <rel relloc="1">insult</rel>
+          <arg type="ARG1" start="2" end="7">to China 's family planning policy</arg>
+        </propbank>
+      </example>
+      <example name="insult-n: both args" src="">
+        <text>the insult to all Chinese by the West</text>
+        <propbank>
+          <rel relloc="1">insult</rel>
+          <arg type="ARG1" start="2" end="4">to all Chinese</arg>
+          <arg type="ARG0" start="5" end="7">by the West</arg>
+        </propbank>
+      </example>
+      <example name="insult-v: args 0, ADV" src="internet">
+        <text>well , we might disagree but thanks at least for being insulting about my viewpoint</text>
+        <propbank>
+          <rel relloc="11">insulting</rel>
+          <arg type="ARGM-ADV" start="12" end="14">about my viewpoint</arg>
+        </propbank>
+      </example>
+      <example name="insulting-j: both args, MNR" src="internet">
+        <text>I felt he was actually being insulting to me with his tone and comments .</text>
+        <propbank>
+          <rel relloc="6">insulting</rel>
+          <arg type="ARG0" start="2" end="2">he</arg>
+          <arg type="ARGM-ADV" start="4" end="4">actually</arg>
+          <arg type="ARG1" start="7" end="8">to me</arg>
+          <arg type="ARGM-MNR" start="9" end="13">with his tone and comments</arg>
+        </propbank>
+      </example>
+      <note>INSULT-V NOTES: 'disparate' above is certainly a typo for 'disparage.' (from insult.01-v)</note>
+      <note>INSULT-N NOTES: Based on sentences in nouns-00040. Comparison to insult.01-v. FN classes amuse-31.1 and judgement-33.1-1. FN class cause_emotion. Framed by Katie. (from insult.01-n)</note>
+      <note>INSULTING-J NOTES: Added by Julia based on BOLT-1, insult.01. Corresponds to VNcls amuse-31.1, judgement-33. (from insulting.01-j)</note>
+    </roleset>
+  </predicate>
+</frameset>

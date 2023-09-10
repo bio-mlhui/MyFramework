@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="content">
+    <roleset id="content.01" name="cause contentment; verb frame">
+      <aliases>
+        <alias pos="v">content</alias>
+      </aliases>
+      <roles>
+        <role descr="causer of contentment" f="PAG" n="0">
+          <rolelinks>
+            <rolelink class="amuse-31.1" resource="VerbNet" version="verbnet3.3">stimulus</rolelink>
+            <rolelink class="amuse-31.1" resource="VerbNet" version="verbnet3.4">stimulus</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="contented entity, us REC" f="PPT" n="1">
+          <rolelinks>
+            <rolelink class="amuse-31.1" resource="VerbNet" version="verbnet3.3">experiencer</rolelink>
+            <rolelink class="amuse-31.1" resource="VerbNet" version="verbnet3.4">experiencer</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="with what, how, if in addition to arg0" f="MNR" n="2">
+          <rolelinks/>
+        </role>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="+"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="amuse-31.1" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3"/>
+        <lexlink class="amuse-31.1" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+      </lexlinks>
+      <example name="content-v: typical usage" src="">
+        <text>With talk today of a second economic miracle in West Germany , East Germany no longer can content itself with being the economicstar in a loser league .</text>
+        <propbank>
+          <rel relloc="17">content</rel>
+          <arg type="ARGM-ADV" start="0" end="10">With talk today of a second economic miracle in West Germany</arg>
+          <arg type="ARG0" start="12" end="13">East Germany</arg>
+          <arg type="ARGM-TMP" start="14" end="15">no longer</arg>
+          <arg type="ARGM-MOD" start="16" end="16">can</arg>
+          <arg type="ARG1" start="18" end="18">itself</arg>
+          <arg type="ARG2" start="19" end="26">with being the economicstar in a loser league</arg>
+        </propbank>
+      </example>
+      <note>CONTENT-V NOTES: Frames file for 'content' based on sentences in wsj. Verbnet entry 31.1 (from content.01-v predicate notes)</note>
+      <note>Arg0 is not expected. (from content.01-n)</note>
+    </roleset>
+    <roleset id="content.02" name="be content; noun and adjective frame">
+      <aliases>
+        <alias pos="j">content</alias>
+        <alias pos="n">content</alias>
+      </aliases>
+      <roles>
+        <role descr="source of contentment" f="PAG" n="0">
+          <rolelinks>
+            <rolelink class="amuse-31.1" resource="VerbNet" version="verbnet3.3">stimulus</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="contented entity, us REC" f="PPT" n="1">
+          <rolelinks>
+            <rolelink class="amuse-31.1" resource="VerbNet" version="verbnet3.3">experiencer</rolelink>
+          </rolelinks>
+        </role>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="-"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="amuse-31.1" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3"/>
+        <lexlink class="amuse-31.1" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+      </lexlinks>
+      <example name="content-n: both args" src="internet">
+        <text>He seemed to purr his content with the situation .</text>
+        <propbank>
+          <rel relloc="5">content</rel>
+          <arg type="ARG1" start="4" end="4">his</arg>
+          <arg type="ARG0" start="6" end="8">with the situation</arg>
+        </propbank>
+      </example>
+      <example name="content-j: with" src="">
+        <text>He was content with the situation .</text>
+        <propbank>
+          <rel relloc="2">content</rel>
+          <arg type="ARG1" start="0" end="0">He</arg>
+          <arg type="ARG0" start="3" end="5">with the situation</arg>
+        </propbank>
+      </example>
+      <example name="content-j: from" src="">
+        <text>as long as he could provide nice things for his wife and live in luxury , he was content .</text>
+        <propbank>
+          <rel relloc="18">content</rel>
+          <arg type="ARGM-TMP" start="0" end="14">as long as he could provide nice things for his wife and live in luxury</arg>
+          <arg type="ARG1" start="16" end="16">he</arg>
+        </propbank>
+      </example>
+      <note>CONTENT-N NOTES: Added by Julia based on WN eventive noun expansion, content.01, 'satisfaction.01'. Corresponds to VNclsamuse-31.1. (from content.01-n)</note>
+      <note>CONTENT-J NOTES: Automatically created by Julia as an aliasfile forunification. (from content.01-j)</note>
+      <note>Arg0 expected to be extremely rare-- use arg2 in general.</note>
+    </roleset>
+  </predicate>
+</frameset>

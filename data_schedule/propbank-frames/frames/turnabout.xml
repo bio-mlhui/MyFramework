@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="turnabout">
+    <roleset id="turnabout.01" name="motion in a new direction">
+      <aliases>
+        <alias pos="n">turnabout</alias>
+      </aliases>
+      <roles>
+        <role descr="agent of turner (transitive)" f="PAG" n="0">
+          <rolelinks>
+            <rolelink class="crane-40.3.2" resource="VerbNet" version="verbnet3.3">agent</rolelink>
+            <rolelink class="hurt-40.8.3" resource="VerbNet" version="verbnet3.3">experiencer</rolelink>
+            <rolelink class="roll-51.3.1" resource="VerbNet" version="verbnet3.3">agent</rolelink>
+            <rolelink class="roll-51.3.1" resource="VerbNet" version="verbnet3.4">agent</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="entity in motion" f="PPT" n="1">
+          <rolelinks>
+            <rolelink class="crane-40.3.2" resource="VerbNet" version="verbnet3.3">patient</rolelink>
+            <rolelink class="hurt-40.8.3" resource="VerbNet" version="verbnet3.3">patient</rolelink>
+            <rolelink class="meander-47.7" resource="VerbNet" version="verbnet3.3">theme</rolelink>
+            <rolelink class="roll-51.3.1" resource="VerbNet" version="verbnet3.3">theme</rolelink>
+            <rolelink class="roll-51.3.1" resource="VerbNet" version="verbnet3.4">theme</rolelink>
+            <rolelink class="meander-47.7-1" resource="VerbNet" version="verbnet3.4">theme</rolelink>
+          </rolelinks>
+        </role>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="-"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="-"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="-"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="Change_direction" confidence="0.8" resource="FrameNet" src="manual+strict-conv" version="1.7"/>
+        <lexlink class="crane-40.3.2" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3"/>
+        <lexlink class="hurt-40.8.3" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3"/>
+        <lexlink class="roll-51.3.1" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3"/>
+        <lexlink class="meander-47.7" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3"/>
+        <lexlink class="roll-51.3.1" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+        <lexlink class="meander-47.7-1" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+      </lexlinks>
+      <example name="light verb" src="nouns-lv">
+        <text>... The reason that she has buses come to make a sharp turnabout at 2,400 meters above sea level just possibly is in order to leave you with a certain degree of difficulty ...</text>
+        <propbank>
+          <rel relloc="12">turnabout</rel>
+          <arg type="ARG1" start="6" end="6">buses</arg>
+          <arg type="ARGM-LVB" start="9" end="9">make</arg>
+          <arg type="ARGM-MNR" start="11" end="11">sharp</arg>
+          <arg type="ARGM-LOC" start="13" end="18">at 2,400 meters above sea level</arg>
+        </propbank>
+      </example>
+      <note>TURNABOUT-N NOTES: Added by Julia based on turn-v.01. Corresponds to VNcls crane-40.3.2, hurt-40.8.3-1-1, meander-47.7, roll-51.3.1. (from turnabout.01-n)</note>
+    </roleset>
+    <roleset id="turnabout.02" name="transformation, becoming">
+      <aliases>
+        <alias pos="n">turnabout</alias>
+      </aliases>
+      <roles>
+        <role descr="entity undergoing change" f="PAG" n="1">
+          <rolelinks>
+            <rolelink class="convert-26.6.2" resource="VerbNet" version="verbnet3.3">patient</rolelink>
+            <rolelink class="turn-26.6.1" resource="VerbNet" version="verbnet3.3">patient</rolelink>
+            <rolelink class="convert-26.6.2-1" resource="VerbNet" version="verbnet3.4">patient</rolelink>
+            <rolelink class="turn-26.6.1" resource="VerbNet" version="verbnet3.4">patient</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="start state" f="DIR" n="2">
+          <rolelinks>
+            <rolelink class="convert-26.6.2" resource="VerbNet" version="verbnet3.3">source</rolelink>
+            <rolelink class="turn-26.6.1" resource="VerbNet" version="verbnet3.3">material</rolelink>
+            <rolelink class="convert-26.6.2-1" resource="VerbNet" version="verbnet3.4">initial_state</rolelink>
+            <rolelink class="turn-26.6.1" resource="VerbNet" version="verbnet3.4">initial_state</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="end state" f="PRD" n="3">
+          <rolelinks>
+            <rolelink class="convert-26.6.2" resource="VerbNet" version="verbnet3.3">goal</rolelink>
+            <rolelink class="turn-26.6.1" resource="VerbNet" version="verbnet3.3">result</rolelink>
+            <rolelink class="convert-26.6.2-1" resource="VerbNet" version="verbnet3.4">result</rolelink>
+            <rolelink class="turn-26.6.1" resource="VerbNet" version="verbnet3.4">result</rolelink>
+          </rolelinks>
+        </role>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="-"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="-"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="-"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="convert-26.6.2" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3"/>
+        <lexlink class="turn-26.6.1" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3"/>
+        <lexlink class="convert-26.6.2-1" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+        <lexlink class="turn-26.6.1" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+      </lexlinks>
+      <example name="All arguments" src="web">
+        <text>... her turnabout from not wanting to have anything to do with them to jumping into bed with one ...</text>
+        <propbank>
+          <rel relloc="2">turnabout</rel>
+          <arg type="ARG1" start="1" end="1">her</arg>
+          <arg type="ARG2" start="3" end="12">from not wanting to have anything to do with them</arg>
+          <arg type="ARG3" start="13" end="18">to jumping into bed with one</arg>
+        </propbank>
+      </example>
+      <note>TURNABOUT-N NOTES: Added by Julia based on turn-v.02. Corresponds to Vncls convert-26.6.2, turn-26.6.1. (from turnabout.02-n)</note>
+      <note>Watch out for light verbs! Also, arg0 is being left off because it is not clear that it can occur in nominal usages. If you see one, call it arg0 and send it in. (from turnabout.02-n)</note>
+    </roleset>
+  </predicate>
+</frameset>

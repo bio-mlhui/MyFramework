@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="reoffend">
+    <roleset id="reoffend.01" name="break the law/rule again, often after punishent/treatment">
+      <aliases>
+        <alias pos="v">reoffend</alias>
+      </aliases>
+      <roles>
+        <role descr="offender" f="PAG" n="0"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="-"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="-"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="-"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="-"/>
+      </usagenotes>
+      <example name="the arg, and TMP" src="BOLT">
+        <text>I would n't support it for first time offenses , but when a criminal is given a second chance and reoffends , I 'm all for it ... I mean , if the evidence is 100 % conclusive that is , which is the case most of the time now with modern technology etc</text>
+        <propbank>
+          <rel relloc="20">reoffends</rel>
+          <arg type="ARG0" start="12" end="13">a criminal</arg>
+          <arg type="ARGM-TMP" start="11" end="11">when</arg>
+        </propbank>
+      </example>
+      <note>REOFFEND-V NOTES: Added by Julia based on BOLT. No VNcls. (from reoffend.01-v)</note>
+    </roleset>
+  </predicate>
+</frameset>

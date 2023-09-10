@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="liquidate">
+    <roleset id="liquidate.01" name="cause to cease to exist">
+      <aliases>
+        <alias pos="n">liquidation</alias>
+        <alias pos="v">liquidate</alias>
+      </aliases>
+      <roles>
+        <role descr="liquidator, agent" f="PAG" n="0">
+          <rolelinks>
+            <rolelink class="murder-42.1" resource="VerbNet" version="verbnet3.3">agent</rolelink>
+            <rolelink class="Killing" resource="FrameNet" version="1.7">cause</rolelink>
+            <rolelink class="Killing" resource="FrameNet" version="1.7">killer</rolelink>
+            <rolelink class="murder-42.1" resource="VerbNet" version="verbnet3.4">agent</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="thing being liquidated" f="PPT" n="1">
+          <rolelinks>
+            <rolelink class="murder-42.1" resource="VerbNet" version="verbnet3.3">patient</rolelink>
+            <rolelink class="Killing" resource="FrameNet" version="1.7">victim</rolelink>
+            <rolelink class="murder-42.1" resource="VerbNet" version="verbnet3.4">patient</rolelink>
+          </rolelinks>
+        </role>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="+"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="Killing" confidence="0.8" resource="FrameNet" src="manual+strict-conv" version="1.7"/>
+        <lexlink class="murder-42.1" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3"/>
+        <lexlink class="liquidate-v.2" confidence="0.1" resource="onsense" src="annot-overlap" version="on5">13</lexlink>
+        <lexlink class="murder-42.1" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+      </lexlinks>
+      <example name="passive" src="">
+        <text>Erbamont will then be liquidated , with any remaining Erbamont holders receiving a distribution of $ 37 a share .</text>
+        <propbank>
+          <rel relloc="4">liquidated</rel>
+          <arg type="ARGM-MOD" start="1" end="1">will</arg>
+          <arg type="ARGM-TMP" start="2" end="2">then</arg>
+          <arg type="ARG1" start="0" end="0">Erbamont</arg>
+          <arg type="ARGM-ADV" start="6" end="18">with any remaining Erbamont holders receiving a distribution of $ 37 a share</arg>
+        </propbank>
+      </example>
+      <example name="active" src="">
+        <text>A unit of DPC Acquisition Partners launched a $ 10 - a - share tender offer for the shares outstanding of Dataproducts Corp. , and said it would seek to liquidate the computer - printer maker `` as soon as possible , '' even if a merger is n't consummated .</text>
+        <propbank>
+          <rel relloc="30">liquidate</rel>
+          <arg type="ARG0" start="26" end="26">it</arg>
+          <arg type="ARG1" start="31" end="35">the computer - printer maker</arg>
+          <arg type="ARGM-TMP" start="37" end="40">as soon as possible</arg>
+        </propbank>
+      </example>
+      <example name="surprising intransitive" src="">
+        <text>Property Capital Trust said it dropped its plan to liquidate because it was n't able to realize the value it had expected .</text>
+        <propbank>
+          <rel relloc="9">liquidate</rel>
+          <arg type="ARG0" start="0" end="2">Property Capital Trust</arg>
+        </propbank>
+      </example>
+      <note>LIQUIDATE-V NOTES: Frames file for 'liquidate' based on sentences in financial subcorpus. Verbnet entry 42.1, other framed members include execute and kill. Framenet class Death. Comparison with kill. (from liquidate.01-v predicate notes)</note>
+      <note>LIQUIDATION-N NOTES: Automatically created by Julia as an alias file for unification. (from liquidation.01-n)</note>
+    </roleset>
+  </predicate>
+</frameset>

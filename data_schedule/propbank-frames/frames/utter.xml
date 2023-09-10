@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="utter">
+    <roleset id="utter.01" name="to pronounce or speak">
+      <aliases>
+        <alias pos="v">utter</alias>
+      </aliases>
+      <roles>
+        <role descr="speaker" f="PAG" n="0">
+          <rolelinks>
+            <rolelink class="say-37.7" resource="VerbNet" version="verbnet3.3">agent</rolelink>
+            <rolelink class="Text_creation" resource="FrameNet" version="1.7">author</rolelink>
+            <rolelink class="say-37.7-1" resource="VerbNet" version="verbnet3.4">agent</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="utterance" f="PPT" n="1">
+          <rolelinks>
+            <rolelink class="say-37.7" resource="VerbNet" version="verbnet3.3">topic</rolelink>
+            <rolelink class="Text_creation" resource="FrameNet" version="1.7">text</rolelink>
+            <rolelink class="say-37.7-1" resource="VerbNet" version="verbnet3.4">topic</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="hearer" f="GOL" n="2">
+          <rolelinks>
+            <rolelink class="say-37.7" resource="VerbNet" version="verbnet3.3">recipient</rolelink>
+            <rolelink class="Text_creation" resource="FrameNet" version="1.7">addressee</rolelink>
+            <rolelink class="say-37.7-1" resource="VerbNet" version="verbnet3.4">recipient</rolelink>
+          </rolelinks>
+        </role>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="+"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="Text_creation" confidence="0.8" resource="FrameNet" src="manual+strict-conv" version="1.7"/>
+        <lexlink class="say-37.7" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3"/>
+        <lexlink class="utter-v.1" confidence="0.1" resource="onsense" src="annot-overlap" version="on5">9</lexlink>
+        <lexlink class="say-37.7-1" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+      </lexlinks>
+      <example name="transitive" src="">
+        <text>Congress learned during the Reagan administration that it could intimidate the executive branch by uttering again and again the same seven words : `` Provided , that no funds shall be spent ... . ''</text>
+        <propbank>
+          <rel relloc="14">uttering</rel>
+          <arg type="ARG0" start="0" end="0">Congress</arg>
+          <arg type="ARGM-TMP" start="15" end="17">again and again</arg>
+          <arg type="ARG1" start="18" end="31">the same seven words : `` Provided , that no funds shall be spent</arg>
+        </propbank>
+      </example>
+      <example name="the hulk AND the illuminati-- score! Both args" src="internet (where else?)">
+        <text>Some of the last words uttered to him by the Hulk , setting Gamma Corps ' sights on the members of the Illuminati , still rang fresh in his ears .</text>
+        <propbank>
+          <rel relloc="5">uttered</rel>
+          <arg type="ARG1" start="0" end="4">Some of the last words</arg>
+          <arg type="ARG2" start="6" end="7">to him</arg>
+          <arg type="ARG0" start="8" end="10">by the Hulk</arg>
+        </propbank>
+      </example>
+      <note>UTTER-V NOTES: Member of Vncls say-37.7. (from utter.01-v)</note>
+    </roleset>
+  </predicate>
+</frameset>

@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="hedge">
+    <roleset id="hedge.01" name="protect, minimize the loss">
+      <aliases>
+        <alias pos="v">hedge</alias>
+        <alias pos="n">hedging</alias>
+      </aliases>
+      <roles>
+        <role descr="entity seeking to minimize a loss" f="PAG" n="0"/>
+        <role descr="thing protected" f="PPT" n="1"/>
+        <role descr="protected from" f="GOL" n="2"/>
+        <role descr="instrument" f="MNR" n="3"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="+"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="hedge-v.1" confidence="0.1" resource="onsense" src="annot-overlap" version="on5">11</lexlink>
+      </lexlinks>
+      <example name="hedge-v: transitive" src="">
+        <text>If the weather allowed farmers to work in their fields over the weekend , many Midwest grain elevators will probably sell futures contracts today at the Chicago Board of Trade in order to hedge their weekend purchases from farmers .</text>
+        <propbank>
+          <rel relloc="33">hedge</rel>
+          <arg type="ARG0" start="14" end="17">many Midwest grain elevators</arg>
+          <arg type="ARG1" start="34" end="38">their weekend purchases from farmers</arg>
+        </propbank>
+      </example>
+      <example name="hedge-v: with Arg2" src="">
+        <text>A number of commercial grain users buttressed that opinion yesterday by buying certain corn options for delivery in March , indicating to analysts that the commercial companies would use the options to hedge against expected corn sales in next year 's first quarter .</text>
+        <propbank>
+          <rel relloc="32">hedge</rel>
+          <arg type="ARG0" start="24" end="26">the commercial companies</arg>
+          <arg type="ARG2" start="33" end="36">against expected corn sales</arg>
+          <arg type="ARGM-TMP" start="37" end="42">in next year 's first quarter</arg>
+        </propbank>
+      </example>
+      <example name="hedge-v: intransitive" src="">
+        <text>`` That 's the problem with trying to hedge too much , '' said Mr. Brouwer .</text>
+        <propbank>
+          <rel relloc="8">hedge</rel>
+          <arg type="ARGM-EXT" start="9" end="10">too much</arg>
+        </propbank>
+      </example>
+      <example name="hedge-v: with instrument as subject" src="">
+        <text>Some analysts suggest , however , that the ratio has weakened in value as an indicator because options and other products can be used to hedge short positions .</text>
+        <propbank>
+          <rel relloc="25">hedge</rel>
+          <arg type="ARG1" start="26" end="27">short positions</arg>
+        </propbank>
+      </example>
+      <note>HEDGE-V NOTES: frames created by Olga. No Vncls, No FN. Checked by Julia, 10/2010. (from hedge.01-v)</note>
+    </roleset>
+  </predicate>
+</frameset>

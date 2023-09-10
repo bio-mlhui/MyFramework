@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="ubiquitinate">
+    <roleset id="ubiquitinate.01" name="ubiquitinate">
+      <aliases>
+        <alias pos="v">ubiquitinate</alias>
+        <alias pos="n">ubiquitination</alias>
+      </aliases>
+      <roles>
+        <role descr="agent of ubiquitination (e.g. scientist)" f="PAG" n="0"/>
+        <role descr="thing ubiquitinated" f="PPT" n="1"/>
+        <role descr="instrument" f="MNR" n="2"/>
+        <role descr="result of ubiquitination" f="PRD" n="3"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="-"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <example name="ubiquitinate-v: active use" src="">
+        <text>We ubiquitinated bacterially expressed GST - TRAF6 with Lys63 - linked chains using the in vitro ubiquitination reaction .</text>
+        <propbank>
+          <rel relloc="1">ubiquitinated</rel>
+          <arg type="ARG0" start="0" end="0">We</arg>
+          <arg type="ARG1" start="2" end="6">bacterially expressed GST - TRAF6</arg>
+          <arg type="ARG2" start="7" end="11">with Lys63 - linked chains</arg>
+          <arg type="ARGM-MNR" start="12" end="17">using the in vitro ubiquitination reaction</arg>
+        </propbank>
+      </example>
+      <example name="ubiquitinate-v: with result" src="">
+        <text>A sizable proportion of the histone H2A and H2B pool is ubiquitinated to form uH2A and uH2B in interphase ceils .</text>
+        <propbank>
+          <rel relloc="11">ubiquitinated</rel>
+          <arg type="ARG1" start="0" end="9">A sizable proportion of the histone H2A and H2B pool</arg>
+          <arg type="ARG3" start="12" end="16">to form uH2A and uH2B</arg>
+          <arg type="ARGM-LOC" start="17" end="19">in interphase ceils</arg>
+        </propbank>
+      </example>
+      <example name="ubiquination-n" src="">
+        <text>Hypoxia inhibits the ubiquination of HIF-1alpha</text>
+        <propbank>
+          <rel relloc="3">ubiquination</rel>
+          <arg type="ARG1" start="4" end="5">of HIF-1alpha</arg>
+        </propbank>
+      </example>
+      <note>UBIQUINATE-V NOTES: Created for Bio-AMR annotations.</note>
+    </roleset>
+  </predicate>
+</frameset>

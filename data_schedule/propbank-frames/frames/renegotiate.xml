@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="renegotiate">
+    <roleset id="renegotiate.01" name="work out terms of agreement, again">
+      <aliases>
+        <alias pos="v">renegotiate</alias>
+        <alias pos="n">renegotiation</alias>
+      </aliases>
+      <roles>
+        <role descr="negotiator" f="PAG" n="0">
+          <rolelinks>
+            <rolelink class="settle-36.1.2" resource="VerbNet" version="verbnet3.3">agent</rolelink>
+            <rolelink class="correspond-36.1" resource="VerbNet" version="verbnet3.4">agent</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="agreement" f="PPT" n="1">
+          <rolelinks>
+            <rolelink class="settle-36.1.2" resource="VerbNet" version="verbnet3.3">theme</rolelink>
+            <rolelink class="correspond-36.1" resource="VerbNet" version="verbnet3.4">topic</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="explicit other party" f="COM" n="2">
+          <rolelinks>
+            <rolelink class="settle-36.1.2" resource="VerbNet" version="verbnet3.3">co-agent</rolelink>
+            <rolelink class="correspond-36.1" resource="VerbNet" version="verbnet3.4">co-agent</rolelink>
+          </rolelinks>
+        </role>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="+"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="settle-36.1.2" confidence="0.4" resource="VerbNet" src="manual+loose-conversion" version="verbnet3.3"/>
+        <lexlink class="correspond-36.1" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+      </lexlinks>
+      <example name="NP/PP" src="">
+        <text>Both companies are in the process of renegotiating contracts with LTV and others .</text>
+        <propbank>
+          <rel relloc="7">renegotiating</rel>
+          <arg type="ARG0" start="0" end="1">Both companies</arg>
+          <arg type="ARG2" start="8" end="8">contracts</arg>
+          <arg type="ARG1" start="9" end="12">with LTV and others</arg>
+        </propbank>
+      </example>
+      <example name="double PP" src="">
+        <text>It recently signed a preliminary agreement to renegotiate exclusively with the Bank of Tokyo Ltd. for the sale of part of its leasing business to the Japanese bank .</text>
+        <propbank>
+          <rel relloc="7">renegotiate</rel>
+          <arg type="ARG0" start="0" end="0">It</arg>
+          <arg type="ARG1" start="9" end="14">with the Bank of Tokyo Ltd.</arg>
+          <arg type="ARG2" start="15" end="27">for the sale of part of its leasing business to the Japanese bank</arg>
+        </propbank>
+      </example>
+      <example name="unstated agreement" src="">
+        <text>Although Georgia Gulf has n't been eager to renegotiate with Mr. Simmons and NL , a specialty chemicals concern ...</text>
+        <propbank>
+          <rel relloc="8">renegotiate</rel>
+          <arg type="ARG0" start="1" end="2">Georgia Gulf</arg>
+          <arg type="ARG1" start="9" end="18">with Mr. Simmons and NL , a specialty chemicals concern</arg>
+        </propbank>
+      </example>
+      <example name="unstated co-negotiator" src="">
+        <text>Santa Fe has disclosed that it is renegotiating to sell a 20 % interest in its real estate unit to the California Public Employees Retirement System for roughly $ 400 million .</text>
+        <propbank>
+          <rel relloc="7">renegotiating</rel>
+          <arg type="ARG0" start="5" end="5">it</arg>
+          <arg type="ARG2" start="8" end="30">to sell a 20 % interest in its real estate unit to the California Public Employees Retirement System for roughly $ 400 million</arg>
+        </propbank>
+      </example>
+      <note>RENEGOTIATE-V NOTES: Treebank sometimes puts the co-negotiator in with the agreement, whichis certainly plausible (ie, "negotiating a pact with GM" is it a pactwith GM or a negotiation with GM? (Both, really.) Follow Treebank'sparsing. (from renegotiate.01-v)</note>
+    </roleset>
+  </predicate>
+</frameset>

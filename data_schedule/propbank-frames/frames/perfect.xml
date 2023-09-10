@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="perfect">
+    <roleset id="perfect.01" name="to bring to perfection">
+      <aliases>
+        <alias pos="v">perfect</alias>
+        <alias pos="n">perfection</alias>
+      </aliases>
+      <roles>
+        <role descr="cause of perfection, agent" f="PAG" n="0">
+          <rolelinks>
+            <rolelink class="other_cos-45.4" resource="VerbNet" version="verbnet3.3">agent</rolelink>
+            <rolelink class="remedy-45.7" resource="VerbNet" version="verbnet3.4">agent</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="entity perfected" f="PPT" n="1">
+          <rolelinks>
+            <rolelink class="other_cos-45.4" resource="VerbNet" version="verbnet3.3">patient</rolelink>
+            <rolelink class="remedy-45.7" resource="VerbNet" version="verbnet3.4">patient</rolelink>
+          </rolelinks>
+        </role>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="+"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="Cause_to_make_progress" confidence="0.8" resource="FrameNet" src="manual+strict-conv" version="1.7"/>
+        <lexlink class="other_cos-45.4" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3"/>
+        <lexlink class="remedy-45.7" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+      </lexlinks>
+      <example name="transitive" src="">
+        <text>The glib emotional style Mr. Goldberg has perfected on television 's `` Family Ties '' does n't benefit from magnification .</text>
+        <propbank>
+          <rel relloc="7">perfected</rel>
+          <arg type="ARG0" start="4" end="5">Mr. Goldberg</arg>
+          <arg type="ARG1" start="0" end="3">The glib emotional style</arg>
+          <arg type="ARGM-LOC" start="8" end="14">on television 's `` Family Ties ''</arg>
+        </propbank>
+      </example>
+      <example name="easy arg 1" src="">
+        <text>The perfection of beauty is a neverending quest for some .</text>
+        <propbank>
+          <rel relloc="1">perfection</rel>
+          <arg type="ARG1" start="2" end="3">of beauty</arg>
+        </propbank>
+      </example>
+      <example name="less transparent arg 1 - cause politics to reach a perfect state" src="">
+        <text>political perfection</text>
+        <propbank>
+          <rel relloc="1">perfection</rel>
+          <arg type="ARG1" start="0" end="0">political</arg>
+        </propbank>
+      </example>
+      <note>PERFECT-V NOTES: Frames file for 'perfect' based on survey of sentences in the WSJ corpus. (from perfect.01-v predicate notes)</note>
+      <note>PERFECTION-N NOTES: Based on Bolt data. Comparison to perfect.01. Perfect.01 is a member of VN class other_cos-45.4. Framed by Katie. (from perfection.01-n)</note>
+    </roleset>
+    <roleset id="perfect.02" name="flawless, exactly suited for">
+      <aliases>
+        <alias pos="j">perfect</alias>
+      </aliases>
+      <roles>
+        <role descr="perfect thing" f="PPT" n="1"/>
+        <role descr="suited for" f="GOL" n="2"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="-"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="Usefulness" confidence="0.8" resource="FrameNet" src="manual+strict-conv" version="1.7"/>
+      </lexlinks>
+      <example name="arg1" src="BOLT-1">
+        <text>America is not perfect .</text>
+        <propbank>
+          <rel relloc="3">perfect</rel>
+          <arg type="ARG1" start="0" end="0">America</arg>
+          <arg type="ARGM-NEG" start="2" end="2">not</arg>
+        </propbank>
+      </example>
+      <example name="both args" src="internet">
+        <text>Shoes with a built - in tent are perfect for outdoorsy people who don 't care if their feet look dumb .</text>
+        <propbank>
+          <rel relloc="8">perfect</rel>
+          <arg type="ARG1" start="0" end="6">Shoes with a built - in tent</arg>
+          <arg type="ARG2" start="9" end="20">for outdoorsy people who don 't care if their feet look dumb</arg>
+        </propbank>
+      </example>
+      <note>PERFECT-J NOTES: Added by Julia based on BOLT-1. Relation to perfect-v.01. (from perfect.01-j)</note>
+    </roleset>
+  </predicate>
+</frameset>

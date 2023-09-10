@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="peel">
+    <roleset id="peel.01" name="to strip, pull off">
+      <aliases>
+        <alias pos="v">peel</alias>
+      </aliases>
+      <roles>
+        <role descr="remover, agent" f="PAG" n="0">
+          <rolelinks>
+            <rolelink class="pit-10.7" resource="VerbNet" version="verbnet3.3">agent</rolelink>
+            <rolelink class="pit-10.7" resource="VerbNet" version="verbnet3.4">agent</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="entity peeled" f="DIR" n="1">
+          <rolelinks>
+            <rolelink class="pit-10.7" resource="VerbNet" version="verbnet3.3">source</rolelink>
+            <rolelink class="pit-10.7" resource="VerbNet" version="verbnet3.4">source</rolelink>
+          </rolelinks>
+        </role>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="+"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="pit-10.7" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3"/>
+        <lexlink class="pit-10.7" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+      </lexlinks>
+      <example name="passive" src="">
+        <text>During the coming months , layers of management will be peeled away and regional offices will become more autonomous .</text>
+        <propbank>
+          <rel relloc="10">peeled</rel>
+          <arg type="ARGM-TMP" start="0" end="3">During the coming months</arg>
+          <arg type="ARGM-MOD" start="8" end="8">will</arg>
+          <arg type="ARG1" start="5" end="7">layers of management</arg>
+          <arg type="ARGM-DIR" start="11" end="11">away</arg>
+        </propbank>
+      </example>
+      <note>PEEL-V NOTES: Frames file for 'peel' based on survey of sentences in the WSJ corpus. (from peel.01-v predicate notes)</note>
+    </roleset>
+  </predicate>
+  <predicate lemma="peel_off">
+    <roleset id="peel_off.02" name="to cut away,  pare">
+      <aliases>
+        <alias pos="v">peel_off</alias>
+      </aliases>
+      <roles>
+        <role descr="remover, cutter, agent" f="PAG" n="0"/>
+        <role descr="entity peeled off" f="PPT" n="1"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="-"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <example name="intransitive" src="">
+        <text>`` Rates have n't really peeled off that much , '' Mr. Regalia said .</text>
+        <propbank>
+          <rel relloc="5 6">peeled off</rel>
+          <arg type="ARG1" start="1" end="1">Rates</arg>
+          <arg type="ARGM-NEG" start="3" end="3">n't</arg>
+          <arg type="ARGM-ADV" start="4" end="4">really</arg>
+          <arg type="ARGM-EXT" start="7" end="8">that much</arg>
+        </propbank>
+      </example>
+      <note>PEEL_OFF-V NOTES: (from peel.02-v)</note>
+    </roleset>
+  </predicate>
+</frameset>

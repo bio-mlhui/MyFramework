@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="levy">
+    <roleset id="levy.01" name="to impose or collect">
+      <aliases>
+        <alias pos="n">levy</alias>
+        <alias pos="v">levy</alias>
+      </aliases>
+      <roles>
+        <role descr="imposer, collector, agent" f="PAG" n="0"/>
+        <role descr="entity levied, usually taxes" f="PPT" n="1"/>
+        <role descr="levied on what? entity being taxed" f="GOL" n="2"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="+"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks/>
+      <example name="levy-v: transitive" src="">
+        <text>Still , Hugo 's impact may revive unsuccessful proposals to give local governments authority to levy sales taxes .</text>
+        <propbank>
+          <rel relloc="15">levy</rel>
+          <arg type="ARG0" start="11" end="12">local governments</arg>
+          <arg type="ARG1" start="16" end="17">sales taxes</arg>
+        </propbank>
+      </example>
+      <example name="levy-v: With Arg 2" src="">
+        <text>Specific measures might include raising the highway tax and aviation fuel tax , as well as levying special taxes on appliances that consume excessive resources .</text>
+        <propbank>
+          <rel relloc="16">levying</rel>
+          <arg type="ARG1" start="17" end="18">special taxes</arg>
+          <arg type="ARG2" start="19" end="24">on appliances that consume excessive resources</arg>
+        </propbank>
+      </example>
+      <example name="levy-n: args 0 and 2" src="">
+        <text>an erroneous IRS levy on a bank account</text>
+        <propbank>
+          <rel relloc="3">levy</rel>
+          <arg type="ARGM-ADJ" start="1" end="1">erroneous</arg>
+          <arg type="ARG0" start="2" end="2">IRS</arg>
+          <arg type="ARG2" start="4" end="7">on a bank account</arg>
+        </propbank>
+      </example>
+      <example name="levy-n: arg 1 as a type of tax" src="">
+        <text>The petroleum gain levy on sales</text>
+        <propbank>
+          <rel relloc="3">levy</rel>
+          <arg type="ARG1" start="1" end="2">petroleum gain</arg>
+          <arg type="ARG2" start="4" end="5">on sales</arg>
+        </propbank>
+      </example>
+      <note>LEVY-V NOTES: Frames file for 'levy' based on survey of sentences in the WSJ corpus. (from levy.01-v predicate notes)</note>
+      <note>LEVY-N NOTES: Based on ontonotes nouns. Comparison to levy.01-v. No VN or FN classes. Framed by Katie. (from levy.01-n)</note>
+    </roleset>
+  </predicate>
+</frameset>

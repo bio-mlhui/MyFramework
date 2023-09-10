@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="template">
+    <roleset id="template.01" name="provide a pattern for">
+      <aliases>
+        <alias pos="v">template</alias>
+        <alias pos="n">templating</alias>
+      </aliases>
+      <roles>
+        <role descr="template provider" f="PAG" n="0" />
+        <role descr="thing a template is provided for" f="PPT" n="1" />
+        <role descr="the template" f="MNR" n="2" />
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-" />
+        <usage resource="PropBank" version="2.1.5" inuse="-" />
+        <usage resource="PropBank" version="3.1" inuse="-" />
+        <usage resource="PropBank" version="3.4" inuse="+" />
+        <usage resource="AMR" version="2019" inuse="-" />
+        <usage resource="PropBank" version="Flickr 1.0" inuse="-" />
+        <usage resource="AMR" version="Spatial 1.0" inuse="-" />
+        <usage resource="AMR" version="THYME 1.0" inuse="-" />
+      </usagenotes>
+      <lexlinks />
+      <example name="template-v" src="">
+        <text>Nanomechanical devices and algorithmic self - assembly have also been demonstrated , and these DNA structures have been used to template the arrangement of other molecules such as gold nanoparticles and streptavidin proteins .</text>
+        <propbank>
+          <rel relloc="20">template</rel>
+          <arg type="ARG1" start="21" end="32">the arrangement of other molecules such as gold nanoparticles and streptavidin proteins</arg>
+        </propbank>
+      </example>
+      <note>TEMPLATE-V NOTES: Added by Julia for clearearth-biotexts.</note>
+    </roleset>
+  </predicate>
+</frameset>

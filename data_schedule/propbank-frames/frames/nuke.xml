@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="nuke">
+    <roleset id="nuke.01" name="attack with nuclear weapons">
+      <aliases>
+        <alias pos="v">nuke</alias>
+      </aliases>
+      <roles>
+        <role descr="attacker" f="PAG" n="0"/>
+        <role descr="victim" f="PPT" n="1"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="-"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks/>
+      <example name="both args" src="BOLT">
+        <text>It is a war we would be stupid to give them money because they will only use it for weaponry to fight against our armed forces and they will probably plant some DU in our country or even nuke us innocent civillians for payback .</text>
+        <propbank>
+          <rel relloc="38">nuke</rel>
+          <arg type="ARG0" start="27" end="27">they</arg>
+          <arg type="ARGM-MOD" start="28" end="28">will</arg>
+          <arg type="ARGM-ADV" start="29" end="29">probably</arg>
+          <arg type="ARGM-ADV" start="37" end="37">even</arg>
+          <arg type="ARG1" start="39" end="41">us innocent civillians</arg>
+          <arg type="ARGM-PRP" start="42" end="43">for payback</arg>
+        </propbank>
+      </example>
+      <note>NUKE-V NOTES: Added by Julia based on BOLT. No VNcls. Comparison to bomb-v.01. (from nuke.01-v)</note>
+    </roleset>
+  </predicate>
+</frameset>

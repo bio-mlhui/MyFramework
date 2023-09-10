@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="chemoradiate">
+    <roleset id="chemoradiate.01" name="name">
+      <aliases>
+        <alias pos="v">chemoradiate</alias>
+        <alias pos="n">chemoradiation</alias>
+        <alias pos="n">chemoradiotherapy</alias>
+        <alias pos="n">radiochemotherapy</alias>
+      </aliases>
+      <roles>
+        <role descr="agent, doctor" f="PAG" n="0" />
+        <role descr="patient, entity undergoing chemoradiation" f="PPT" n="1" />
+        <role descr="disease" f="VSP" n="2" />
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-" />
+        <usage resource="PropBank" version="2.1.5" inuse="-" />
+        <usage resource="PropBank" version="3.1" inuse="+" />
+        <usage resource="PropBank" version="3.4" inuse="+" />
+        <usage resource="AMR" version="2019" inuse="-" />
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+" />
+        <usage resource="AMR" version="Spatial 1.0" inuse="-" />
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <example name="chemoradiation-n" src="">
+        <text>Capecitabine based postoperative accelerated chemoradiation of pancreatic carcinoma .</text>
+        <propbank>
+          <rel relloc="4">chemoradiation</rel>
+          <arg type="ARGM-TMP" start="2" end="2">postoperative</arg>
+          <arg type="ARGM-ADJ" start="3" end="3">accelerated</arg>
+          <arg type="ARG2" start="5" end="7">of pancreatic carcinoma</arg>
+        </propbank>
+      </example>
+      <example name="chemoradiate-v" src="">
+        <text>Aspiration in chemoradiated patients with head and neck cancer .</text>
+        <propbank>
+          <rel relloc="2">chemoradiated</rel>
+          <arg type="ARG1" start="3" end="3">patients</arg>
+        </propbank>
+      </example>
+      <example name="chemoradiotherapy-n" src="THYME-colon-mod">
+        <text>Patient was evaluated yesterday by Dr. X , who recommended preop chemoradiotherapy .</text>
+        <propbank/>
+        <amr version="THYME 1.0">
+          (e / evaluate-01
+            :ARG0 (d / doctor :name (n / name :op1 "X")
+              :ARG0-of (r / recommend-01
+                :ARG1 (c / chemoradiate-01
+                  :ARG1 p
+                  :ARG1-of (p2 / pre-01
+                    :ARG2 (o / operate-02
+                      :ARG1 p)))))
+            :ARG1 (p / patient-yy)
+            :time (y / yesterday))  
+        </amr>
+      </example>
+      <note>CHEMORADIOTHERAPY-N, RADIOCHEMOTHERAPY-N: Added for THYME-AMRs.</note>
+    </roleset>
+  </predicate>
+</frameset>

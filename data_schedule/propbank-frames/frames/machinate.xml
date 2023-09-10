@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="machinate">
+    <roleset id="machinate.01" name="devise">
+      <aliases>
+        <alias pos="v">machinate</alias>
+        <alias pos="n">machination</alias>
+      </aliases>
+      <roles>
+        <role descr="conspiritor, agent" f="PPT" n="0">
+          <rolelinks>
+            <rolelink class="establish-55.5" resource="VerbNet" version="verbnet3.3">theme</rolelink>
+            <rolelink class="establish-55.5" resource="VerbNet" version="verbnet3.4">agent</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="thing devised" f="PPT" n="1">
+          <rolelinks>
+            <rolelink class="establish-55.5" resource="VerbNet" version="verbnet3.4">patient</rolelink>
+          </rolelinks>
+        </role>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="establish-55.5" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3"/>
+        <lexlink class="establish-55.5" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+      </lexlinks>
+      <example name="machinate-v: devise or organize" src="web usage">
+        <text>But Collins feels the need to machinate the game to a degree that has players rollings their eyes .</text>
+        <propbank>
+          <rel relloc="6">machinate</rel>
+          <arg type="ARG0" start="1" end="1">Collins</arg>
+          <arg type="ARG1" start="7" end="8">the game</arg>
+          <arg type="ARGM-EXT" start="9" end="17">to a degree that has players rollings their eyes</arg>
+        </propbank>
+      </example>
+      <example name="machinate-v: consipire" src="web usage">
+        <text>My advice is do n't machinate over the gristle .</text>
+        <propbank>
+          <rel relloc="5">machinate</rel>
+          <arg type="ARGM-NEG" start="4" end="4">n't</arg>
+          <arg type="ARGM-ADV" start="6" end="8">over the gristle</arg>
+        </propbank>
+      </example>
+      <note>MACHINATE-V NOTES: Automatically created based on framefiles: feign (55.5), hand corrected by Katie. Member of VNcls establish-55.5. (from machinate.01-v)</note>
+    </roleset>
+  </predicate>
+</frameset>

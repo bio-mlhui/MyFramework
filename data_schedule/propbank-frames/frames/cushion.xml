@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="cushion">
+    <roleset id="cushion.01" name="to protect from impact">
+      <aliases>
+        <alias pos="v">cushion</alias>
+      </aliases>
+      <roles>
+        <role descr="protector, agent" f="PAG" n="0"/>
+        <role descr="entity cushioned" f="PPT" n="1"/>
+        <role descr="cushioned for/from/against" f="VSP" n="2"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="+"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="cushion-v.1" confidence="0.1" resource="onsense" src="annot-overlap" version="on5">9</lexlink>
+      </lexlinks>
+      <example name="cushion for" src="">
+        <text>Denizens of London 's financial district are cushioning themselves for heavy blows .</text>
+        <propbank>
+          <rel relloc="7">cushioning</rel>
+          <arg type="ARG0" start="0" end="5">Denizens of London 's financial district</arg>
+          <arg type="ARG1" start="8" end="8">themselves</arg>
+          <arg type="ARG2" start="9" end="11">for heavy blows</arg>
+        </propbank>
+      </example>
+      <example name="cushion from" src="">
+        <text>For instance , the new U.S. package makes clear there would be a transition period during which GATT members could use a combination of tariffs and quotas to cushion their farmers from foreign competition .</text>
+        <propbank>
+          <rel relloc="28">cushion</rel>
+          <arg type="ARG0" start="17" end="18">GATT members</arg>
+          <arg type="ARG1" start="29" end="30">their farmers</arg>
+          <arg type="ARG2" start="31" end="33">from foreign competition</arg>
+        </propbank>
+      </example>
+      <example name="cushion against" src="">
+        <text>But its competitors -- including Dow Chemical Co. , Union Carbide Corp. and several oil giants -- have much broader business interests and so are better cushioned against price swings .</text>
+        <propbank>
+          <rel relloc="26">cushioned</rel>
+          <arg type="ARGM-MNR" start="25" end="25">better</arg>
+          <arg type="ARG1" start="1" end="16">its competitors -- including Dow Chemical Co. , Union Carbide Corp. and several oil giants --</arg>
+          <arg type="ARG2" start="27" end="29">against price swings</arg>
+        </propbank>
+      </example>
+      <note>CUSHION-V NOTES: Frames file for 'cushion' based on survey of sentences in the WSJ corpus. (from cushion.01-v predicate notes)</note>
+    </roleset>
+  </predicate>
+</frameset>

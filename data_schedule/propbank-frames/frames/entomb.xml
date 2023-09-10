@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="entomb">
+    <roleset id="entomb.01" name="put into a tomb">
+      <aliases>
+        <alias pos="v">entomb</alias>
+      </aliases>
+      <roles>
+        <role descr="who put what where, agent" f="PAG" n="0"/>
+        <role descr="corpse (I hope)" f="PPT" n="1"/>
+        <role descr="tomb" f="GOL" n="2"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="+"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks/>
+      <example name="mother of all trace chains" src="">
+        <text>In Oakland , officials said the 57 - year - old longshoreman who spent four days entombed in rubble was in critical condition with slight improvement .</text>
+        <propbank>
+          <rel relloc="16">entombed</rel>
+          <arg type="ARG1" start="5" end="11">the 57 - year - old longshoreman</arg>
+          <arg type="R-ARG1" start="12" end="12">who</arg>
+          <arg type="ARG2" start="17" end="18">in rubble</arg>
+        </propbank>
+      </example>
+      <example name="ARG0" src="probably COCA (2018 example fix)">
+        <text>They transferred the mummy to Lviv , where they entombed it in a crypt .</text>
+        <propbank>
+          <rel relloc="9">entombed</rel>
+          <arg type="ARG0" start="8" end="8">they</arg>
+          <arg type="ARG1" start="10" end="10">it</arg>
+          <arg type="ARG2" start="11" end="13">in a crypt</arg>
+          <arg type="ARGM-LOC" start="7" end="7">where</arg>
+        </propbank>
+      </example>
+      <note>ENTOMB-V NOTES: Frames file for 'entomb' based on sentences in wsj. No Verbnet entry. (from entomb.01-v predicate notes)</note>
+    </roleset>
+  </predicate>
+</frameset>

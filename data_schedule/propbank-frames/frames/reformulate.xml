@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="reformulate">
+    <roleset id="reformulate.01" name="to formulate again">
+      <aliases>
+        <alias pos="v">reformulate</alias>
+        <alias pos="n">reformulation</alias>
+      </aliases>
+      <roles>
+        <role descr="formulator, agent" f="PAG" n="0"/>
+        <role descr="entity reformulated" f="PPT" n="1"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="+"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks/>
+      <example name="reformulate-v: passive" src="">
+        <text>But the plan now is being `` reformulated , '' Delmed said , declining to provide most of the new terms of the combination .</text>
+        <propbank>
+          <rel relloc="7">reformulated</rel>
+          <arg type="ARGM-DIS" start="0" end="0">But</arg>
+          <arg type="ARGM-TMP" start="3" end="3">now</arg>
+          <arg type="ARG1" start="1" end="2">the plan</arg>
+        </propbank>
+      </example>
+      <example name="reformulation-n" src="clearearth-biotexts">
+        <text>Other theories included the pangenesis of Charles Darwin -LRB- which had both acquired and inherited aspects -RRB- and Francis Galton 's reformulation of pangenesis as both particulate and inherited .</text>
+        <propbank>
+          <rel relloc="21">reformulation</rel>
+          <arg type="ARG0" start="18" end="20">Francis Galton 's</arg>
+          <arg type="ARG1" start="22" end="23">of pangenesis</arg>
+          <arg type="ARGM-PRD" start="24" end="28">as both particulate and inherited</arg>
+        </propbank>
+      </example>
+      <note>REFORMULATE-V NOTES: Frames file for 'reformulate' based on survey of sentences in the WSJ corpus. (from reformulate.01-v predicate notes)</note>
+      <note>REFORMUATION-N NOTES: Added for clearearth-biotexts.</note>
+    </roleset>
+  </predicate>
+</frameset>

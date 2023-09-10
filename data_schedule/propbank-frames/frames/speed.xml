@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="speed">
+    <roleset id="speed.01" name="(cause to) go fast">
+      <aliases>
+        <alias pos="n">speeding</alias>
+        <alias pos="v">speed</alias>
+      </aliases>
+      <roles>
+        <role descr="causer of fast motion" f="PAG" n="0">
+          <rolelinks>
+            <rolelink class="run-51.3.2-2" resource="VerbNet" version="verbnet3.3">agent</rolelink>
+            <rolelink class="run-51.3.2-2" resource="VerbNet" version="verbnet3.4">agent</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="entity in motion" f="PPT" n="1">
+          <rolelinks>
+            <rolelink class="run-51.3.2-2" resource="VerbNet" version="verbnet3.3">theme</rolelink>
+            <rolelink class="run-51.3.2-2" resource="VerbNet" version="verbnet3.4">theme</rolelink>
+          </rolelinks>
+        </role>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="+"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="Self_motion" confidence="0.8" resource="FrameNet" src="manual+strict-conv" version="1.7"/>
+        <lexlink class="run-51.3.2-2" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3"/>
+        <lexlink class="speed-v.1" confidence="0.1" resource="onsense" src="annot-overlap" version="on5">5</lexlink>
+        <lexlink class="speed-v.2" confidence="0.1" resource="onsense" src="annot-overlap" version="on5">13</lexlink>
+        <lexlink class="run-51.3.2-2" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+      </lexlinks>
+      <example name="lawbreaker" src="">
+        <text>John always speeds in his Chevette .</text>
+        <propbank>
+          <rel relloc="2">speeds</rel>
+          <arg type="ARG1" start="0" end="0">John</arg>
+          <arg type="ARGM-TMP" start="1" end="1">always</arg>
+          <arg type="ARGM-LOC" start="3" end="5">in his Chevette</arg>
+        </propbank>
+      </example>
+      <example name="with agent" src="">
+        <text>The Los Alamos laboratory is one of three U.S. Department of Energy national laboratories designed as pilot centers to foster joint industry - government programs to speed the transfer of new superconductors to the marketplace .</text>
+        <propbank>
+          <rel relloc="26">speed</rel>
+          <arg type="ARG0" start="20" end="24">joint industry - government programs</arg>
+          <arg type="ARG1" start="27" end="34">the transfer of new superconductors to the marketplace</arg>
+        </propbank>
+      </example>
+      <example name="with redundant directional" src="">
+        <text>The market 's wild week may speed along the market - reform legislation that has been pending for months in the aftermath of the 1987 crash .</text>
+        <propbank>
+          <rel relloc="6">speed</rel>
+          <arg type="ARG0" start="0" end="4">The market 's wild week</arg>
+          <arg type="ARGM-MOD" start="5" end="5">may</arg>
+          <arg type="ARGM-DIR" start="7" end="7">along</arg>
+          <arg type="ARG1" start="8" end="25">the market - reform legislation that has been pending for months in the aftermath of the 1987 crash</arg>
+        </propbank>
+      </example>
+      <example name="arg1" src="internet">
+        <text>According to Kyle Evans , he says he stopped a man and inquired about the reason for his speeding .</text>
+        <propbank>
+          <rel relloc="18">speeding</rel>
+          <arg type="ARG1" start="17" end="17">his</arg>
+        </propbank>
+      </example>
+      <example name="both args" src="internet">
+        <text>The doctor had a thrilling experience on his homeward trip , which necessitated his speeding his car ,</text>
+        <propbank>
+          <rel relloc="14">speeding</rel>
+          <arg type="ARG0" start="13" end="13">his</arg>
+          <arg type="ARG1" start="15" end="16">his car</arg>
+        </propbank>
+      </example>
+      <note>SPEED-V NOTES: Based on annotation-on-the-fly on the financial subcorpus. Member of VNcls run-51.3.2. (from speed.01-v)</note>
+      <note>SPEEDING-N NOTES: Added by Julia based on BOLT-5, speed-v.01. Corresponds to VNcls run-51.3.2. (from speeding.01-n)</note>
+    </roleset>
+  </predicate>
+  <predicate lemma="speed_up">
+    <roleset id="speed_up.02" name="speed up: accelerate, cause to move fast">
+      <aliases>
+        <alias pos="v">speed_up</alias>
+      </aliases>
+      <roles>
+        <role descr="causer of fast motion" f="PAG" n="0"/>
+        <role descr="entity in motion" f="PPT" n="1"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="-"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="speed-v.2" confidence="0.1" resource="onsense" src="annot-overlap" version="on5">17</lexlink>
+      </lexlinks>
+      <example name="faster, pussycat!  kill, kill!" src="">
+        <text>The withdrawal of New England Electric might speed up the reorganization process .</text>
+        <propbank>
+          <rel relloc="7 8">speed up</rel>
+          <arg type="ARG0" start="0" end="5">The withdrawal of New England Electric</arg>
+          <arg type="ARGM-MOD" start="6" end="6">might</arg>
+          <arg type="ARG1" start="9" end="11">the reorganization process</arg>
+        </propbank>
+      </example>
+      <note>SPEED_UP-V NOTES: No VNcls. (from speed.02-v)</note>
+    </roleset>
+  </predicate>
+  <predicate lemma="speedy">
+    <roleset id="speedy.03" name="going fast">
+      <aliases>
+        <alias pos="j">speedy</alias>
+      </aliases>
+      <roles>
+        <role descr="causer of fast motion" f="PAG" n="0"/>
+        <role descr="entity in motion" f="PPT" n="1"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="-"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <example name="with agent" src="">
+        <text>The transfer of new superconductors to the marketplace is speedy .</text>
+        <propbank>
+          <rel relloc="9">speedy</rel>
+          <arg type="ARG1" start="0" end="7">The transfer of new superconductors to the marketplace</arg>
+        </propbank>
+      </example>
+      <note>SPEEDY-J NOTES: Based on speed.01 (from speedy.01-j)</note>
+    </roleset>
+  </predicate>
+</frameset>

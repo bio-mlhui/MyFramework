@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="harbor">
+    <roleset id="harbor.01" name="hold closely and safely">
+      <aliases>
+        <alias pos="v">harbor</alias>
+      </aliases>
+      <roles>
+        <role descr="holder" f="PAG" n="0"/>
+        <role descr="thing held" f="PPT" n="1"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="+"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="harbour-v.1" confidence="0.1" resource="onsense" src="annot-overlap" version="on5">3</lexlink>
+      </lexlinks>
+      <example name="metaphorical" src="">
+        <text>As Conservatives rally around Mrs. Thatcher during the crisis , many harbor hopes last week 's debacle will prompt change .</text>
+        <propbank>
+          <rel relloc="11">harbor</rel>
+          <arg type="ARGM-TMP" start="0" end="8">As Conservatives rally around Mrs. Thatcher during the crisis</arg>
+          <arg type="ARG0" start="10" end="10">many</arg>
+          <arg type="ARG1" start="12" end="19">hopes last week 's debacle will prompt change</arg>
+        </propbank>
+      </example>
+      <example name="more literal" src="">
+        <text>There was only one place where the mountain might receive her -- that unnamed , unnameable pool harbored in its secret bosom .</text>
+        <propbank>
+          <rel relloc="17">harbored</rel>
+          <arg type="ARG1" start="12" end="16">that unnamed , unnameable pool</arg>
+          <arg type="ARGM-LOC" start="18" end="21">in its secret bosom</arg>
+        </propbank>
+      </example>
+      <note>HARBOR-V NOTES: Frames file for 'harbor' based on survey of sentences in the WSJ corpus. (from harbor.01-v predicate notes)</note>
+    </roleset>
+  </predicate>
+</frameset>

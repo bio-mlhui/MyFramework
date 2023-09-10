@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="interfere">
+    <roleset id="interfere.01" name="to meddle, intervene unasked">
+      <aliases>
+        <alias pos="v">interfere</alias>
+        <alias pos="n">interference</alias>
+      </aliases>
+      <roles>
+        <role descr="agent" f="PAG" n="0"/>
+        <role descr="interfere with/in" f="PPT" n="1"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="+"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="Hindering" confidence="0.8" resource="FrameNet" src="manual+strict-conv" version="1.7"/>
+        <lexlink class="interfere-v.1" confidence="0.1" resource="onsense" src="annot-overlap" version="on5">20</lexlink>
+      </lexlinks>
+      <example name="interfere-v: Arg1-with" src="">
+        <text>Lawful demonstrations , such as peaceful picketing and other assemblages that do not disturb the peace or cause a public nuisance or interfere with the rights of others , are rights guaranteed by any truly free system of government .</text>
+        <propbank>
+          <rel relloc="22">interfere</rel>
+          <arg type="ARG0" start="8" end="9">other assemblages</arg>
+          <arg type="R-ARG0" start="10" end="10">that</arg>
+          <arg type="ARGM-NEG" start="12" end="12">not</arg>
+          <arg type="ARG1" start="23" end="27">with the rights of others</arg>
+        </propbank>
+      </example>
+      <example name="interfere-v: Arg1-in" src="">
+        <text>Warner has filed a $ 1 billion breach of contract suit in Los Angeles Superior Court against Sony and the Guber - Peters duo , who in turn are countersuing Warner for trying to interfere in Sony 's acquisition of Columbia Pictures Entertainment Inc. and Guber Peters Entertainment Co. in two transactions valued at over $ 5 billion .</text>
+        <propbank>
+          <rel relloc="34">interfere</rel>
+          <arg type="ARG0" start="30" end="30">Warner</arg>
+          <arg type="ARG1" start="35" end="57">in Sony 's acquisition of Columbia Pictures Entertainment Inc. and Guber Peters Entertainment Co. in two transactions valued at over $ 5 billion</arg>
+        </propbank>
+      </example>
+      <example name="interfere-v: intransitive" src="">
+        <text>President de Klerk 's government permitted the rally , and security forces did n't interfere .</text>
+        <propbank>
+          <rel relloc="14">interfere</rel>
+          <arg type="ARG0" start="10" end="11">security forces</arg>
+          <arg type="ARGM-NEG" start="13" end="13">n't</arg>
+        </propbank>
+      </example>
+      <note>INTERFERE-V NOTES: No Vncls, checked by Julia, 10/2010. (from interfere.01-v)</note>
+    </roleset>
+  </predicate>
+</frameset>

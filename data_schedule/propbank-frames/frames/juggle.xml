@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="juggle">
+    <roleset id="juggle.01" name="keep many metaphorical or literal balls in the air at once">
+      <aliases>
+        <alias pos="v">juggle</alias>
+        <alias pos="n">juggling</alias>
+      </aliases>
+      <roles>
+        <role descr="juggler" f="PAG" n="0"/>
+        <role descr="things juggled" f="PPT" n="1"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="+"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="Cause_to_move_in_place" confidence="0.8" resource="FrameNet" src="manual+strict-conv" version="1.7"/>
+        <lexlink class="juggle-v.1" confidence="0.1" resource="onsense" src="annot-overlap" version="on5">3</lexlink>
+      </lexlinks>
+      <example name="juggle-v" src="">
+        <text>Not surprisingly , old - style money managers have been losing clients to giant stock - index funds that use computers to juggle portfolios so they mirror the S &amp; P 500 .</text>
+        <propbank>
+          <rel relloc="22">juggle</rel>
+          <arg type="ARG0" start="13" end="17">giant stock - index funds</arg>
+          <arg type="R-ARG0" start="18" end="18">that</arg>
+          <arg type="ARG1" start="23" end="23">portfolios</arg>
+          <arg type="ARGM-PNC" start="24" end="31">so they mirror the S &amp; P 500</arg>
+        </propbank>
+      </example>
+      <example name="juggling-n" src="Lorelei">
+        <text>A young boy practices juggling in a parking lot</text>
+        <propbank>
+          <rel relloc="4">juggling</rel>
+          <arg type="ARG0" start="0" end="2">A young boy</arg>
+          <arg type="ARGM-LOC" start="5" end="8">in a parking lot</arg>
+        </propbank>
+      </example>
+      <note>JUGGLE-V NOTES: Frames file for 'juggle' based on sentences in financial subcorpus. No verbnet entry. No comparison. (from juggle.01-v predicate notes)</note>
+    </roleset>
+  </predicate>
+</frameset>

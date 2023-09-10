@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="scalp">
+    <roleset id="scalp.01" name="scalp">
+      <aliases>
+        <alias pos="v">scalp</alias>
+      </aliases>
+      <roles>
+        <role descr="scalper, agent" f="PAG" n="0">
+          <rolelinks>
+            <rolelink class="pit-10.7" resource="VerbNet" version="verbnet3.3">agent</rolelink>
+            <rolelink class="Emptying" resource="FrameNet" version="1.7">agent</rolelink>
+            <rolelink class="Emptying" resource="FrameNet" version="1.7">cause</rolelink>
+            <rolelink class="pit-10.7" resource="VerbNet" version="verbnet3.4">agent</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="scalped from what/whom, source" f="DIR" n="1">
+          <rolelinks>
+            <rolelink class="pit-10.7" resource="VerbNet" version="verbnet3.3">source</rolelink>
+            <rolelink class="Emptying" resource="FrameNet" version="1.7">source</rolelink>
+            <rolelink class="pit-10.7" resource="VerbNet" version="verbnet3.4">source</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="thing removed/scalped, theme" f="PPT" n="2">
+          <rolelinks>
+            <rolelink class="pit-10.7" resource="VerbNet" version="verbnet3.3">theme</rolelink>
+            <rolelink class="Emptying" resource="FrameNet" version="1.7">theme</rolelink>
+          </rolelinks>
+        </role>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="Emptying" confidence="0.8" resource="FrameNet" src="manual+strict-conv" version="1.7"/>
+        <lexlink class="pit-10.7" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3"/>
+        <lexlink class="pit-10.7" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+      </lexlinks>
+      <example name="lawn-care usage" src="web usage">
+        <text>He scalped the lawn area with the weedeater until it was bare dirt .</text>
+        <propbank>
+          <rel relloc="1">scalped</rel>
+          <arg type="ARG0" start="0" end="0">He</arg>
+          <arg type="ARG1" start="2" end="4">the lawn area</arg>
+          <arg type="ARGM-MNR" start="5" end="7">with the weedeater</arg>
+          <arg type="ARGM-TMP" start="8" end="12">until it was bare dirt</arg>
+        </propbank>
+      </example>
+      <example name="all args" src="internet">
+        <text>After the slabs are cooled they are sent to the overhauling machines where a thin layer of metal is scalped from the surface .</text>
+        <propbank>
+          <rel relloc="19">scalped</rel>
+          <arg type="ARG2" start="13" end="17">a thin layer of metal</arg>
+          <arg type="ARG1" start="20" end="22">from the surface</arg>
+          <arg type="ARGM-LOC" start="9" end="11">the overhauling machines</arg>
+          <arg type="R-ARGM-LOC" start="12" end="12">where</arg>
+        </propbank>
+      </example>
+      <note>SCALP-V NOTES: Automatically created based on framefiles: milk (10.7). Hand-checked by Kevin. Member of Vncls pit-10.7. (from scalp.01-v)</note>
+    </roleset>
+    <roleset id="scalp.02" name="sell illegally">
+      <aliases>
+        <alias pos="v">scalp</alias>
+      </aliases>
+      <roles>
+        <role descr="seller" f="PAG" n="0"/>
+        <role descr="thing sold" f="PPT" n="1"/>
+        <role descr="buyer" f="GOL" n="2"/>
+        <role descr="price paid" f="VSP" n="3"/>
+        <role descr="benefactive" f="GOL" n="4"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="-"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <example name="nearly all args" src="">
+        <text>He scalped the playoff tickets for $ 500 !</text>
+        <propbank>
+          <rel relloc="1">scalped</rel>
+          <arg type="ARG0" start="0" end="0">He</arg>
+          <arg type="ARG1" start="2" end="4">the playoff tickets</arg>
+          <arg type="ARG3" start="5" end="8">for $ 500 !</arg>
+        </propbank>
+      </example>
+      <note>SCALP-V NOTES: Based on Bolt SMS data. Comparison to sell.01. No VN or FN classes. Framed by Katie. (from scalp.02-v)</note>
+    </roleset>
+  </predicate>
+</frameset>

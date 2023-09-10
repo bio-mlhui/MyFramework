@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="append">
+    <roleset id="append.01" name="attach to">
+      <aliases>
+        <alias pos="v">append</alias>
+      </aliases>
+      <roles>
+        <role descr="attacher" f="PAG" n="0"/>
+        <role descr="attached" f="PPT" n="1"/>
+        <role descr="attached to" f="GOL" n="2"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="+"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="Attaching" confidence="0.8" resource="FrameNet" src="manual+strict-conv" version="1.7"/>
+      </lexlinks>
+      <example name="all args" src="">
+        <text>The budget reconciliation had to be dealt with by the Oct. 15 deadline , and these Senate Democrats refused to agree to allow a vote to append capital gains to the budget bill , knowing it would pass .</text>
+        <propbank>
+          <rel relloc="26">append</rel>
+          <arg type="ARG0" start="23" end="24">a vote</arg>
+          <arg type="ARG1" start="27" end="28">capital gains</arg>
+          <arg type="ARG2" start="29" end="32">to the budget bill</arg>
+        </propbank>
+      </example>
+      <note>APPEND-V NOTES: VN updated by Julia. No Vncls. (from append.01-v)</note>
+    </roleset>
+  </predicate>
+</frameset>

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="inadequate">
+    <roleset id="inadequate.01" name="not enough">
+      <aliases>
+        <alias pos="j">inadequate</alias>
+      </aliases>
+      <roles>
+        <role descr="thing that is lacking" f="PPT" n="1" />
+        <role descr="consequence, inadaquate how? lacking what?" f="PRD" n="2" />
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-" />
+        <usage resource="PropBank" version="2.1.5" inuse="-" />
+        <usage resource="PropBank" version="3.1" inuse="+" />
+        <usage resource="PropBank" version="3.4" inuse="+" />
+        <usage resource="AMR" version="2019" inuse="-" />
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+" />
+        <usage resource="AMR" version="Spatial 1.0" inuse="-" />
+        <usage resource="AMR" version="THYME 1.0" inuse="-" />
+      </usagenotes>
+      <lexlinks />
+      <example name="Both args," src="">
+        <text>The patient 's breath holding was inadequate to completely evaluate the renal arteries .</text>
+        <propbank>
+          <rel relloc="6">inadequate</rel>
+          <arg type="ARG1" start="0" end="4">The patient 's breath holding</arg>
+          <arg type="ARG2" start="7" end="12">to completely evaluate the renal arteries</arg>
+        </propbank>
+      </example>
+      <note>INADEQUATE-J NOTES: Based on Thyme and Sharp data. No comparison. Framed by Katie. (from inadequate.01-j)</note>
+    </roleset>
+  </predicate>
+</frameset>

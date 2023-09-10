@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="surfeit">
+    <roleset id="surfeit.01" name="excessively satisfy">
+      <aliases>
+        <alias pos="v">surfeit</alias>
+      </aliases>
+      <roles>
+        <role descr="causer of satisfaction" f="PAG" n="0"/>
+        <role descr="person satisfied" f="PPT" n="1"/>
+        <role descr="instrument of satisfaction" f="MNR" n="2"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks/>
+      <example name="transitive" src="">
+        <text>False ideas surfeit another sector of our life .</text>
+        <propbank>
+          <rel relloc="2">surfeit</rel>
+          <arg type="ARG0" start="0" end="1">False ideas</arg>
+          <arg type="ARG1" start="3" end="7">another sector of our life</arg>
+        </propbank>
+      </example>
+      <example name="passive with instrument" src="">
+        <text>So choosing a good tree , he clambered up into it , found a comfortable notch , and curled up in it to sleep , like the tousled bear he was , with his hands across his chest , as though surfeited with honey .</text>
+        <propbank>
+          <rel relloc="41">surfeited</rel>
+          <arg type="ARG1" start="29" end="29">he</arg>
+          <arg type="ARG2" start="42" end="43">with honey</arg>
+        </propbank>
+      </example>
+      <example name="active with instrument" src="">
+        <text>he surfeits us with compliments .</text>
+        <propbank>
+          <rel relloc="1">surfeits</rel>
+          <arg type="ARG0" start="0" end="0">he</arg>
+          <arg type="ARG1" start="2" end="2">us</arg>
+          <arg type="ARG2" start="3" end="4">with compliments</arg>
+        </propbank>
+      </example>
+      <note>SURFEIT-V NOTES: Framed by Ben. (from surfeit.01-v)</note>
+    </roleset>
+  </predicate>
+</frameset>

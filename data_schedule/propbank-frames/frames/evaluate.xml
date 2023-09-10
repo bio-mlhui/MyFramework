@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="evaluate">
+    <roleset id="evaluate.01" name="make a judgement about, assessment">
+      <aliases>
+        <alias pos="v">evaluate</alias>
+        <alias pos="n">evaluation</alias>
+        <argalias arg="0" pos="n">evaluator</argalias>
+      </aliases>
+      <roles>
+        <role descr="evaluator" f="PAG" n="0">
+          <rolelinks>
+            <rolelink class="assessment-34.1" resource="VerbNet" version="verbnet3.3">agent</rolelink>
+            <rolelink class="Assessing" resource="FrameNet" version="1.7">assessor</rolelink>
+            <rolelink class="assessment-34.1" resource="VerbNet" version="verbnet3.4">agent</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="entity evaluated" f="PPT" n="1">
+          <rolelinks>
+            <rolelink class="assessment-34.1" resource="VerbNet" version="verbnet3.3">theme</rolelink>
+            <rolelink class="Assessing" resource="FrameNet" version="1.7">phenomenon</rolelink>
+            <rolelink class="assessment-34.1" resource="VerbNet" version="verbnet3.4">theme</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="the judgment made as a result of the evaluation (evaluated as, evaluate that_)" f="PRD" n="2">
+          <rolelinks>
+            <rolelink class="Assessing" resource="FrameNet" version="1.7">value</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="thing that Arg1 is evaluated in search of (evaluated for)" f="PRP" n="3">
+          <rolelinks>
+            <rolelink class="assessment-34.1" resource="VerbNet" version="verbnet3.3">attribute</rolelink>
+            <rolelink class="Assessing" resource="FrameNet" version="1.7">feature</rolelink>
+            <rolelink class="assessment-34.1" resource="VerbNet" version="verbnet3.4">attribute</rolelink>
+          </rolelinks>
+        </role>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="+"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="Assessing" confidence="0.8" resource="FrameNet" src="manual+strict-conv" version="1.7"/>
+        <lexlink class="assessment-34.1" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3"/>
+        <lexlink class="evaluation-n.1" confidence="0.1" resource="onsense" src="annot-overlap" version="on5">5</lexlink>
+        <lexlink class="evaluate-v.1" confidence="0.1" resource="onsense" src="annot-overlap" version="on5">23</lexlink>
+        <lexlink class="evaluation-n.2" confidence="0.1" resource="onsense" src="annot-overlap" version="on5">7</lexlink>
+        <lexlink class="assessment-34.1" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+      </lexlinks>
+      <example name="evaluate-v: transitive" src="">
+        <text>We evaluated raising our bid .</text>
+        <propbank>
+          <rel relloc="1">evaluated</rel>
+          <arg end="0" start="0" type="ARG0">We</arg>
+          <arg end="4" start="2" type="ARG1">raising our bid</arg>
+        </propbank>
+      </example>
+      <example name="evaluation-n: Arg 1 only" src="">
+        <text>the evaluation of our enemies</text>
+        <propbank>
+          <rel relloc="1">evaluation</rel>
+          <arg end="4" start="2" type="ARG1">of our enemies</arg>
+        </propbank>
+      </example>
+      <example name="evaluation-n: autogen2" src="">
+        <text>an electronic evaluation of a well</text>
+        <propbank>
+          <rel relloc="2">evaluation</rel>
+          <arg end="1" start="1" type="ARGM-MNR">electronic</arg>
+          <arg end="5" start="3" type="ARG1">of a well</arg>
+        </propbank>
+      </example>
+      <example name="evaluation-n: Both args" src="">
+        <text>The government 's technical and financial evaluation of the Bofors deal</text>
+        <propbank>
+          <rel relloc="6">evaluation</rel>
+          <arg end="2" start="0" type="ARG0">The government 's</arg>
+          <arg end="5" start="3" type="ARGM-MNR">technical and financial</arg>
+          <arg end="10" start="7" type="ARG1">of the Bofors deal</arg>
+        </propbank>
+      </example>
+      <example name="evaluation-n: with arg 2" src="">
+        <text>I do agree with what Bloom said about Frankenstein in his article , especially in his evaluation that the creature was actually more human than his creator</text>
+        <propbank>
+          <rel relloc="16">evaluation</rel>
+          <arg end="15" start="15" type="ARG0">his</arg>
+          <arg end="26" start="17" type="ARG2">that the creature was actually more human than his creator</arg>
+        </propbank>
+      </example>
+      <example name="evaluation-n: Most common medical" src="">
+        <text>the frozen section histological evaluation</text>
+        <propbank>
+          <rel relloc="4">evaluation</rel>
+          <arg end="2" start="1" type="ARGM-ADJ">frozen section</arg>
+          <arg end="3" start="3" type="ARGM-MNR">histological</arg>
+          <arg end="1" start="0" type="ARG1">the frozen</arg>
+        </propbank>
+      </example>
+      <example name="evaluate-v" src="">
+        <text>When can you safely evaluate a young woman with chest pain for coronary artery disease ?</text>
+        <propbank>
+          <rel relloc="4">evaluate</rel>
+          <arg end="2" start="2" type="ARG0">you</arg>
+          <arg end="3" start="3" type="ARGM-MNR">safely</arg>
+          <arg end="10" start="5" type="ARG1">a young woman with chest pain</arg>
+          <arg end="14" start="11" type="ARG3">for coronary artery disease</arg>
+        </propbank>
+      </example>
+      <example name="do not use ARG3 for causation" src="THYME-colon-mod">
+        <text>On March 4 he was evaluated for similar symptoms .</text>
+        <propbank/>
+        <amr version="THYME 1.0">
+          (e / evaluate-01
+            :ARG1 (h / he)
+            :time (d / date-entity :month 3 :day 4)
+            :ARG1-of (c4 / cause-01
+              :ARG0 (t / thing :pl +
+                :ARG2-of (s / symptomatic-01
+                  :ARG0 h)
+                :ARG1-of (r / resemble-01))))  
+        </amr>
+      </example>
+      <note>EVALUATE NOTES: Arg3 added during THYME-AMR in keeping with new GL-VN semantics. Evaluate.101 merged into this roleset.</note>
+      <note>EVALUATE-V NOTES: Roleset based on instances in Medical Q &amp; A corpus. Framed by Anwen. (from evaluate.101-v)</note>
+      <note>EVALUATE-V NOTES: Based on financial subcorpus, and comparison with 'consider'. Member of VNcls assessment-34.1. (from evaluate.01-v)</note>
+      <note>EVALUATION-N NOTES: Based on nouns-00080. Comparison to 'evaluate.01'. VN class assessment-34.1. Updated by Julia (from evaluation.01-n)</note>
+      <note>arg 2 added in keeping with VNcls, expected usage. (from evaluation.01-n)</note>
+    </roleset>
+  </predicate>
+</frameset>

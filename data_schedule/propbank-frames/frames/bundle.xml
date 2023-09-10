@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="bundle">
+    <roleset id="bundle.01" name="put items together   into a bundle">
+      <aliases>
+        <alias pos="v">bundle</alias>
+      </aliases>
+      <roles>
+        <role descr="bundler (not bungler)" f="PAG" n="0">
+          <rolelinks>
+            <rolelink class="shake-22.3-2-1" resource="VerbNet" version="verbnet3.3">agent</rolelink>
+            <rolelink class="shake-22.3-2-1" resource="VerbNet" version="verbnet3.4">agent</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="items" f="PPT" n="1">
+          <rolelinks>
+            <rolelink class="shake-22.3-2-1" resource="VerbNet" version="verbnet3.3">patient</rolelink>
+            <rolelink class="shake-22.3-2-1" resource="VerbNet" version="verbnet3.4">patient</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="bundle" f="GOL" n="2">
+          <rolelinks/>
+        </role>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="+"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="Placing" confidence="0.8" resource="FrameNet" src="manual+strict-conv" version="1.7"/>
+        <lexlink class="shake-22.3-2-1" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3"/>
+        <lexlink class="shake-22.3-2-1" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+      </lexlinks>
+      <example name="banking services" src="">
+        <text>Instead , they are trying to build customer loyalty by bundling their services into packages and targeting them to small segments of the population .</text>
+        <propbank>
+          <rel relloc="10">bundling</rel>
+          <arg type="ARG0" start="2" end="2">they</arg>
+          <arg type="ARG1" start="11" end="12">their services</arg>
+          <arg type="ARG2" start="13" end="14">into packages</arg>
+        </propbank>
+      </example>
+      <note>BUNDLE-V NOTES: Verbnet entry 22.3-2-1. (from bundle.01-v)</note>
+    </roleset>
+    <roleset id="bundle.02" name="dress warmly">
+      <aliases>
+        <alias pos="v">bundle</alias>
+      </aliases>
+      <roles>
+        <role descr="causal agent of dressing" f="PAG" n="0"/>
+        <role descr="entity dressed" f="PPT" n="1"/>
+        <role descr="clothing" f="PRD" n="2"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="+"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <example name="passive" src="">
+        <text>`` Ski school is great , '' cries out a tot , bundled in a snowsuit as he plows down a bunny slope .</text>
+        <propbank>
+          <rel relloc="12">bundled</rel>
+          <arg type="ARG1" start="9" end="10">a tot</arg>
+          <arg type="ARG2" start="13" end="15">in a snowsuit</arg>
+        </propbank>
+      </example>
+      <note>BUNDLE-V NOTES: Two senses might be difficult to distinguish, except 'dressing' senseseems usually occur in the passive? (from bundle.02-v)</note>
+    </roleset>
+  </predicate>
+  <predicate lemma="bundle_up">
+    <roleset id="bundle_up.03" name="dress warmly">
+      <aliases>
+        <alias pos="v">bundle_up</alias>
+      </aliases>
+      <roles>
+        <role descr="causal agent of dressing" f="PAG" n="0"/>
+        <role descr="entity dressed" f="PPT" n="1"/>
+        <role descr="clothing" f="PRD" n="2"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="-"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <example name="necessity" src="">
+        <text>You have *-1 to bundle up .</text>
+        <propbank>
+          <rel relloc="4 5">bundle up</rel>
+          <arg type="ARG1" start="?" end="?">You</arg>
+        </propbank>
+      </example>
+      <note>BUNDLE_UP-V NOTES: frame by Perryn (from bundle.03-v predicate notes)</note>
+    </roleset>
+  </predicate>
+</frameset>

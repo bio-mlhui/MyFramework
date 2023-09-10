@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="belay">
+    <roleset id="belay.01" name="nautical or mt. climbing term, secure with a rope">
+      <aliases>
+        <alias pos="v">belay</alias>
+      </aliases>
+      <roles>
+        <role descr="belayer, person securing something/someone else" f="PAG" n="0"/>
+        <role descr="climber, rope being secured" f="PPT" n="1"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks/>
+      <example name="Climbing sense" src="">
+        <text>She had carried her notes with her all weekend , even had her head buried in them while belaying me on the Grand Wall .</text>
+        <propbank>
+          <rel relloc="18">belaying</rel>
+          <arg type="ARG0" start="0" end="0">She</arg>
+          <arg type="ARG1" start="19" end="19">me</arg>
+          <arg type="ARGM-LOC" start="20" end="23">on the Grand Wall</arg>
+        </propbank>
+      </example>
+      <note>BELAY-V NOTES: Framed by Claire (from belay.01-v)</note>
+    </roleset>
+  </predicate>
+</frameset>

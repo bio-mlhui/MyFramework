@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="chart">
+    <roleset id="chart.01" name="document, as with a chart">
+      <aliases>
+        <alias pos="v">chart</alias>
+      </aliases>
+      <roles>
+        <role descr="chart-maker" f="PAG" n="0">
+          <rolelinks>
+            <rolelink class="transcribe-25.4" resource="VerbNet" version="verbnet3.3">agent</rolelink>
+            <rolelink class="transcribe-25.4" resource="VerbNet" version="verbnet3.4">agent</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="thing being charted" f="PPT" n="1">
+          <rolelinks>
+            <rolelink class="transcribe-25.4" resource="VerbNet" version="verbnet3.3">theme</rolelink>
+            <rolelink class="transcribe-25.4" resource="VerbNet" version="verbnet3.4">theme</rolelink>
+          </rolelinks>
+        </role>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="+"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="transcribe-25.4" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3"/>
+        <lexlink class="chart-v.1" confidence="0.1" resource="onsense" src="annot-overlap" version="on5">8</lexlink>
+        <lexlink class="transcribe-25.4" confidence="1.0" resource="VerbNet" src="manualchecks" version="verbnet3.4"/>
+      </lexlinks>
+      <example name="transitive" src="">
+        <text>Yet , the unassuming Mr. Corry helped chart USX 's transition from Big Steel to Big Oil .</text>
+        <propbank>
+          <rel relloc="7">chart</rel>
+          <arg type="ARG0" start="2" end="5">the unassuming Mr. Corry</arg>
+          <arg type="ARG1" start="8" end="16">USX 's transition from Big Steel to Big Oil</arg>
+        </propbank>
+      </example>
+      <example name="ergative" src="internet">
+        <text>Their song " Love is a Beautiful Thing " charted into the Top 20 in May 2007</text>
+        <propbank>
+          <rel relloc="9">charted</rel>
+          <arg type="ARG1" start="0" end="8">Their song " Love is a Beautiful Thing "</arg>
+          <arg type="ARGM-GOL" start="10" end="13">into the Top 20</arg>
+          <arg type="ARGM-TMP" start="14" end="16">in May 2007</arg>
+        </propbank>
+      </example>
+      <note>CHART-V NOTES: Based on financial subcorpus. Updated by Julia. Member of Vncls transcribe-25.4. (from chart.01-v)</note>
+    </roleset>
+  </predicate>
+  <predicate lemma="chart_out">
+    <roleset id="chart_out.02" name="document, as with a chart">
+      <aliases>
+        <alias pos="v">chart_out</alias>
+      </aliases>
+      <roles>
+        <role descr="chart-maker" f="PAG" n="0">
+          <rolelinks>
+            <rolelink class="transcribe-25.4" resource="VerbNet" version="verbnet3.3">agent</rolelink>
+          </rolelinks>
+        </role>
+        <role descr="thing being charted" f="PPT" n="1">
+          <rolelinks>
+            <rolelink class="transcribe-25.4" resource="VerbNet" version="verbnet3.3">theme</rolelink>
+          </rolelinks>
+        </role>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="-"/>
+        <usage resource="PropBank" version="2.1.5" inuse="-"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks>
+        <lexlink class="transcribe-25.4" confidence="0.8" resource="VerbNet" src="manual+strict-conv" version="verbnet3.3"/>
+      </lexlinks>
+      <example name="exactly the same as previous ex" src="">
+        <text>Yet , the unassuming Mr. Corry helped chart out USX 's transition from Big Steel to Big Oil .</text>
+        <propbank>
+          <rel relloc="7 8">chart out</rel>
+          <arg type="ARG0" start="2" end="5">the unassuming Mr. Corry</arg>
+          <arg type="ARG1" start="9" end="17">USX 's transition from Big Steel to Big Oil</arg>
+        </propbank>
+      </example>
+      <note>CHART_OUT-V NOTES: Updated by Julia. See VNcls transcribe-25.4. (from chart.02-v)</note>
+    </roleset>
+  </predicate>
+</frameset>

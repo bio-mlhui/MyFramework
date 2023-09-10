@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE frameset PUBLIC "-//PB//PropBank Frame v3.4 Transitional//EN" "http://propbank.org/specification/dtds/v3.4/frameset.dtd">
+<frameset>
+  <predicate lemma="elongate">
+    <roleset id="elongate.01" name="(make/be) longer">
+      <aliases>
+        <alias pos="v">elongate</alias>
+      </aliases>
+      <roles>
+        <role descr="causer, agent" f="PAG" n="0"/>
+        <role descr="thing getting longer" f="PPT" n="1"/>
+      </roles>
+      <usagenotes>
+        <usage resource="PropBank" version="1.0" inuse="+"/>
+        <usage resource="PropBank" version="2.1.5" inuse="+"/>
+        <usage resource="PropBank" version="3.1" inuse="+"/>
+        <usage resource="PropBank" version="3.4" inuse="+"/>
+        <usage resource="AMR" version="2019" inuse="+"/>
+        <usage resource="PropBank" version="Flickr 1.0" inuse="+"/>
+        <usage resource="AMR" version="Spatial 1.0" inuse="+"/>
+        <usage resource="AMR" version="THYME 1.0" inuse="+"/>
+      </usagenotes>
+      <lexlinks/>
+      <example name="the one example" src="">
+        <text>And he had n't used hormones , which many growers employ to elongate their Delicious apples for greater eye appeal .</text>
+        <propbank>
+          <rel relloc="12">elongate</rel>
+          <arg type="ARG0" start="8" end="9">many growers</arg>
+          <arg type="ARG1" start="13" end="15">their Delicious apples</arg>
+          <arg type="ARGM-PNC" start="16" end="19">for greater eye appeal</arg>
+        </propbank>
+      </example>
+      <note>ELONGATE-V NOTES: Frames file for 'elongate' based on sentences in wsj. No Verbnet entry. (from elongate.01-v predicate notes)</note>
+    </roleset>
+  </predicate>
+</frameset>
