@@ -16,4 +16,5 @@ stdout_eval.txt
 RVOS/**
 vscode_cli_alpine_x64_cli.tar
 code
+**/pretrained_video_instance_decoder
 

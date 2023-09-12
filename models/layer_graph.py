@@ -5,6 +5,10 @@ import torch_geometric.nn as geo_nn
 from torch import nn, Tensor
 from typing import Optional
 import torch.nn.functional as F
+# norm
+# 使用memory
+from torch_geometric.nn import Aggregation
+import dgl
 _graphLayer_entrypoints = {}
 def register_graphLayer(fn):
     graphLayer_name = fn.__name__
@@ -23,8 +27,7 @@ class Graph_Layer_v0(nn.Module):
     
     def forward(self, x, edge_index, edge_attr, memory, batch_id):
         return x, edge_attr
-    
-  
+     
 class Graph_Layer_v1(geo_nn.MessagePassing):
     def __init__(self,
                  d_model,
@@ -124,33 +127,6 @@ class Graph_Layer_v1_updateEdge(geo_nn.MessagePassing):
         message = self.message_linear(message)  # E c
         return message
 
-class Graph_Layer_gatHead(nn.Module):
-    def __init__(self, d_model, nhead, flow, aggr,):
-        super().__init__()
-        self.self_attn = geo_nn.GATConv(in_channels=d_model,
-                                        out_channels=d_model,
-                                        add_self_loops=False,
-                                        hedas=nhead,
-                                        dropout=0.0,
-                                        flow=flow,
-                                        aggr=aggr
-                                        )
-
-        self.norm = geo_nn.LayerNorm(d_model)
-        self.dropout = nn.Dropout(0.1)
-
-        self._reset_parameters()
-    
-    def _reset_parameters(self):
-        for p in self.parameters():
-            if p.dim() > 1:
-                nn.init.xavier_uniform_(p)
-
-    def forward(self, x, edge_index, edge_attr, memory, batch_id):
-        x2 = self.self_attn(x, edge_index, edge_attr,) 
-        x2 = self.norm(self.dropout(x + x2), batch=batch_id[:len(x2)])
-        return x2, edge_attr
-
 class Graph_Layer_gatHeadv2(nn.Module):
     def __init__(self, d_model, nhead, flow, aggr,):
         super().__init__()
@@ -179,7 +155,6 @@ class Graph_Layer_gatHeadv2(nn.Module):
         x2 = self.norm(self.dropout(x + x2), batch=batch_id[:len(x2)])
         return x2, edge_attr
 
-# 加上Norm,
 class Graph_Layer_v1_norm(geo_nn.MessagePassing):
     def __init__(self,
                  d_model,
@@ -307,9 +282,6 @@ class Graph_Layer_v1_dropout(geo_nn.MessagePassing):
         message = self.message_linear(message)  # E c
         return message
 
-# 加上dropout
-
-# edge也改变
 class Graph_Layer_v1_norm_edgeUpdate(geo_nn.MessagePassing):
     def __init__(self,
                  d_model,
@@ -397,8 +369,6 @@ class Graph_Layer_bidirection(nn.Module):
           
         return (src2tgt_nodes_feats + tgt2src_nodes_feats ) / 2, edge_attr
 
-
-
 class Graph_Layer_gatHeadFullStep(nn.Module):
     def __init__(self, d_model, nhead, flow, aggr,):
         super().__init__()
@@ -440,9 +410,34 @@ class Graph_Layer_gatHeadFullStep(nn.Module):
         return self.norm(self.dropout(x + x2), batch=batch_id[:len(x2)]), edge_attr
 
 
-# norm
-# 使用memory
-from torch_geometric.nn import Aggregation
+
+class Graph_Layer_gatHead(nn.Module):
+    def __init__(self, d_model, nhead, flow, aggr,):
+        super().__init__()
+        self.self_attn = geo_nn.GATConv(in_channels=d_model,
+                                        out_channels=d_model,
+                                        add_self_loops=False,
+                                        hedas=nhead,
+                                        dropout=0.0,
+                                        flow=flow,
+                                        aggr=aggr
+                                        )
+
+        self.norm = geo_nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(0.1)
+
+        self._reset_parameters()
+    
+    def _reset_parameters(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+
+    def forward(self, x, edge_index, edge_attr, memory, batch_id):
+        x2 = self.self_attn(x, edge_index, edge_attr,) 
+        x2 = self.norm(self.dropout(x + x2), batch=batch_id[:len(x2)])
+        return x2, edge_attr
+
 class V3_Aggregation(Aggregation):
     def __init__(self) -> None:
         super().__init__()
@@ -528,8 +523,6 @@ class Graph_Layer_v3(geo_nn.MessagePassing):
         message = self.message_linear(message)  # E c
         return message
 
-
-import dgl
 class Graph_Layer_v3_fullstep(geo_nn.MessagePassing):
     def __init__(self,
                  d_model,

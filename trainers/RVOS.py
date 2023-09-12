@@ -21,9 +21,43 @@ from models.video_swin import compute_mask
 from tqdm import tqdm
 from PIL import Image
 from .registry import register_task
-
 __all__ = ['rvos']
+from torch.optim.lr_scheduler import LambdaLR
+from torch.optim.optimizer import Optimizer
 
+
+def get_inverse_sqrt_schedule_with_warmup(
+    optimizer: Optimizer, num_warmup_steps: int, num_training_steps: int, last_epoch: int = -1
+):
+    """
+    Create a schedule with a learning rate that decreases following the values of the cosine function between the
+    initial lr set in the optimizer to 0, after a warmup period during which it increases linearly between 0 and the
+    initial lr set in the optimizer.
+
+    Args:
+        optimizer (:class:`~torch.optim.Optimizer`):
+            The optimizer for which to schedule the learning rate.
+        num_warmup_steps (:obj:`int`):
+            The number of steps for the warmup phase.
+        num_training_steps (:obj:`int`):
+            The total number of training steps.
+        num_cycles (:obj:`float`, `optional`, defaults to 0.5):
+            The number of waves in the cosine schedule (the defaults is to just decrease from the max value to 0
+            following a half-cosine).
+        last_epoch (:obj:`int`, `optional`, defaults to -1):
+            The index of the last epoch when resuming training.
+
+    Return:
+        :obj:`torch.optim.lr_scheduler.LambdaLR` with the appropriate schedule.
+    """
+
+    def lr_lambda(current_step):
+        if current_step < num_warmup_steps:
+            return float(current_step) / float(max(1, num_warmup_steps))
+        return max(0.0, (num_warmup_steps / current_step)**0.5)
+
+    return LambdaLR(optimizer, lr_lambda, last_epoch)
+    
 def get_scheduler(optimizer, configs):
     name = configs['name']
     if name == 'MultiStepLR':
@@ -38,6 +72,12 @@ def get_scheduler(optimizer, configs):
 
     elif name == 'ReduceLROnPlateau':
         pass
+    elif name == 'inverse_sqrt':
+        return get_inverse_sqrt_schedule_with_warmup(optimizer,
+                                                     num_warmup_steps=configs['num_warmup_steps'],
+                                                     num_training_steps=configs['num_training_steps'],
+                                                     last_epoch=-1)
+
 
     else:
         raise NotImplementedError
@@ -191,6 +231,7 @@ class Trainer:
                     compute_mask.cache_clear()
                     gc.collect()
                     torch.cuda.empty_cache()
+                self.scheduler.step()
           
             try:
                 self.evaluate_ckpt()

@@ -409,6 +409,7 @@ class DatasetWithAux(Dataset):
             return {'model_inputs': model_inputs}
         
         elif self.text_aux_version == 3:  # amr with variable
+            amr = self.text_aux_by_auxid[text_auxid]['inference_graph']
             G : nx.DiGraph = nx.node_link_graph(amr)
             node_keys = list(G.nodes())
             top_var = G.graph['top']

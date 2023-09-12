@@ -110,9 +110,9 @@ if __name__=="__main__":
             'project': args.task,
             'group': args.group,
             'name': args.schedule_model_configs,
-            'id': f'{args.task}_{args.group}_{args.schedule_model_configs}',
+            'id': f'{args.task}_{args.group}_{args.schedule_model_configs}_inferbug',
             'mode': 'online',
-            'resume': 'allow',
+            'resume': 'must',
             'configs': copy.deepcopy(configs)
         }
         configs['trainer_ckpt'] = args.trainer_ckpt
@@ -144,7 +144,7 @@ if __name__=="__main__":
             'project': args.task,
             'group': args.group,
             'name': args.schedule_model_configs,
-            'id': f'{args.task}_{args.group}_{args.schedule_model_configs}',
+            'id': f'{args.task}_{args.group}_{args.schedule_model_configs}_inferbug',
             'mode': 'online',
             'resume': 'must',
             'configs': copy.deepcopy(configs)
@@ -157,7 +157,7 @@ if __name__=="__main__":
             'project': args.task,
             'group': args.group,
             'name': args.schedule_model_configs,
-            'id': f'{args.task}_{args.group}_{args.schedule_model_configs}',
+            'id': f'{args.task}_{args.group}_{args.schedule_model_configs}_inferbug',
             'mode': 'online',
             'resume': None,
             'configs': copy.deepcopy(configs)
