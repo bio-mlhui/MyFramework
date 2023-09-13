@@ -231,7 +231,7 @@ class Trainer:
                     compute_mask.cache_clear()
                     gc.collect()
                     torch.cuda.empty_cache()
-                self.scheduler.step()
+                # self.scheduler.step()
           
             try:
                 self.evaluate_ckpt()
