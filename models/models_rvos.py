@@ -1763,7 +1763,7 @@ class AMR_v0_detectObj_RefChoose(AMR_v0_detectObj):
         #     if 'obj_decoder' in n:
         #         p.requires_grad_(False)
 
-        # v2
+        # v2 / v3
         assert self.ref_parsing_encoder == None
         for n, p in self.named_parameters():
             if 'obj_decoder' in n:
@@ -1839,6 +1839,7 @@ class AMR_v0_detectObj_RefChoose(AMR_v0_detectObj):
         decoder_layer_preds = self.model_outputs(samples, text_queries, auxiliary, perFrame_has_ann)
         objseg_preds = decoder_layer_preds['objdecoder_objseg']
         obj_last_layer_preds = objseg_preds[f'layer{self.obj_decoder_nlayers-1}_preds']
+
         obj_last_layer_query = obj_last_layer_preds['queries'] # n bt c
         out_mask_logits = obj_last_layer_preds['pred_mask_logits'] # bt nq h w
 
@@ -1849,7 +1850,19 @@ class AMR_v0_detectObj_RefChoose(AMR_v0_detectObj):
 
         # bt h w
         out_mask_logits = torch.stack([out_mask[max_query] for out_mask, max_query in zip(out_mask_logits, prob_by_query)], dim=0)
-        # bt 1 h w
+
+        # out_mask_logits = obj_last_layer_preds['pred_mask_logits'] # bt nq h w
+        # for idx in range(batch_size):
+        #     h, w = targets[idx]['masks'].shape[-2:]
+        #     # n t h w -> n t H W
+        #     targets[idx]['masks'] = F.pad(targets[idx]['masks'].float(), pad=(0, W-w, 0, H-h)).bool()
+        # obj_decoder_targets = self.obj_decoder_targets_handler(targets)
+        # _, matching_result = self.obj_decoder_objseg_loss(objseg_preds, obj_decoder_targets)
+        # matching_result = matching_result[-1] # list(tgt, src), bt
+        # gt_referent_idx = obj_decoder_targets['referent_idx'] # list[int], bt
+        # out_mask_logits = torch.stack([out_mask[tgt_idx[src_idx.tolist().index(gt_ref_idx)]] 
+        #                                 for out_mask, gt_ref_idx, (tgt_idx, src_idx) in zip(out_mask_logits, gt_referent_idx, matching_result)], dim=0)
+        # # # bt 1 h w
         query_pred_masks = F.interpolate(out_mask_logits.unsqueeze(1), 
                                          scale_factor=self.decoder_mask_out_stride, mode="bilinear", align_corners=False)
         query_pred_masks = (query_pred_masks.sigmoid() > self.decoder_mask_threshold) 
