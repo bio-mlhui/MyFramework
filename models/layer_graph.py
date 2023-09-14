@@ -583,13 +583,119 @@ class Graph_Layer_v3_fullstep(geo_nn.MessagePassing):
         message = self.message_linear(message)  # E c
         return message
 
+
+class V3_Aggregation_obj(Aggregation):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def forward(self, msgs: Tensor, index: Tensor=None, ptr=None, dim_size: int=None, dim: int = -2,
+                kwargs=None) -> Tensor:
+        # dim_size:|V|, x: |E| c, video_mem: |E| hw c
+        """
+        x: |E| c
+        x_i: |V| c
+        index: |E|, int, 从0到|V|, 表示每个message属于哪个, [0, 1, 3, 4, 5, 6]
+        """
+        # E nq c, E c 1 -> E nq
+        obj_queries = kwargs['obj_queries']['feat']
+        x = kwargs['x']
+        attn_mask = torch.matmul(obj_queries, msgs.unsqueeze(-1)).squeeze(-1)
+        # list[c], |V|
+        aggrated_message = []
+        for tgt_node_idx in range(dim_size):
+            # 如果没有节点连向x_i, 那么message就是x_i本身
+            if tgt_node_idx not in index:
+                aggrated_message.append(x[tgt_node_idx])
+                continue
+            # mi nq c
+            tgt_node_memory = torch.stack([obj_queries[idx] for idx in range(len(index)) if index[idx] == tgt_node_idx], dim=0)
+            for i in range(1, len(tgt_node_memory)):
+                assert (tgt_node_memory[i] - tgt_node_memory[0]).sum() == 0
+            tgt_node_memory = tgt_node_memory[0].permute(1, 0) # nq c -> c nq
+            # mi+1 nq
+            masks = [attn_mask[idx] for idx in range(len(index)) if index[idx] == tgt_node_idx]
+            masks.append(torch.einsum('sc,c->s',tgt_node_memory.permute(1, 0), x[tgt_node_idx]))
+            masks = torch.stack(masks, dim=0)
+            # nq
+            min_mask: Tensor = masks.min(dim=0)[0]
+            min_mask = F.softmax(min_mask, dim=0)
+            aggrated_message.append(torch.einsum('cs,s->c',tgt_node_memory, min_mask))
+        return torch.stack(aggrated_message, dim=0)
+    
+class Graph_Layer_v3_fullstep_obj(geo_nn.MessagePassing):
+    def __init__(self,
+                 d_model,
+                 flow,):
+        super().__init__(aggr=V3_Aggregation_obj(),
+                         flow=flow)   
+        self.node_linear = nn.Linear(d_model, d_model, bias=False) 
+        self.message_linear = nn.Linear(3*d_model, d_model)
+        self.norm = geo_nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(0.1)
+    
+    def reset_parameters(self):
+        self.message_linear.bias.data.zero_()
+    
+    def forward(self, x, edge_index, edge_attr, memory, batch_id):
+        device = x.device          
+        x2 = self.node_linear(x)  # |V| c
+        
+        obj_queries = memory['feat'] # |E| nq c
+        
+        dgl_graph = dgl.graph((edge_index[0, :], edge_index[1, :]))
+        try:
+            traversal_order = dgl.topological_nodes_generator(dgl_graph)
+        except:
+            exit()
+        orders = []
+        for idx, frontier in enumerate(traversal_order):
+            src, tgt, eid =  dgl_graph.in_edges(frontier.to(device), form='all')
+            if idx == 0:
+                assert len(src) == 0 and len(tgt) == 0 and len(eid) == 0
+                continue
+            orders.append(eid)
+            
+        for edge_order in orders: 
+            x2 = self.propagate(edge_index[:, edge_order], 
+                                size=None,  # keywords
+                                x=x2, 
+                                edge_attr=edge_attr[edge_order, :], 
+                                obj_queries={'feat': obj_queries[edge_order, :],}) # arguments
+    
+        # residual
+        return self.norm(self.dropout(x2 + x), 
+                         batch=batch_id[:len(x)]), edge_attr
+    
+    def aggregate(self, inputs: Tensor, x:Tensor, obj_queries:Tensor, index: Tensor, 
+                  ptr: Optional[Tensor] = None,
+                  dim_size: Optional[int] = None) -> Tensor:
+        return self.aggr_module(inputs, index, ptr=ptr, dim_size=dim_size,
+                                dim=self.node_dim, kwargs={'obj_queries':obj_queries, 'x':x})
+   
+
+    def message(self, x_j, x_i, edge_attr):
+        message = torch.cat([x_j, x_i, edge_attr], dim=-1) # E 3*dim
+        message = self.message_linear(message)  # E c
+        return message
+
+
+
+
 @register_graphLayer
 def graph_layer_inferfullstep(configs):
     return Graph_Layer_v3_fullstep(
         d_model=configs['d_model'],
         flow=configs['flow']
     )
- 
+
+@register_graphLayer
+def graph_layer_inferfullstep_obj(configs):
+    return Graph_Layer_v3_fullstep_obj(
+        d_model=configs['d_model'],
+        flow=configs['flow']
+    )
+  
+
 @register_graphLayer
 def graph_layer_gatHeadFullStep(configs):
     return Graph_Layer_gatHeadFullStep(d_model=configs['d_model'],
