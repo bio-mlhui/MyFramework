@@ -438,6 +438,49 @@ class Graph_Layer_gatHead(nn.Module):
         x2 = self.norm(self.dropout(x + x2), batch=batch_id[:len(x2)])
         return x2, edge_attr
 
+class Graph_Layer_v3(geo_nn.MessagePassing):
+    def __init__(self,
+                 d_model,
+                 flow,):
+        super().__init__(aggr=V3_Aggregation(),
+                         flow=flow)   
+        self.node_linear = nn.Linear(d_model, d_model, bias=False) 
+        self.edge_linear = nn.Linear(d_model, d_model, bias=False)
+        self.memory_linear = nn.Linear(d_model, d_model, bias=False)
+        self.message_linear = nn.Linear(3*d_model, d_model)
+        self.norm = geo_nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(0.1)
+    
+    def reset_parameters(self):
+        self.message_linear.bias.data.zero_()
+    
+    def forward(self, x, edge_index, edge_attr, memory, batch_id):
+        x2 = self.node_linear(x)  # |V| c
+        edge_attr_2 = self.edge_linear(edge_attr)  # |E| c
+        
+        video_mem = self.memory_linear(memory['video_mem']) # |E| c
+        video_mem += memory['video_mem_pos']
+        video_pad_mask = memory['video_mem_pad_mask']
+        x2 = self.propagate(edge_index, size=None,  # keywords
+                             x=x2, edge_attr=edge_attr_2, video_mem={'feat': video_mem, 'pad': video_pad_mask}) # arguments
+    
+        # residual
+        return self.norm(self.dropout(x2 + x), 
+                         batch=batch_id[:len(x)]), edge_attr
+    
+    def aggregate(self, inputs: Tensor, x:Tensor, video_mem:Tensor, index: Tensor, 
+                  ptr: Optional[Tensor] = None,
+                  dim_size: Optional[int] = None) -> Tensor:
+        return self.aggr_module(inputs, index, ptr=ptr, dim_size=dim_size,
+                                dim=self.node_dim, kwargs={'video_mem':video_mem, 'x':x})
+   
+
+    def message(self, x_j, x_i, edge_attr):
+        message = torch.cat([x_j, x_i, edge_attr], dim=-1) # E 3*dim
+        message = self.message_linear(message)  # E c
+        return message
+
+
 class V3_Aggregation(Aggregation):
     def __init__(self) -> None:
         super().__init__()
@@ -481,48 +524,6 @@ class V3_Aggregation(Aggregation):
             aggrated_message.append(torch.einsum('cs,s->c',tgt_node_memory, min_mask))
         return torch.stack(aggrated_message, dim=0)
     
-class Graph_Layer_v3(geo_nn.MessagePassing):
-    def __init__(self,
-                 d_model,
-                 flow,):
-        super().__init__(aggr=V3_Aggregation(),
-                         flow=flow)   
-        self.node_linear = nn.Linear(d_model, d_model, bias=False) 
-        self.edge_linear = nn.Linear(d_model, d_model, bias=False)
-        self.memory_linear = nn.Linear(d_model, d_model, bias=False)
-        self.message_linear = nn.Linear(3*d_model, d_model)
-        self.norm = geo_nn.LayerNorm(d_model)
-        self.dropout = nn.Dropout(0.1)
-    
-    def reset_parameters(self):
-        self.message_linear.bias.data.zero_()
-    
-    def forward(self, x, edge_index, edge_attr, memory, batch_id):
-        x2 = self.node_linear(x)  # |V| c
-        edge_attr_2 = self.edge_linear(edge_attr)  # |E| c
-        
-        video_mem = self.memory_linear(memory['video_mem']) # |E| c
-        video_mem += memory['video_mem_pos']
-        video_pad_mask = memory['video_mem_pad_mask']
-        x2 = self.propagate(edge_index, size=None,  # keywords
-                             x=x2, edge_attr=edge_attr_2, video_mem={'feat': video_mem, 'pad': video_pad_mask}) # arguments
-    
-        # residual
-        return self.norm(self.dropout(x2 + x), 
-                         batch=batch_id[:len(x)]), edge_attr
-    
-    def aggregate(self, inputs: Tensor, x:Tensor, video_mem:Tensor, index: Tensor, 
-                  ptr: Optional[Tensor] = None,
-                  dim_size: Optional[int] = None) -> Tensor:
-        return self.aggr_module(inputs, index, ptr=ptr, dim_size=dim_size,
-                                dim=self.node_dim, kwargs={'video_mem':video_mem, 'x':x})
-   
-
-    def message(self, x_j, x_i, edge_attr):
-        message = torch.cat([x_j, x_i, edge_attr], dim=-1) # E 3*dim
-        message = self.message_linear(message)  # E c
-        return message
-
 class Graph_Layer_v3_fullstep(geo_nn.MessagePassing):
     def __init__(self,
                  d_model,

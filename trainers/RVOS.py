@@ -354,8 +354,8 @@ class Trainer:
         self.iteration = checkpoint['iteration']
         model_without_ddp = self.model.module if isinstance(self.model, DDP) else self.model
         model_without_ddp.load_state_dict(checkpoint['model_state_dict'], strict=False)
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        # self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        # self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
     
 @register_task
 def rvos(configs, process_id, device_id, num_processes,):

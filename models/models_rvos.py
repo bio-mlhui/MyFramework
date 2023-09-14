@@ -1746,7 +1746,29 @@ class AMR_v0_detectObj_RefChoose(AMR_v0_detectObj):
                 'mask_threshold': 0.5,
                 },) -> None:
         super().__init__(d_model, max_stride, pt_dir, swint_pretrained_path, swint_freeze, swint_runnning_mode, video_projs, video_feat_scales, amrbart_wordEmbedding_freeze, amrtext_wordEmbedding_proj, fusion, parsing_encoder, loss_weight, tasks, refdecoder, objdecoder)
-    
+        # v1
+        # 冻住proj, fusion parsing encoder, objdecoder,
+        # 只训练refdecoder
+        # for p in self.video_proj.parameters():
+        #     p.requires_grad_(False) 
+        # for p in self.amrtext_wordEmbedding_proj.parameters():
+        #     p.requires_grad_(False)
+        # for p in self.cross_product.parameters():
+        #     p.requires_grad_(False)
+
+        # for p in self.obj_parsing_encoder.parameters():
+        #     p.requires_grad_(False)
+        # assert self.ref_parsing_encoder == None
+        # for n, p in self.named_parameters():
+        #     if 'obj_decoder' in n:
+        #         p.requires_grad_(False)
+
+        # v2
+        assert self.ref_parsing_encoder == None
+        for n, p in self.named_parameters():
+            if 'obj_decoder' in n:
+                p.requires_grad_(False)        
+
     def forward(self, samples : NestedTensor, text_queries, auxiliary, targets, visualize=False):
         if not isinstance(samples, NestedTensor):
             samples = nested_tensor_from_videos_list_with_stride(samples, max_stride=self.max_stride)
