@@ -27,6 +27,8 @@ import pycocotools.mask as mask_util
 import util.box_ops as box_ops
 from util.misc import get_world_size, is_dist_avail_and_initialized, nested_tensor_from_videos_list_with_stride
 from functools import partial
+from .pretrained_video_instance_decoder.pt_obj_decoder import pt_obj_decoder_entrypoint
+from .transformer import TransformerEncoder, TransformerEncoderLayer
 def dice_loss(inputs, targets, num_boxes):
     """
     Compute the DICE loss, similar to generalized IOU for masks
@@ -318,123 +320,123 @@ class Scale32CatText_Encoder_FPN(nn.Module):
         super().__init__()
 
 # from natten import NeighborhoodAttention3D
-# class Neighborhood3D_with_FPN(nn.Module):
-#     def __init__(self, 
-#                  d_model,
-#                 d_ffn=2048,
-#                 dropout=0.,
-#                 activation='relu',
-#                 nheads=8,
-#                 # important
-#                 fused_scales=None, 
-#                 fpn_strides=None,
+class Neighborhood3D_with_FPN(nn.Module):
+    def __init__(self, 
+                 d_model,
+                d_ffn=2048,
+                dropout=0.,
+                activation='relu',
+                nheads=8,
+                # important
+                fused_scales=None, 
+                fpn_strides=None,
 
-#                 npoints=4, 
-#                 nlayers=6,
-#                  ) -> None:
-#         super().__init__()
-#         n_levels = len(fused_scales)
-#         self.fused_scales = fused_scales
+                npoints=4, 
+                nlayers=6,
+                 ) -> None:
+        super().__init__()
+        n_levels = len(fused_scales)
+        self.fused_scales = fused_scales
         
-#         n3d_layer = NeighborhoodAttention3D(
-#             dim=d_model,
+        n3d_layer = NeighborhoodAttention3D(
+            dim=d_model,
             
-#         )
-#         encoder = DeformableTransformerEncoder(
-#                 DeformableTransformerEncoderLayer(
-#                     d_model=d_model,
-#                     d_ffn=d_ffn,
-#                     dropout=dropout,
-#                     activation=activation,
-#                     n_levels=n_levels,
-#                     n_heads=nheads,
-#                     n_points=npoints,
-#                 ),
-#                 nlayers
-#         )
-#         self.deform_encoder = encoder
-#         self.level_embed = nn.Embedding(n_levels, d_model)
-#         self.num_feature_levels = n_levels
+        )
+        encoder = DeformableTransformerEncoder(
+                DeformableTransformerEncoderLayer(
+                    d_model=d_model,
+                    d_ffn=d_ffn,
+                    dropout=dropout,
+                    activation=activation,
+                    n_levels=n_levels,
+                    n_heads=nheads,
+                    n_points=npoints,
+                ),
+                nlayers
+        )
+        self.deform_encoder = encoder
+        self.level_embed = nn.Embedding(n_levels, d_model)
+        self.num_feature_levels = n_levels
 
-#         if fpn_strides is not None:
-#             self.fpn = Fpn2D(dim=d_model, cascaded_scales=fpn_strides)
-#         else:
-#             self.fpn = None
+        if fpn_strides is not None:
+            self.fpn = Fpn2D(dim=d_model, cascaded_scales=fpn_strides)
+        else:
+            self.fpn = None
         
-#     def get_valid_ratio(self, mask):
-#         """
-#         Input:
-#             - mask:
-#                 bt h w
-#         Output:
-#             - int
-#         """
-#         _, H, W = mask.shape
-#         # T(bt, )
-#         valid_H = torch.sum(~mask[:, :, 0], 1)
-#         # T(bt, )
-#         valid_W = torch.sum(~mask[:, 0, :], 1)
-#         valid_ratio_h = valid_H.float() / H
-#         valid_ratio_w = valid_W.float() / W
-#         # T(bt, 2)
-#         valid_ratio = torch.stack([valid_ratio_w, valid_ratio_h], -1)
-#         return valid_ratio
+    def get_valid_ratio(self, mask):
+        """
+        Input:
+            - mask:
+                bt h w
+        Output:
+            - int
+        """
+        _, H, W = mask.shape
+        # T(bt, )
+        valid_H = torch.sum(~mask[:, :, 0], 1)
+        # T(bt, )
+        valid_W = torch.sum(~mask[:, 0, :], 1)
+        valid_ratio_h = valid_H.float() / H
+        valid_ratio_w = valid_W.float() / W
+        # T(bt, 2)
+        valid_ratio = torch.stack([valid_ratio_w, valid_ratio_h], -1)
+        return valid_ratio
     
-#     def forward(self, multiscales, multiscales_pad_masks, multiscales_poses, video_feat_scales):
-#         """ bt c h w"""
-#         fused_scale_idxs = find_scales_from_multiscales(video_feat_scales, self.fused_scales)
-#         srcs = [multiscales[idx] for idx in fused_scale_idxs]
-#         masks = [multiscales_pad_masks[idx] for idx in fused_scale_idxs]
-#         pos_embeds = [multiscales_poses[idx] for idx in fused_scale_idxs]
+    def forward(self, multiscales, multiscales_pad_masks, multiscales_poses, video_feat_scales):
+        """ bt c h w"""
+        fused_scale_idxs = find_scales_from_multiscales(video_feat_scales, self.fused_scales)
+        srcs = [multiscales[idx] for idx in fused_scale_idxs]
+        masks = [multiscales_pad_masks[idx] for idx in fused_scale_idxs]
+        pos_embeds = [multiscales_poses[idx] for idx in fused_scale_idxs]
 
-#         src_flatten = []
-#         mask_flattn = []
-#         lvl_pos_embed_flatten = []
-#         spatial_shapes = []
-#         for lvl, (src, mask, pos_embed) in enumerate(zip(srcs, masks, pos_embeds)):
-#             bt, c, h, w = src.shape
-#             spatial_shape = (h, w)
-#             spatial_shapes.append(spatial_shape)
+        src_flatten = []
+        mask_flattn = []
+        lvl_pos_embed_flatten = []
+        spatial_shapes = []
+        for lvl, (src, mask, pos_embed) in enumerate(zip(srcs, masks, pos_embeds)):
+            bt, c, h, w = src.shape
+            spatial_shape = (h, w)
+            spatial_shapes.append(spatial_shape)
             
-#             src = rearrange(src, 'bt c h w -> bt (h w) c')
-#             mask = rearrange(mask, 'bt h w -> bt (h w)')
-#             pos_embed = rearrange(pos_embed, 'bt c h w -> bt (h w) c')
-#             lvl_pos_embed = pos_embed + self.level_embed.weight[lvl][None, None, :]
-#             lvl_pos_embed_flatten.append(lvl_pos_embed)
+            src = rearrange(src, 'bt c h w -> bt (h w) c')
+            mask = rearrange(mask, 'bt h w -> bt (h w)')
+            pos_embed = rearrange(pos_embed, 'bt c h w -> bt (h w) c')
+            lvl_pos_embed = pos_embed + self.level_embed.weight[lvl][None, None, :]
+            lvl_pos_embed_flatten.append(lvl_pos_embed)
             
-#             src_flatten.append(src)
-#             mask_flattn.append(mask)
+            src_flatten.append(src)
+            mask_flattn.append(mask)
             
-#         # bt \sigma(hi wi) c
-#         src_flatten = torch.cat(src_flatten, dim=1)
-#         mask_flatten = torch.cat(mask_flattn, dim=1)
-#         lvl_pos_embed_flatten = torch.cat(lvl_pos_embed_flatten, dim=1)
+        # bt \sigma(hi wi) c
+        src_flatten = torch.cat(src_flatten, dim=1)
+        mask_flatten = torch.cat(mask_flattn, dim=1)
+        lvl_pos_embed_flatten = torch.cat(lvl_pos_embed_flatten, dim=1)
         
-#         # #levels, 2
-#         spatial_shapes = torch.as_tensor(spatial_shapes, dtype=torch.long, device=src_flatten.device)
-#         # (0, h0*wo, h1*w1)
-#         level_start_index = torch.cat((spatial_shapes.new_zeros((1,)), spatial_shapes.prod(1).cumsum(0)[:-1]))
-#         # bt num_levels 2
-#         valid_ratios = torch.stack([self.get_valid_ratio(m) for m in masks], 1)
-#         # bt (h_sigma, w_sigma) c  # bt hw_sigma heads num_scales npoints 2
-#         memory, sampling_locations_by_layer, attention_weights_by_layer = \
-#             self.deform_encoder(src_flatten, spatial_shapes, level_start_index, valid_ratios,
-#                                 lvl_pos_embed_flatten, mask_flatten,)
+        # #levels, 2
+        spatial_shapes = torch.as_tensor(spatial_shapes, dtype=torch.long, device=src_flatten.device)
+        # (0, h0*wo, h1*w1)
+        level_start_index = torch.cat((spatial_shapes.new_zeros((1,)), spatial_shapes.prod(1).cumsum(0)[:-1]))
+        # bt num_levels 2
+        valid_ratios = torch.stack([self.get_valid_ratio(m) for m in masks], 1)
+        # bt (h_sigma, w_sigma) c  # bt hw_sigma heads num_scales npoints 2
+        memory, sampling_locations_by_layer, attention_weights_by_layer = \
+            self.deform_encoder(src_flatten, spatial_shapes, level_start_index, valid_ratios,
+                                lvl_pos_embed_flatten, mask_flatten,)
         
-#         memory_features = []
-#         spatial_index = 0
-#         for lvl in range(self.num_feature_levels):
-#             h, w = spatial_shapes[lvl]
-#             memory_lvl = memory[:, spatial_index: (spatial_index + h*w), :].contiguous()
-#             memory_lvl = rearrange(memory_lvl, 'bt (h w) c -> bt c h w',h=h, w=w)
-#             memory_features.append(memory_lvl)
-#             spatial_index += h*w
+        memory_features = []
+        spatial_index = 0
+        for lvl in range(self.num_feature_levels):
+            h, w = spatial_shapes[lvl]
+            memory_lvl = memory[:, spatial_index: (spatial_index + h*w), :].contiguous()
+            memory_lvl = rearrange(memory_lvl, 'bt (h w) c -> bt c h w',h=h, w=w)
+            memory_features.append(memory_lvl)
+            spatial_index += h*w
         
-#         for idx, scale_idx in enumerate(fused_scale_idxs):
-#             multiscales[scale_idx] = memory_features[idx]
+        for idx, scale_idx in enumerate(fused_scale_idxs):
+            multiscales[scale_idx] = memory_features[idx]
 
-#         multiscales = self.fpn(multiscales, multiscales_pad_masks,  multiscales_poses, video_feat_scales)
-#         return multiscales, sampling_locations_by_layer, attention_weights_by_layer
+        multiscales = self.fpn(multiscales, multiscales_pad_masks,  multiscales_poses, video_feat_scales)
+        return multiscales, sampling_locations_by_layer, attention_weights_by_layer
 def get_parsing_encoder(name, configs):
     if name == 'deform_video_2d_fpn':
         return DeformVideo2D_with_FPN(**configs)
@@ -472,31 +474,27 @@ class VisionLanguageFusionModule(nn.Module):
         return tgt, attn_weights
 
 
-class VideoSwinTPtObjDecoder(nn.Module):
-    pass
-
-class SwinLPtObjDecoder(nn.Module):
-    pass
-
-
 # ref_choose(detach) + onlyobj + interfullstep
 class AMR_Reason(nn.Module):
     def __init__(self, 
                  d_model=256,
                  max_stride=64,
                  pt_dir='/home/xhh/pt',
-                 # video encoder
-                 swint_pretrained_path='pretrained_swin_transformer/swin_tiny_patch244_window877_kinetics400_1k.pth',
-                 swint_freeze=True,
-                 swint_runnning_mode='train',
-                 video_projs = [
-                    {'name': 'conv2d', 'in_channels': 96,  'out_channels': 256, 'kernel_size': 3, 'padding':1, 'bias':True,},
-                    {'name': 'conv2d', 'in_channels': 192, 'out_channels': 256, 'kernel_size': 1, 'bias':True,},
-                    {'name': 'conv2d', 'in_channels': 384, 'out_channels': 256, 'kernel_size': 1, 'bias':True,},
-                    {'name': 'conv2d', 'in_channels': 768, 'out_channels': 256, 'kernel_size': 1, 'bias':True,},
-                    {'name': 'conv2d', 'in_channels': 768, 'out_channels': 256, 'kernel_size': 3, 'stride':2, 'padding': 1, \
-                        'bias':True,}],
-                video_feat_scales=[[1,4],[1,8],[1,16],[1,32], [1,64]],
+                 # pretrained obj decoder
+                 pt_obj_decoder={
+                     'name': 'vita',
+                     'dir': 'pretrained_swin_transformer/swin_tiny_patch244_window877_kinetics400_1k.pth',
+                     'freeze': True,
+                 },
+                 # multiscale_projs and obj_queries projs
+                video_projs= [{'name': 'conv2d', 'in_channels': 96,  'out_channels': 256, 'kernel_size': 3, 'padding':1, 'bias':True,},
+                        {'name': 'conv2d', 'in_channels': 192, 'out_channels': 256, 'kernel_size': 1, 'bias':True,},
+                        {'name': 'conv2d', 'in_channels': 384, 'out_channels': 256, 'kernel_size': 1, 'bias':True,},
+                        {'name': 'conv2d', 'in_channels': 768, 'out_channels': 256, 'kernel_size': 1, 'bias':True,},
+                        {'name': 'conv2d', 'in_channels': 768, 'out_channels': 256, 'kernel_size': 3, 'stride':2, 'padding': 1, \
+                            'bias':True,}],
+                obj_query_proj={'name': 'linear', 'in_channels': 768, 'out_channels': 256, 'kernel_size': 1, 'bias':True,},
+                video_feat_scales = [[1,4],[1,8],[1,16],[1,32], [1,64]],
 
                 # amrtext
                 amrbart_wordEmbedding_freeze=True,
@@ -554,52 +552,19 @@ class AMR_Reason(nn.Module):
                     'conved_scale': [1,4],
                     'choose_who': '第一个'
                     },
-                    
-                    
-                objdecoder={ 
-                    'num_classes': 7,
-                    'nqueries': 100,
-                    'nlayers': 9,
-                    'cross_layer':{
-                        'name': 'cross_attention',
-                        'd_model': 256,
-                        'nhead': 8,
-                        'dropout': 0.,
-                    },
-                    'self_layer':{
-                        'name': 'self_attention',
-                        'd_model': 256,
-                        'd_model': 256,
-                        'nhead': 8,
-                        'dropout': 0.,
-                    },
-                    'ffn_layer':{
-                        'name': 'ffn',
-                        'd_model': 256,
-                    },
-                    'used_scales': [[1,32],[1,16],[1,8]],
-                    'conved_scale': [1,4],
-                    'mask_out_stride': 4,
-                    'mask_threshold': 0.5,
-                    },) -> None:
+                              
+                ) -> None:
         super().__init__()
         self.d_model = d_model
         self.loss_weight = loss_weight
         self.tasks = tasks
         self.pt_dir = pt_dir
         self.max_stride = max_stride
-        # video encoder
-        from .video_swin import VideoSwinTransformer
-        self.video_swint = VideoSwinTransformer(backbone_pretrained=True,
-                                                backbone_pretrained_path=os.path.join(pt_dir, swint_pretrained_path),
-                                                running_mode=swint_runnning_mode)
-        if swint_freeze:
-            for p in self.video_swint.parameters():
-                p.requires_grad_(False) 
-                 
-        assert len(video_projs) == len(video_feat_scales)
-        self.video_feat_scales = video_feat_scales
-        backbone_channels, backbone_scales = self.video_swint.get_desc()
+
+        create_pt_obj_encoder = pt_obj_decoder_entrypoint(pt_obj_decoder['name'])
+        self.obj_decoder = create_pt_obj_encoder(pt_obj_decoder)
+        
+        backbone_channels, backbone_scales = self.obj_decoder.get_desc()
         assert len(backbone_channels) == len(backbone_scales)
         self.video_proj = nn.ModuleList()
         for proj_config in video_projs:
@@ -608,6 +573,9 @@ class AMR_Reason(nn.Module):
                                                  nn.GroupNorm(32, d_model)))
         self.video_3d_pos = build_position_encoding(position_embedding_name='3d',
                                                     hidden_dim=d_model)
+        self.video_feat_scales = video_feat_scales
+        assert obj_query_proj.pop('name') == 'linear'
+        self.obj_query_proj = nn.Linear(**obj_query_proj)
         
         # amr encoder
         from .amr_utils.utils import BartForConditionalGeneration
@@ -619,9 +587,14 @@ class AMR_Reason(nn.Module):
         assert amrtext_wordEmbedding_proj.pop('name') == 'FeatureResizer'
         self.amrtext_wordEmbedding_proj = FeatureResizer(**amrtext_wordEmbedding_proj)
         
-        assert fusion.pop('name') == 'VisionLanguageFusionModule'
+        # object decoder和text进行fusion
+        assert fusion.pop('name') == 'self_attention'
         self.fusion_amr_who_cross = fusion.pop('amr_cross')
-        self.cross_product = VisionLanguageFusionModule(**fusion)
+        self.fusion_encoder = TransformerEncoder(
+            TransformerEncoderLayer(d_model=d_model,
+            nheads=fusion['nheads'],
+            dropout=fusion['dropout']),num_layers=fusion['nlayers']
+        )
 
         self.deform_multiscale_2dencoder = get_parsing_encoder(parsing_encoder.pop('name'),
                                                                parsing_encoder)
@@ -656,43 +629,13 @@ class AMR_Reason(nn.Module):
         self.decoder_mask_threshold = refdecoder['mask_threshold']
         self.decoder_choose_who = refdecoder['choose_who']
 
-        # obj decoder
-        self.obj_decoder_query_embed = zero_module(nn.Embedding(objdecoder['nqueries'], d_model))
-        self.obj_decoder_query_feats = zero_module(nn.Embedding(objdecoder['nqueries'], d_model))
-        self.obj_decoder_used_scales = objdecoder['used_scales']
-        self.obj_decoder_conved_scale = objdecoder['conved_scale']
-        self.obj_decoder_nlayers = objdecoder['nlayers']
-        self.obj_decoder_nqueries = objdecoder['nqueries']
-        self.obj_decoder_level_embed = nn.Embedding(len(self.obj_decoder_used_scales), d_model)
-        cross_layer = objdecoder['cross_layer']
-        assert cross_layer.pop('name') == 'cross_attention'
-        self.obj_decoder_cross_video_layers = _get_clones(CrossAttentionLayer(**cross_layer),
-                                                                   self.obj_decoder_nlayers)
-        self.obj_decoder_nheads = cross_layer['nhead']
-        self_layer = objdecoder['self_layer']
-        assert self_layer.pop('name') == 'self_attention'
-        self.obj_decoder_self_layers = _get_clones(SelfAttentionLayer(**self_layer),
-                                                            self.obj_decoder_nlayers)  
-        ffn_layer = objdecoder['ffn_layer']
-        assert ffn_layer.pop('name') == 'ffn'
-        self.obj_decoder_ffn_layers = _get_clones(FFNLayer(**ffn_layer),
-                                                            self.obj_decoder_nlayers) 
-        # norm, mask out, box, cls, mask
-        self.obj_decoder_class_embed = nn.Linear(d_model, objdecoder['num_classes']+1)
-        self.obj_decoder_nclasses = objdecoder['num_classes'] + 1
-        self.obj_decoder_box_embed = MLP(d_model, d_model, 4, 3)
-        self.obj_decoder_norm = nn.LayerNorm(d_model)
-        self.obj_decoder_mask_embed = MLP(d_model, d_model, d_model, 3) 
-        self.obj_decoder_mask_out_stride = objdecoder['mask_out_stride']
-        self.obj_decoder_mask_threshold = objdecoder['mask_threshold'] 
-
 
     def init_parameters(self,): 
         for proj in self.video_proj:
             nn.init.xavier_uniform_(proj[0].weight, gain=1)
     
-    def encode_video(self, samples):
-        bb_out = self.video_swint(samples)  
+    def forward_obj_decoder(self, samples):
+        bb_out, obj_queries, obj_poses = self.obj_decoder(samples)  
         nf, batch_size, *_ = bb_out[0].tensors.shape
         orig_pad_mask = samples.mask.permute(1, 0, 2, 3) # b t h w
         for layer_out in bb_out:
@@ -717,7 +660,7 @@ class AMR_Reason(nn.Module):
                     multiscales.append(src_proj_l)
                     multiscales_pad_masks.append(pad_mask)
                     multiscales_poses.append(self.video_3d_pos(src_proj_l, None))
-        return multiscales, multiscales_pad_masks, multiscales_poses
+        return multiscales, multiscales_pad_masks, multiscales_poses, obj_queries, obj_poses
     
     def encode_text(self, text_auxiliary, device):
         amrs = text_auxiliary['amrs'] # list[Graph]
@@ -809,8 +752,8 @@ class AMR_Reason(nn.Module):
         # 你想visualize的东西
         check_visualize = {} 
         nf, batch_size, *_, device = *samples.tensors.shape, samples.tensors.device
-        # b T c H W
-        multiscales, multiscales_pad_masks, multiscales_poses = self.encode_video(samples)
+        # b T c H W, N T c, N T c
+        multiscales, multiscales_pad_masks, multiscales_poses, obj_queries, obj_poses = self.forward_obj_decoder(samples)
         # list[Graph], b (V+E)max c, b (V+E)max 
         amrs, amr_token_feats, amr_token_seg_ids = self.encode_text(auxiliary, device)
         
@@ -930,16 +873,6 @@ class AMR_Reason(nn.Module):
                 # TODO: 添加一些其他可以加loss, 加postprocessing的东西, 输出的接口和trainer evaluation一致;, 输出的接口和task loss一致
                 'check_visualze': check_visualize } 
 
-    def get_decoder_preds(self, model_outs):
-        refseg_src = model_outs['refdecoder_refseg']
-        if self.decoder_choose_who == '第一个':
-            for i in range(-1, self.decoder_nlayers):
-                layer_pred = refseg_src[f'layer{i}_preds']
-                refseg_src[f'layer{i}_preds']['pred_mask_logits'] = layer_pred['pred_mask_logits'][:, 0]
-                refseg_src[f'layer{i}_preds']['pred_box_logits'] = layer_pred['pred_box_logits'][:, 0]
-                refseg_src[f'layer{i}_preds']['queries'] = layer_pred['queries'][0] # bt c
-        return refseg_src        
-    
     @torch.no_grad()
     def sample(self, samples, text_queries, auxiliary, targets, visualize=False):
         if not isinstance(samples, NestedTensor):
@@ -1404,162 +1337,6 @@ class AMR_Reason(nn.Module):
         loss_dict_scaled = {f'{k}_scaled': v * self.loss_weight[k] for k, v in loss_value_dict.items()}    
         grad_total_norm = get_total_grad_norm(self.parameters(), norm_type=2)
         return loss_dict_unscaled, loss_dict_scaled, grad_total_norm 
-
-
-    # task loss
-    def obj_decoder_objseg_loss(self, decoder_layer_preds, targets):
-        layer_weights = self.tasks['objdecoder_objseg']['layer_weights']
-        class_weight = self.tasks['objdecoder_objseg']['class_weight']
-        matching_costs = self.tasks['objdecoder_objseg']['matching_costs']
-        loss_weight = self.loss_weight
-        
-        # list[n h w], bt
-        tgt_masks = targets['masks']
-        num_boxes = sum([t.flatten(1).any(-1).int().sum() for t in tgt_masks])
-        num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=tgt_masks[0].device)
-        if is_dist_avail_and_initialized():
-            torch.distributed.all_reduce(num_boxes)
-        num_boxes = torch.clamp(num_boxes / get_world_size(), min=1).item()
-        
-        loss_value = {'objdecoder_mask': torch.tensor(0, device=tgt_masks[0].device).float(), 
-                      'objdecoder_bbox': torch.tensor(0, device=tgt_masks[0].device).float(), 
-                      'objdecoder_giou': torch.tensor(0, device=tgt_masks[0].device).float(),
-                      'objdecoder_dice': torch.tensor(0, device=tgt_masks[0].device).float(),
-                      'objdecoder_class': torch.tensor(0, device=tgt_masks[0].device).float(),}
-        matching_indices_by_layer = []
-        for i in range(-1, self.obj_decoder_nlayers):
-            layer_weight = layer_weights[i] 
-            if layer_weight != 0:
-                layer_pred = decoder_layer_preds[f'layer{i}_preds'] # bT n H W
-                layer_matching_indices = AMR_v0_detectObj.obj_decoder_matching(layer_pred, targets, matching_costs, class_weight, self.decoder_mask_out_stride)
-                matching_indices_by_layer.append(layer_matching_indices)
-                if loss_weight['objdecoder_mask'] != 0 or loss_weight['objdecoder_dice'] !=0:
-                    masks_losses = AMR_v0_detectObj.obj_decoder_masks_loss(layer_pred, targets, layer_matching_indices, num_boxes, self.decoder_mask_out_stride)
-                    for k in masks_losses.keys():
-                        loss_value[k] += layer_weight * masks_losses[k]
-                if loss_weight['objdecoder_bbox'] != 0 or loss_weight['objdecoder_giou'] !=0:
-                    boxes_losses = AMR_v0_detectObj.obj_decoder_boxes_loss(layer_pred, targets, layer_matching_indices, num_boxes)
-                    for k in boxes_losses.keys():
-                        loss_value[k] += layer_weight * boxes_losses[k]
-                if loss_weight['objdecoder_class'] != 0:
-                    classes_losses = AMR_v0_detectObj.obj_decoder_class_loss(layer_pred, targets, layer_matching_indices, class_weight)
-                    for k in classes_losses.keys():
-                        loss_value[k] += layer_weight * classes_losses[k]
-        return loss_value,matching_indices_by_layer       
-
-    @staticmethod
-    def obj_decoder_class_loss(outputs, targets, indices, class_weight):
-        """
-        indices: [[], []], bt
-        """
-
-        src_logits = outputs["pred_class_logits"] # bt nq c
-
-        # list[n], bt
-        target_classes_o = torch.cat([t[J] for t, (_, J) in zip(targets['class_labels'], indices)]) # btn_sigma
-    
-        idx = get_src_permutation_idx(indices)
-        target_classes = torch.full(
-            src_logits.shape[:2], len(class_weight)-1, dtype=torch.int64, device=src_logits.device
-        ) # bt n
-        target_classes[idx] = target_classes_o
-
-        loss_ce = F.cross_entropy(src_logits.transpose(1, 2), target_classes, weight=torch.tensor(class_weight).to(src_logits))
-        losses = {"objdecoder_class": loss_ce}
-        return losses
-
-    
-    @staticmethod
-    def obj_decoder_boxes_loss(outputs, targets, indices, num_boxes): 
-        src_idx = get_src_permutation_idx(indices)
-        
-        src_boxes = outputs['pred_box_logits'].sigmoid()[src_idx]  # bt nq 4 -> btn_sigma 4
-        
-        # list[n], bt -> btn_simga
-        is_consistent = torch.cat([t[J] for t, (_, J) in zip(targets['is_valid'], indices)]).bool() 
-        # list[n 4], bt -> btn_sigma 4
-        target_boxes = torch.cat([t[J] for t, (_, J) in zip(targets['boxes'], indices)]).to(src_boxes)
-            
-
-        src_boxes = src_boxes[is_consistent]  # btn_sigma 4
-        target_boxes = target_boxes[is_consistent] # btn_sigma 4
-
-        loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
-        losses = {}
-        losses['objdecoder_bbox'] = loss_bbox.sum() / num_boxes
-        # bt
-        loss_giou = 1 - torch.diag(box_ops.generalized_box_iou(
-                                    box_ops.box_cxcywh_to_xyxy(src_boxes),
-                                    box_ops.box_cxcywh_to_xyxy(target_boxes)))
-        losses['objdecoder_giou'] = loss_giou.sum() / num_boxes
-        return losses
-    
-
-    @staticmethod
-    def obj_decoder_masks_loss(outputs, targets, indices, num_boxes, decoder_mask_out_stride):
-        src_idx = get_src_permutation_idx(indices)
-        src_masks = outputs["pred_mask_logits"][src_idx]  # bt nq h w -> btn_sigma h w
-        
-        # list[n], bt -> btn_simga
-        is_consistent = torch.cat([t[J] for t, (_, J) in zip(targets['is_valid'], indices)]).bool() 
-        # list[n h w], bt -> btn_sigma h w
-        target_masks = torch.cat([t[J] for t, (_, J) in zip(targets['masks'], indices)]).to(src_masks)
-        
-        
-        src_masks = src_masks[is_consistent].flatten(1) # btn_sigma hw
-        target_masks = target_masks[is_consistent].flatten(1) # btn_sigma hw
-        
-        losses = {
-            "objdecoder_mask": ce_mask_loss(src_masks, target_masks, num_boxes),
-            "objdecoder_dice": dice_loss(src_masks, target_masks, num_boxes),
-        }
-        return losses    
-
-    @staticmethod
-    @torch.no_grad()
-    def obj_decoder_matching(outputs, targets, matching_costs, class_weight, decoder_mask_out_stride):
-        src_class_prob = outputs["pred_class_logits"].softmax(dim=-1) # bt n c
-        src_boxes = outputs["pred_box_logits"].sigmoid()   # bt n 4
-        src_masks_logits = outputs["pred_mask_logits"]  # bt n h w
-        bt, nq, h, w = src_masks_logits.shape 
-        
-        target_boxes = targets['boxes'] # [n 4], bt
-        target_masks = targets['masks'] # n h w, bt
-        target_classes = targets['class_labels'] # n, bt
-
-        indices = [] 
-        for i in range(bt):
-            out_prob = src_class_prob[i] # nq c
-            out_bbox = src_boxes[i]  # nq 4
-            out_mask = src_masks_logits[i]  # nq h w
-
-            tgt_bbox = target_boxes[i].to(out_bbox)# n 4
-            tgt_mask = target_masks[i].to(out_mask)# n h w
-            tgt_cls = target_classes[i] # n
-
-            cost_class = -out_prob[:, tgt_cls] # nq n
-
-            cost_bbox = torch.cdist(out_bbox, tgt_bbox, p=1)
-            cost_giou = -box_ops.generalized_box_iou(box_ops.box_cxcywh_to_xyxy(out_bbox),
-                                                box_ops.box_cxcywh_to_xyxy(tgt_bbox)) # n 4
-            
-            cost_mask = batch_sigmoid_ce_loss(out_mask.flatten(1), tgt_mask.flatten(1)) # nq hw : n hw -> nq n
-            cost_dice = batch_dice_loss(out_mask.flatten(1), tgt_mask.flatten(1))
-
-            C = matching_costs['class'] * cost_class +\
-                matching_costs['bbox'] * cost_bbox + \
-                matching_costs['giou'] * cost_giou + \
-                matching_costs['mask'] * cost_mask + \
-                matching_costs['dice'] * cost_dice 
-            C = C.cpu()
-            indices.append(linear_sum_assignment(C))
-            
-        return [
-            (torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64))
-            for i, j in indices
-        ]
-
-
     def forward(self, samples : NestedTensor, text_queries, auxiliary, targets, visualize=False):
         if not isinstance(samples, NestedTensor):
             samples = nested_tensor_from_videos_list_with_stride(samples, max_stride=self.max_stride)
@@ -1692,17 +1469,7 @@ class AMR_Reason(nn.Module):
             'query_pred_masks': by_batch_preds, # [n t' h w], batch
             'query_pred_is_referred_prob': by_batch_preds_probs, # [n t'], batch
         }
-
-
-
-    def get_decoder_preds(self, model_outs):
-        refseg_src = model_outs['refdecoder_refseg']
-        if self.decoder_choose_who == '第一个':
-            for i in range(-1, self.decoder_nlayers):
-                layer_pred = refseg_src[f'layer{i}_preds']
-                refseg_src[f'layer{i}_preds']['queries'] = layer_pred['queries'][0] # bt c
-        return refseg_src        
-    
+   
 
     def model_outputs(self, samples : NestedTensor, text_queries, auxiliary, perFrame_has_ann):
         """ text_auxiliary
