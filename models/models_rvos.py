@@ -2050,6 +2050,7 @@ class AMR_v0_detectObj_onlyObj_fusionAsLoss(AMR_v0_detectObj):
         from models.amr_utils.tokenization_bart import AMRBartTokenizer
         self.amrbart_tokenizer = AMRBartTokenizer.from_pretrained(os.path.join(self.pt_dir,'amr','AMRBART_pretrain'))
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
+        self.obj_decoder_refer_pos = nn.Embedding(1, self.amrbart_model.config.hidden_size)
 
     def forward_objdecoder_heads(self, output, mask_features, attn_mask_target_size):
         decoder_output = self.obj_decoder_norm(output) # n bt c
@@ -2463,41 +2464,41 @@ class AMR_v0_detectObj_onlyObj_fusionAsLoss(AMR_v0_detectObj):
             'objdecoder_vtc': loss.sum() / num_texts
         }
 
-    def obj_decoder_vtg_loss(self, outputs, text_auxiliary, indices, num_boxes):
-        batch_size = len(indices)
-        linamrs_aux = text_auxiliary['linamrs_aux'] # 'labels': text_sigma nmax, 'Esrctgts_ids': text_sigma nmax
+    def obj_decoder_vtg_loss(self, outputs, text_auxiliary, indices, num_texts):
+        bt = len(indices)
+        obj_queries = outputs["query_to_amrbart"] # bt nq c
+        linamrs_aux = text_auxiliary['linamrs_aux'] # 
         linamr_labels = linamrs_aux['labels'] # text_sigma nmax
+
+        linamrs_obj_ids = linamrs_aux['obj_ids'] # list[list[int], 0-ni], bt
+
         decoder_input = torch.zeros_like(linamr_labels)
         decoder_input[:, 1:] = linamr_labels[:, :-1].clone()
-        decoder_input[:, 0] = self.linamr_tokenier.amr_bos_token_id
-        decoder_input_pad_mask = (decoder_input == -100)
-        decoder_input.masked_fill_(decoder_input_pad_mask,self.linamr_tokenizer.pad_token_id)
+        decoder_input[:, 0] = self.amrbart_tokenizer.amr_bos_token_id
+        decoder_attention_mask = decoder_input.ne(-100)
+        decoder_input.masked_fill_(~decoder_attention_mask, self.amrbart_tokenizer.pad_token_id)
 
-        linamrs_obj_ids = text_auxiliary['obj_ids'] # list[list[int], 0-ni], batch
-
-        # list[ni c], batch
-        prompts = outputs["prompt"].permute(1,0,2) # b nq 1024
-
-        prompt_by_text = []
-        for batch_idx in range(batch_size):
-            btc_prompt = prompts[batch_idx] # nq 1024
-            btc_src_idx, btc_tgt_idx = indices[batch_idx]
-            btc_obj_ids = linamrs_obj_ids[batch_idx] # list[int], 0-ni
+        encoder_input_by_text = []
+        for bt_idx in range(bt):
+            btc_input = obj_queries[bt_idx] # nq 1024
+            btc_src_idx, btc_tgt_idx = indices[bt_idx]
+            btc_obj_ids = linamrs_obj_ids[bt_idx] # list[int], 0-ni
             for obj_id in btc_obj_ids:
                 in_idx = btc_tgt_idx.tolist().index(obj_id)
                 src_idx = btc_src_idx[in_idx]
-                txt_prompt = btc_prompt.clone()
-                txt_prompt[src_idx] += self.obj_decoder_refer_pos.weight[0]
-                prompt_by_text.append(txt_prompt)
-        prompt_by_text = torch.stack(prompt_by_text, dim=0) # text_sigma nq 1024
+                enc_input = btc_input.clone()
+                enc_input[src_idx] += self.obj_decoder_refer_pos.weight[0]
+                encoder_input_by_text.append(enc_input)
+        encoder_input_by_text = torch.stack(encoder_input_by_text, dim=0) # text_sigma nq 1024
 
-        next_amr_token_loss = self.amrbart_model(hidden_states=prompt_by_text,
+        next_amr_token_loss = self.amrbart_model(inputs_embeds=encoder_input_by_text,
                                                 attention_mask=None,
                                                 decoder_input_ids=decoder_input,
-                                                labels=linamr_labels)
+                                                decoder_attention_mask=decoder_attention_mask,
+                                                labels=linamr_labels).loss
 
         return {
-            'obdecoder_vtg': next_amr_token_loss
+            'objdecoder_vtg': next_amr_token_loss
         }
 
     def obj_decoder_vtm_loss(self, outputs, text_auxiliary, indices, num_boxes):
