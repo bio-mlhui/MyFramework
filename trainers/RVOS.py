@@ -194,7 +194,7 @@ class Trainer:
                 samples = to_device(batch_dict['samples'], self.device)
                 targets = to_device(batch_dict['targets'], self.device)
                 text_queries = batch_dict['text_query']
-                auxiliary = batch_dict['auxiliary']
+                auxiliary = to_device(batch_dict['auxiliary'], self.device)
                 if idx < 10:
                     logging.info(auxiliary['sample_idx'])
                 

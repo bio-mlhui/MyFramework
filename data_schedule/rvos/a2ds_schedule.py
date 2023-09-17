@@ -195,7 +195,7 @@ def validate(loader, model, device, is_distributed, is_main_process, output_dir,
             samples = to_device(batch_dict['samples'], device) # list[t 3 h w]
             targets = to_device(batch_dict['targets'], device)
             text_queries = batch_dict['text_query']
-            auxiliary = batch_dict['auxiliary']
+            auxiliary = to_device(batch_dict['auxiliary'], device)
             # [nq t' h w], [n t'/n], batch;
             model_preds = model.sample(samples, text_queries, auxiliary, targets,)
             model_mask_preds = model_preds['query_pred_masks'] # [n t' h w], batch
@@ -584,7 +584,7 @@ class A2DS_Dataset(DatasetWithAux):
         
         self.split = split
         collator_kwargs = {}
-        if text_aux_version == 1 or text_aux_version == 2 or text_aux_version == 3:
+        if text_aux_version == 1 or text_aux_version == 2 or text_aux_version == 3 or text_aux_version == 4:
             collator_kwargs['tokenizer'] = self.tokenizer
         self.collator = Collator(split=split,
                                  text_aux_version=text_aux_version,
@@ -723,16 +723,16 @@ class A2DS_Dataset(DatasetWithAux):
                 cnt += len(foo)
             assert cnt == len(appear_texts)
             
-            return vframes, text_query, self.get_aux(item_idx, exist_queries=None,
+            return vframes, text_query, self.get_aux(item_idx, queries_by_objid=annotated_exps_by_object,
                                                      video_auxid=None, text_auxid=text_query), targets
 
-    def get_aux(self, item_idx, exist_queries,
+    def get_aux(self, item_idx, queries_by_objid,
                 video_auxid,
                 text_auxid):
         aux = {}
         aux['sample_idx'] = item_idx
-        aux['exist_queries'] = exist_queries
-        aux.update(self.get_text_aux(text_auxid))
+        aux['exist_queries'] = queries_by_objid
+        aux.update(self.get_text_aux(text_auxid, queries_by_objid))
         aux.update(self.get_video_aux(video_auxid))
         return aux
     

@@ -241,11 +241,17 @@ class DatasetWithAux(Dataset):
             from models.amr_utils.tokenization_bart import AMRBartTokenizer
             self.tokenizer : AMRBartTokenizer = AMRBartTokenizer.from_pretrained(os.path.join(pt_tokenizer_dir,'amr',
                                                                                               'AMRBART_pretrain'))
+        elif self.text_aux_version == 4: # amr_with_variable
+            from models.amr_utils.tokenization_bart import AMRBartTokenizer
+            self.tokenizer : AMRBartTokenizer = AMRBartTokenizer.from_pretrained(os.path.join(pt_tokenizer_dir,'amr',
+                                                                                              'AMRBART_pretrain'))
+            self.prefix = ""
+            self.max_src_length = 256  
             # from datasets.propbank_frames import PropBankFrames
             # self.pbframes = PropBankFrames('/home/xhh/workspace/rvos_encoder/datasets/propbank-frames/frames')
             # self.all_predicates = list(self.pbframes.rolesets_meaning.keys())
             
-    def get_text_aux(self, text_auxid):
+    def get_text_aux(self, text_auxid, queries_by_objid):
         # 0: not
         # 1: amr_wor
         # 2. lin_amr
@@ -454,6 +460,106 @@ class DatasetWithAux(Dataset):
                     'token_ids': tokens_ids,
                     'token_splits': token_splits}
 
+        elif self.text_aux_version == 4:
+            # refering的amr
+            amr_wv = self.text_aux_by_auxid[text_auxid]['inference_graph'] 
+            G : nx.DiGraph = nx.node_link_graph(amr_wv)
+            top_var = G.graph['top']
+            nodekey_to_token = {key:node_token for key, node_token in zip(G.nodes(), G.nodes())}
+            nodekey_to_segid = {key:G.nodes[key]['seg_id'] for key in G.nodes()}
+            # 标号，过滤掉segid=2的节点, 第一个永远是top var
+            nodekey_to_idx = {} 
+            nodekey_to_idx[top_var] = 0
+            cnt = 1
+            for node_key in G.nodes():
+                if nodekey_to_segid[node_key] == 2:
+                    continue
+                if node_key == top_var:
+                    continue
+                nodekey_to_idx[node_key] = cnt
+                cnt += 1
+            idx_to_nodekey = {value:key for key, value in nodekey_to_idx.items()}
+            
+            edge_index = []
+            edge_seg_ids = []
+            edge_tokens = []
+            for i, (src, dst) in enumerate(G.edges()):
+                edge_seg_id = G[src][dst]['seg_id']
+                if edge_seg_id == -2:
+                    # 把/边的dst的token改成src的token, dst的segid改成2
+                    assert nodekey_to_segid[dst] == 1 and nodekey_to_segid[src] == 2
+                    nodekey_to_token[dst] = nodekey_to_token[src]
+                    nodekey_to_segid[dst] = 2
+                    # 忽略/边
+                else:
+                    edge_index.append([nodekey_to_idx[src], nodekey_to_idx[dst]])
+                    edge_seg_ids.append(edge_seg_id)
+                    edge_tokens.append(G[src][dst]['role'])
+            # 按照idx获得token序列, segid序列
+            node_tokens = [nodekey_to_token[idx_to_nodekey[idx]] for idx in range(cnt)] 
+            node_seg_ids = [nodekey_to_segid[idx_to_nodekey[idx]] for idx in range(cnt)] 
+            assert 1 not in node_seg_ids
+            assert -2 not in edge_seg_ids
+            edge_index = torch.tensor(edge_index).permute(1, 0)
+            amr = Data(edge_index=edge_index)
+            amr.num_nodes = len(node_tokens)
+            seg_ids = node_seg_ids + edge_seg_ids
+            tokens = node_tokens + edge_tokens
+            assert tokens[0] == nodekey_to_token[top_var]
+            
+            tokens_ids, meta_dict = self.tokenizer.tokenize_amr(tokens)
+            token_splits = meta_dict['each_token_length']
+            output = {'amrs': amr,
+                        'seg_ids': seg_ids,
+                        'token_ids': tokens_ids,
+                        'token_splits': token_splits}
+
+  
+            # linamr generation aux
+            linamrs_aux = {}
+            all_aux_ids = [] # 每个exist query对应的obj idx
+            obj_id_identifier = []
+            for obj_idx, obj_text_queries in enumerate(queries_by_objid):
+                obj_id_identifier.extend([obj_idx] * len(obj_text_queries))
+                all_aux_ids.extend(obj_text_queries)
+            linamrs_aux['obj_id_identifier'] = obj_id_identifier # list[int, 这个text对应的obj_idx], n_text
+    
+            linamrs =  [self.text_aux_by_auxid[auxid]['amr_tree_string_linearization_dict']['amr_tree_string_linearized'] for auxid in all_aux_ids]
+            linamr_ids = []
+            for itm in linamrs:
+                linamr_id, _ = self.tokenizer.tokenize_amr(itm.split())
+                if len(linamr_id) > self.max_src_length - 10:
+                    raise ValueError()
+                linamr_ids.append(linamr_id[:self.max_src_length - 1] + [self.tokenizer.amr_eos_token_id])
+            # amr </g> # 53227 [list[int]]
+            linamrs_aux["labels"] = linamr_ids # list[list[int], AMR </g>], n_text
+            
+            max_src_length = min(self.max_src_length * 2, 512)
+            Esrctgt_ids = [ 
+                [
+                    self.tokenizer.bos_token_id,
+                    self.tokenizer.mask_token_id,
+                    self.tokenizer.eos_token_id,
+                    self.tokenizer.amr_bos_token_id
+                ]
+                + tgti 
+                if len(tgti) <= self.max_src_length - 4
+                else
+                [
+                    self.tokenizer.bos_token_id,
+                    self.tokenizer.mask_token_id,
+                    self.tokenizer.eos_token_id,
+                    self.tokenizer.amr_bos_token_id
+                ]
+                + tgti[: self.max_src_length - 5]
+                + [self.tokenizer.amr_eos_token_id]
+                for tgti in linamrs_aux["labels"]
+            ]  # <s> <MASK> </s> <g> AMR </g>
+            linamrs_aux["Esrctgt_ids"] = Esrctgt_ids # # list[list[int], <s> MASK </s> <g> AMR </g>], n_text
+            # labels: AMR </g>
+            output['linamrs_aux'] = linamrs_aux
+            return output
+
     def get_video_aux(self, video_auxid):
         if self.video_aux_version == 0:
             return {}
@@ -484,7 +590,9 @@ class CollatorWithAux:
         elif text_aux_version == 3:
             self.tokenizer = kwargs['tokenizer']
             self.label_pad_token_id = -100
-            
+        elif text_aux_version == 4:
+            self.tokenizer = kwargs['tokenizer']
+            self.label_pad_token_id = -100
     def batching_aux(self, auxiliary):
         if self.text_aux_version == 0:
             return {
@@ -534,7 +642,61 @@ class CollatorWithAux:
                 'exist_queries':  [s['exist_queries'] for s in auxiliary],
                 'sample_idx': [s['sample_idx'] for s in auxiliary]
             }
-              
+
+        elif self.text_aux_version == 4:
+            amrs = [s_dic['amrs'] for s_dic in auxiliary]
+            seg_ids = [s_dic['seg_ids'] for s_dic in auxiliary]
+            token_splits = [s_dic['token_splits'] for s_dic in auxiliary]
+            token_ids =  [s_dic['token_ids'] for s_dic in auxiliary]
+
+            # list[dict{'labels', 'Esr': list[list[int]], ni }], batch
+            linamrs_aux = [aux['linamrs_aux'] for aux in auxiliary]
+            # list[list[int], n_text], batch
+            linamrs_obj_id = [linamr_au.pop('obj_id_identifier') for linamr_au in linamrs_aux]
+            # list[list[AMR </g>], n_text], batch
+            linamrs_labels = [linamr_au.pop('labels') for linamr_au in linamrs_aux]
+            linamrs_flat_labels = [] # list[AMR </g>], text_sigma
+            for linamr_lb in linamrs_labels:
+                linamrs_flat_labels.extend(linamr_lb)
+             
+            linamrs_esrctgts = [linamr_au.pop('Esrctgt_ids') for linamr_au in linamrs_aux]
+            linamrs_flat_esrctgts = [] # list[<s> <MASK> </s> <g> AMR </g>], text_sigma
+            for linamr_estg in linamrs_esrctgts:
+                linamrs_flat_esrctgts.extend(linamr_estg)
+
+            linamrs_aux = {'Esrctgt_ids': text_pad_token_ids(linamrs_flat_esrctgts,pad_id=self.tokenizer.pad_token_id)[0],
+                                'labels': text_pad_token_ids(linamrs_flat_labels, pad_id=-100)[0],
+                                'obj_ids': linamrs_obj_id}
+            return {
+                'exist_queries':  [s['exist_queries'] for s in auxiliary],
+                'sample_idx': [s['sample_idx'] for s in auxiliary],
+                'amrs': amrs, 
+                'seg_ids': text_pad_token_ids(seg_ids, 0)[0], # b (V+E)max
+                'token_splits': token_splits, # list[list[int]]
+                'token_ids': text_pad_token_ids(token_ids, self.tokenizer.pad_token_id)[0],  # b max
+                'linamrs_aux': linamrs_aux,
+            } 
+
+    def v4_pad_model_inputs(self, features):
+        padding_func(
+            features,
+            padding_side=self.tokenizer.padding_side,
+            pad_token_id=self.label_pad_token_id,
+            key="labels", # 对amr </g>进行Pading
+        )
+        padding_func(
+            features,
+            padding_side=self.tokenizer.padding_side,
+            pad_token_id=self.tokenizer.pad_token_id,
+            key="Esrctgt_ids",
+        )
+        padding_func(
+            features,
+            padding_side=self.tokenizer.padding_side,
+            pad_token_id=self.tokenizer.pad_token_id,
+            key="Esrctgt_segids",
+        )
+
     def v3_pad_model_inputs(self, features):
         padding_func(
             features,
