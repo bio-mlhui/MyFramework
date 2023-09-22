@@ -151,10 +151,6 @@ class Evaluate_Sampler_Distributed(Sampler[T_co]):
         # subsample
         indices = indices[self.rank:self.total_size:self.num_replicas]
         assert len(indices) == self.num_samples
-        # indices[0] = 2045
-        # indices[1] = 2044
-        # indices[2044] = 0
-        # indices[2043] = 1
         return iter(indices)
 
     def __len__(self) -> int:
