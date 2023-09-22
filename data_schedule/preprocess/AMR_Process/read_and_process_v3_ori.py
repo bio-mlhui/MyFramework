@@ -55,7 +55,7 @@ def _format_node(node, column) -> str:
     global nx_graph
     assert var in variable_list and len(edges) > 0
     if var not in nx_graph.nodes:
-        nx_graph.add_node(var, seg_id=1, alignment=-100)
+        nx_graph.add_node(var, seg_id=1)
         if nx_graph.graph['top'] is None:
             nx_graph.graph['top'] = var
         
@@ -78,15 +78,13 @@ def _format_edge(edge, column, source, source_column):
     
     if role == '/':
         assert type(target) == str # instance
-        match_res = re.search(alignment_pattern, target)
-        ali = int(match_res.group(1))
         target = re.sub(alignment_pattern, "", target)
         key = f'{source}, :instance, {target}'
         target_column = column + 1
         instances_index[key] = [source_column, target_column]
 
         if target not in nx_graph.nodes:
-            nx_graph.add_node(target, seg_id=2, alignment=ali)
+            nx_graph.add_node(target, seg_id=2)
         nx_graph.add_edge(target, source, role=':instance', seg_id=-2)
         
         column += len(target) + 1
@@ -95,18 +93,14 @@ def _format_edge(edge, column, source, source_column):
     elif role.startswith(':'):
         
         if type(target) == str: # constant/coreference
-            ori_target = copy.deepcopy(target)
             target = re.sub(alignment_pattern, "", target)
             if target not in variable_list:  # constant
-                match_res = re.search(alignment_pattern, ori_target)
-                ali = int(match_res.group(1))
-                
                 key = f'{source}, {role}, {target}'
                 attributes_index[key] = [source_column, column, column + len(role)]
                 column += (len(role) + len(target))
                 branch_string = f' {target!s} '
                 if target not in nx_graph.nodes:
-                    nx_graph.add_node(target, seg_id=3, alignment=ali)
+                    nx_graph.add_node(target, seg_id=3)
                 nx_graph.add_edge(target, source, role=role_of, seg_id=-3)
                 
             else: # coference
@@ -116,7 +110,7 @@ def _format_edge(edge, column, source, source_column):
                 branch_string = f' {target!s} '
                 
                 if target not in nx_graph.nodes:
-                    nx_graph.add_node(target, seg_id=1, alignment=-100)
+                    nx_graph.add_node(target, seg_id=1)
                     nx_graph.add_edge(target, source, role=role_of, seg_id=-1)
                 else:
                     # 需要确定source的所有parents没有target
@@ -133,7 +127,7 @@ def _format_edge(edge, column, source, source_column):
             edge_index[key] = [source_column, column, column + len(role) + 1]
             
             if target_variable not in nx_graph.nodes:
-                nx_graph.add_node(target_variable, seg_id=1, alignment=-100)
+                nx_graph.add_node(target_variable, seg_id=1)
                 nx_graph.add_edge(target_variable, source, role=role_of, seg_id=-1)
             else:
                 # 需要确定source的所有parents没有target

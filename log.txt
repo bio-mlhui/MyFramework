@@ -1,0 +1,6 @@
+nohup: 忽略输入
+相同的实验存在 ./RVOS/a2ds_schedule/[bs16]_[amrv0_detObj]_[allcross]_[inferFullStep]_onlyobj_fusionBothVani_fromscratch 重写吗? 
+Traceback (most recent call last):
+  File "main.py", line 124, in <module>
+    answer = input(f'相同的实验存在 {configs["out_dir"]} 重写吗? \n' )
+OSError: [Errno 9] Bad file descriptor

@@ -457,7 +457,7 @@ def a2ds_schedule(configs, is_distributed, process_id, num_processes):
         validate_samples = samples['validate']
     
     if text_aux_version != 0:
-        text_aux_file = os.path.join(root, f'text_to_aux2.json')
+        text_aux_file = os.path.join(root, f'text_to_aux.json')
         # you need to generate outside the main module
         with open(text_aux_file, 'r') as f:
             text_aux_by_auxid = json.load(f)

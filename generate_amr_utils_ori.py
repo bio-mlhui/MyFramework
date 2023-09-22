@@ -55,7 +55,7 @@ def get_root(ann, sent:str):
 from collections import defaultdict
 #endregion
 
-pt_dir = '/home/xuhuihui/pt'   
+pt_dir = '/hpc2hdd/home/testuser21/pt/DATA/AMR3.0/models/amr3.0-structured-bart-large-neur-al/seed42'   
 
 
 def a2ds_normalize_text(text_query):
@@ -68,57 +68,91 @@ def a2ds_normalize_text(text_query):
     # first one
     text_1 = " ".join(normalized_text_query.lower().split())
     return text_1
+# from data_schedule.rvos.a2ds_schedule import a2ds_normalize_text
 def a2ds_perWindow_perExp(root): 
-    with open(os.path.join(root, 'text_to_parseAMRaux.json'), 'r') as f:
-        text_to_aux = json.load(f)
-    pos_tagger = CoreNLPClient(annotators=['tokenize','pos','parse', 'depparse'], 
-                                    timeout=30000, output_format='json', 
-                                    memory='6G',
-                                    be_quiet=True,) 
-    
-    new_text_to_amr_aux = copy.deepcopy(text_to_aux)
-    for text_query, aux_dict  in tqdm(text_to_aux.items()):
-        initial_parsed_amr = aux_dict['initial_parsed_amr']
-        tokenized_string = penman.decode(initial_parsed_amr).metadata['tok']
-        # 找到第一个名词
-        pos_ann = pos_tagger.annotate(tokenized_string)['sentences'][0]
-        if tokenized_string == 'man climbing on right':
-            pos_ann['tokens'][0]['pos'] = 'NN'
-        try:
-            first_noun_idx, first_noun = get_first_noun(pos_ann, tokenized_string)
-        except:
-            pass
-        # 改变amr的top
-        amr_graph = penman.decode(initial_parsed_amr, model=penman_amr_model)
-        amr_graph.metadata = {}
-        alignments = surface.alignments(amr_graph)
-        concept_keys = list(alignments.keys())
-        concept_start_alignments = [idx for idx, ali in enumerate(list(alignments.values())) if ali.indices[0] == first_noun_idx]
-        if len(concept_start_alignments) == 0:
-            for idx, key in enumerate(concept_keys):  # 一个句子中出现了两个light, 但是amr parser只识别了后一个light, 并且pos tagger认为第一个是top
-                if key[-1].startswith(first_noun.lower()):
-                    concept_start_alignments.append(idx)
-        concept_start_alignments = concept_start_alignments[0]
-        top_variable, _, top_concept = concept_keys[concept_start_alignments]
-        amr_tree_string_change_top = penman.encode(amr_graph, top=top_variable,model=penman_amr_model)
+        parser = AMRParser.from_pretrained('AMR3-structbart-L')
+                            
+        instances = pandas.read_csv(os.path.join(root, 'a2d_annotation.txt'))
+        text_to_aux = defaultdict(dict)
+        torch.hub.load
+        # for each query
+        for text_query in tqdm(instances['query'].to_list()):
+            # 非法输入
+            text_1 = a2ds_normalize_text(text_query)
+            # first one
+            if text_1 not in text_to_aux:
+                tokens, _ = parser.tokenize(text_1)
+                amr_string = parser.parse_sentence(tokens)[0]
+                text_to_aux[text_1]['initial_parsed_amr'] = amr_string
+
+            # second one
+            text_2 = text_1.replace('left', '@').replace('right', 'left').replace('@', 'right')
+            if text_2 not in text_to_aux:
+                tokens, _ = parser.tokenize(text_2)
+                amr_string = parser.parse_sentence(tokens)[0]
+                text_to_aux[text_2]['initial_parsed_amr'] = amr_string
+        # for each text
+        pos_tagger = CoreNLPClient(annotators=['tokenize','pos','parse', 'depparse'], 
+                                        timeout=30000, output_format='json', 
+                                        memory='6G',
+                                        be_quiet=True,) 
         
-        # 把改变了top之后的amr linearize
-        amr_tree_string_linearized, pointer_variable_mapping, instances_index, edge_index, attributes_index, nx_graph  \
-                = dfs_linearized_penmen(amr_tree_string_change_top, use_pointer_tokens=True,)
-        new_text_to_amr_aux[text_query]['toknized_string'] = tokenized_string
-        new_text_to_amr_aux[text_query]['amr_tree_string'] = amr_tree_string_change_top
-        new_text_to_amr_aux[text_query]['inference_graph'] = nx.node_link_data(nx_graph)
-        new_text_to_amr_aux[text_query]['first_noun'] = top_concept
-        new_text_to_amr_aux[text_query]['amr_tree_string_linearization_dict'] = {
-            'amr_tree_string_linearized': amr_tree_string_linearized,
-            'var_pointer_map': pointer_variable_mapping,
-            'instance_linearized_ali':instances_index,
-            'edge_linearized_ali':edge_index,
-            'attribute_linearized_ali':attributes_index
-        }
-    with open(os.path.join(root, 'text_to_aux.json'), 'w') as f:
-        json.dump(new_text_to_amr_aux, f)            
-  
+        new_text_to_amr_aux = copy.deepcopy(text_to_aux)
+        for text_query, aux_dict  in tqdm(text_to_aux.items()):
+            initial_parsed_amr = aux_dict['initial_parsed_amr']
+            tokenized_string = penman.decode(initial_parsed_amr).metadata['tok']
+            # 找到第一个名词
+            pos_ann = pos_tagger.annotate(tokenized_string)['sentences'][0]
+            if tokenized_string == 'man climbing on right':
+                pos_ann['tokens'][0]['pos'] = 'NN'
+            try:
+                first_noun_idx, first_noun = get_first_noun(pos_ann, tokenized_string)
+            except:
+                pass
+            # 改变amr的top
+            amr_graph = penman.decode(initial_parsed_amr, model=penman_amr_model)
+            amr_graph.metadata = {}
+            alignments = surface.alignments(amr_graph)
+            concept_keys = list(alignments.keys())
+            concept_start_alignments = [idx for idx, ali in enumerate(list(alignments.values())) if ali.indices[0] == first_noun_idx]
+            if len(concept_start_alignments) == 0:
+                for idx, key in enumerate(concept_keys):  # 一个句子中出现了两个light, 但是amr parser只识别了后一个light, 并且pos tagger认为第一个是top
+                    if key[-1].startswith(first_noun.lower()):
+                        concept_start_alignments.append(idx)
+            concept_start_alignments = concept_start_alignments[0]
+            top_variable, _, top_concept = concept_keys[concept_start_alignments]
+            amr_tree_string_change_top = penman.encode(amr_graph, top=top_variable,model=penman_amr_model)
+            
+            # 把改变了top之后的amr linearize
+            amr_tree_string_linearized, pointer_variable_mapping, instances_index, edge_index, attributes_index, nx_graph  \
+                    = dfs_linearized_penmen(amr_tree_string_change_top, use_pointer_tokens=True,)
+
+            new_text_to_amr_aux[text_query]['amr_tree_string'] = amr_tree_string_change_top
+            new_text_to_amr_aux[text_query]['inference_graph'] = nx.node_link_data(nx_graph)
+            new_text_to_amr_aux[text_query]['first_noun'] = top_concept
+            new_text_to_amr_aux[text_query]['amr_tree_string_linearization_dict'] = {
+                'amr_tree_string_linearized': amr_tree_string_linearized,
+                'var_pointer_map': pointer_variable_mapping,
+                'instance_linearized_ali':instances_index,
+                'edge_linearized_ali':edge_index,
+                'attribute_linearized_ali':attributes_index
+            }
+        with open(os.path.join(root, 'text_to_aux2.json'), 'w') as f:
+            json.dump(new_text_to_amr_aux, f)            
+        # if os.path.exists(os.path.join(root, 'text_to_aux.json')):
+        #     with open(os.path.join(root, 'text_to_aux.json'), 'e') as f:
+        #         text_to_aux = json.load(f)
+        #     for text_query, amr_aux_dict in new_text_to_amr_aux.items():
+        #         assert text_query in text_to_aux # 保证只有text query; hfliped text; 没有数据集中的非法语言
+        #         for amr_key, amr_value in amr_aux_dict.items():
+        #             assert amr_key not in text_to_aux[text_query]
+        #             text_to_aux[text_query][amr_key] = amr_value
+        # else:
+        #     text_to_aux = new_text_to_amr_aux
+        
+
+
+    
 def yrvos_perWindow_perExp(root):         
     # pasing
     parser = AMRParser.from_pretrained('AMR3-structbart-L')
@@ -255,6 +289,6 @@ def yrvos_perWindow_perExp(root):
                 
 if __name__ == '__main__':
     
-    a2ds_perWindow_perExp(root='/home/xuhuihui/datasets/a2d_sentences')
+    a2ds_perWindow_perExp(root='/hpc2hdd/home/testuser21/datasets/a2d_sentences')
     # yrvos_perWindow_perExp(root='/hpc2hdd/home/testuser21/datasets/youtube_rvos',
     #                        do_parse=True)

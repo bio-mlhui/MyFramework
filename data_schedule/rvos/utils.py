@@ -262,10 +262,12 @@ class DatasetWithAux(Dataset):
         
         elif self.text_aux_version == 1:
             amr_wv = self.text_aux_by_auxid[text_auxid]['inference_graph'] 
+            tok_string = self.text_aux_by_auxid[text_auxid]['toknized_string']
             G : nx.DiGraph = nx.node_link_graph(amr_wv)
             top_var = G.graph['top']
             nodekey_to_token = {key:node_token for key, node_token in zip(G.nodes(), G.nodes())}
             nodekey_to_segid = {key:G.nodes[key]['seg_id'] for key in G.nodes()}
+            nodekey_to_alignment = {key:G.nodes[key]['alignment'] for key in G.nodes()}
             # 标号，过滤掉segid=2的节点, 第一个永远是top var
             nodekey_to_idx = {} 
             nodekey_to_idx[top_var] = 0
@@ -285,10 +287,11 @@ class DatasetWithAux(Dataset):
             for i, (src, dst) in enumerate(G.edges()):
                 edge_seg_id = G[src][dst]['seg_id']
                 if edge_seg_id == -2:
-                    # 把/边的dst的token改成src的token, dst的segid改成2
+                    # 把/边的dst的token改成src的token, dst的segid改成2, dst的alignment改成src的alignment
                     assert nodekey_to_segid[dst] == 1 and nodekey_to_segid[src] == 2
                     nodekey_to_token[dst] = nodekey_to_token[src]
                     nodekey_to_segid[dst] = 2
+                    nodekey_to_alignment[dst] = nodekey_to_alignment[src]
                     # 忽略/边
                 else:
                     edge_index.append([nodekey_to_idx[src], nodekey_to_idx[dst]])
@@ -297,8 +300,10 @@ class DatasetWithAux(Dataset):
             # 按照idx获得token序列, segid序列
             node_tokens = [nodekey_to_token[idx_to_nodekey[idx]] for idx in range(cnt)] 
             node_seg_ids = [nodekey_to_segid[idx_to_nodekey[idx]] for idx in range(cnt)] 
+            node_alignments = [nodekey_to_alignment[idx_to_nodekey[idx]] for idx in range(cnt)]
             assert 1 not in node_seg_ids
             assert -2 not in edge_seg_ids
+            assert -100 not in node_alignments
             edge_index = torch.tensor(edge_index).permute(1, 0)
             amr = Data(edge_index=edge_index)
             amr.num_nodes = len(node_tokens)
@@ -307,12 +312,32 @@ class DatasetWithAux(Dataset):
             assert tokens[0] == nodekey_to_token[top_var]
             
             tokens_ids, meta_dict = self.tokenizer.tokenize_amr(tokens)
+            text_tokens = self.tokenizer.tokenize(tok_string)
+            text_token_ids = [self.tokenizer.encoder.get(tok, self.tokenizer.unk_token_id) for tok in text_tokens]
+            text_token_splits = [] # list[int]
+            cnt = 0
+            for idx, tok in enumerate(text_tokens):
+                if idx == 0:
+                    assert tok.startswith('Ġ')
+                    cnt += 1
+                elif not tok.startswith('Ġ'):
+                    cnt += 1
+                else:
+                    text_token_splits.append(cnt)
+                    cnt = 1
+
+                if idx == (len(text_tokens) - 1):
+                    text_token_splits.append(cnt)
+
             token_splits = meta_dict['each_token_length']
             return {
                 'amrs': amr, # Graph
                 'seg_ids': seg_ids, # V+E
                 'token_splits': token_splits, # V+E, sum=len(token_ids)
                 'token_ids': tokens_ids, 
+                'node_alignments': node_alignments,
+                'text_token_ids': text_token_ids,
+                'text_token_splits': text_token_splits
             }
             
         elif self.text_aux_version == 2:
@@ -605,7 +630,10 @@ class CollatorWithAux:
             seg_ids = [s_dic['seg_ids'] for s_dic in auxiliary]
             token_splits = [s_dic['token_splits'] for s_dic in auxiliary]
             token_ids =  [s_dic['token_ids'] for s_dic in auxiliary]
-
+            node_alignments = [s_dic['node_alignments'] for s_dic in auxiliary]
+            text_token_ids = [s_dic['text_token_ids'] for s_dic in auxiliary] # list[list[int]], batch
+            text_token_splits = [s_dic['text_token_splits'] for s_dic in auxiliary]
+            text_token_ids, _ = text_pad_token_ids(text_token_ids, self.tokenizer.pad_token_id)
             return {
                 'exist_queries':  [s['exist_queries'] for s in auxiliary],
                 'sample_idx': [s['sample_idx'] for s in auxiliary],
@@ -613,6 +641,9 @@ class CollatorWithAux:
                 'seg_ids': text_pad_token_ids(seg_ids, 0)[0], # b (V+E)max
                 'token_splits': token_splits, # list[list[int]]
                 'token_ids': text_pad_token_ids(token_ids, self.tokenizer.pad_token_id)[0],  # b max
+                'node_alignments': node_alignments,
+                'text_token_ids': text_token_ids,
+                'text_token_splits': text_token_splits
             }
         elif self.text_aux_version == 3:
             amrs = [s_dic['amrs'] for s_dic in auxiliary]
