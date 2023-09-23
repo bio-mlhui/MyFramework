@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch_geometric.nn as geo_nn
 from torch import nn, Tensor
-from typing import Optional
+from typing import Any, Dict, List, Optional, Union
 import torch.nn.functional as F
 # norm
 # 使用memory
@@ -869,27 +869,114 @@ def build_batch_along_node(sequence, num_nodes_by_batch):
 
     return torch.cat(batched_sequence, dim=0) 
 
+from torch_geometric.nn.dense.linear import Linear
+from torch_geometric.nn.inits import glorot
+# self layer, head/tail representation + ffn layer
+class GAT_Attention(geo_nn.MessagePassing):
+    def __init__(self, flow,
+                 d_model, nheads, dropout,
+                 add_self_loop=True,
+                 fill_loop_value=0.):
+        super().__init__(aggr=None, flow=flow)
+        self.d_model = d_model
+        self.dropout = dropout
 
-class Grounding_v1(geo_nn.MessagePassing):
-    def __init__(self, 
-                 d_model,
-                 flow='source_to_target',  
-                 ):
-        super().__init__(aggr=None,
-                         flow=flow,)
+        self.head_dim = d_model // nheads
+        self.scale = (3 * self.head_dim) ** -0.5
+        self.nheads = nheads
+
+        self.node_linear = Linear(d_model, nheads * self.head_dim, bias=False, weight_initializer='glorot')
+        self.edge_linear = Linear(d_model, nheads * self.head_dim, bias=False, weight_initializer='glorot')
+
+        self.attn_weight = nn.Parameter(torch.zeros([1, nheads, 3 * self.head_dim]))
+        glorot(self.attn_weight)
+        self.to_out = nn.Sequential(Linear(nheads * self.head_dim, d_model, weight_initializer='glorot'), 
+                                    nn.Dropout(dropout))
+        self.add_self_loop = add_self_loop
+        self.fill_loop_value = fill_loop_value
+    
+    def forward(self, x, edge_index,
+                edge_attr, 
+                size= None,):
+        """
+        Args:
+            x: V c
+            edge_index: 2 E
+            edge_attr: E c
+        """
+        H, C = self.nheads, self.d_model
+        # V c -> V hc
+        x = self.node_linear(x)
+        # E c -> E hc
+        edge_attr = self.edge_linear(edge_attr)
+
+        # V hc
+        out = self.propagate(edge_index, x=x, size=size, edge_attr=edge_attr)
+        return self.to_out(out)
+
+    def message(self, x_j, x_i, edge_attr) -> Tensor:
+        # x_j: E hc
+        # x_i: E hc
+        # edge_attr: E hc
+        x_j = rearrange(x_j, 'E (h c) -> E h c',h=self.nheads)
+        x_i = rearrange(x_i, 'E (h c) -> E h c',h=self.nheads)
+        edge_attr = rearrange(edge_attr, 'E (h c) -> E h c',h=self.nheads)
+
+        # E h 3c * 1 h 3c -> E h
+        alpha = (torch.cat([x_j, x_i, edge_attr], dim=-1) * self.attn_weight).sum(-1) * self.scale
+        return alpha
+    
+    def aggregate(self, inputs, index, x, x_j, dim_size= None) -> Tensor:
+        """
+        Args:
+            inputs: E h
+            index: E
+            x_j: E hc
+            x: V hc
+            dim_size: V
+        """
+        x = rearrange(x, 'V (h c) -> V h c', h=self.nheads)
+        x_j = rearrange(x_j, 'E (h c) -> E h c', h=self.nheads)
+
+        out = [] # V hc
+        for tgt_node_idx in range(dim_size):
+            self_feat = x[tgt_node_idx] # h c
+            # 如果没有节点连向x_i, 那么message就是x_i本身
+            if tgt_node_idx not in index:
+                out.append(self_feat)
+                continue
+            # Msg h
+            msg_alpha = [inputs[idx] for idx in range(len(index)) if index[idx] == tgt_node_idx]
+            if self.add_self_loop:
+                self_loop_feat = torch.ones_like(self_feat).float() * self.fill_loop_value
+                # h 3c * h 3c -> h
+                self_alpha = (torch.cat([self_feat, self_feat, self_loop_feat], dim=-1) * (self.attn_weight.squeeze(0))).sum(-1) * self.scale
+                msg_alpha.append(self_alpha)
+            msg_alpha = torch.stack(msg_alpha, dim=0)
+            msg_alpha = msg_alpha.softmax(dim=0)
+
+            # Msg h c
+            income_feat = [x_j[idx] for idx in range(len(index)) if index[idx] == tgt_node_idx]
+            if self.add_self_loop:
+                income_feat.append(self_feat)
+            income_feat = torch.stack(income_feat, dim=0)
+            
+            # h c Msg @ h MSg 1 -> h c
+            aggr_feat = (income_feat.permute(1,2, 0)) @ (msg_alpha.permute(1, 0).unsqueeze(-1))
+            aggr_feat = aggr_feat.squeeze(-1)
+            out.append(aggr_feat)
+        return torch.stack(out, dim=0).flatten(1)
+
+
+class Subseq_YsYp(nn.Module):
+    def __init__(self, d_model) -> None:
+        super().__init__()
         self.ys_softattn = nn.Linear(d_model, 1, bias=False)
         self.yp_softattn = nn.Linear(d_model, 1, bias=False)
-
-        self.ref_2 = nn.Linear(d_model, d_model, bias=False)
-        self.ref_1 = nn.Linear(d_model, 1, bias=False)
-        
-        self.context_2 = nn.Linear(3*d_model, d_model, bias=False)
-        self.context_1 = nn.Linear(d_model, 1, bias=False)
-
-    def with_pos_embed(self, tensor, pos: Optional[Tensor]):
-        return tensor if pos is None else tensor + pos
     
-    def get_y_by_node(self, node_subseqs):
+    def forward(self, node_feats=None, edge_feats=None,
+                edge_index=None,
+                node_subseqs=None):
         """
         node_subseqs: list[si c], V
         """
@@ -910,6 +997,105 @@ class Grounding_v1(geo_nn.MessagePassing):
         yp_by_node = torch.cat(yp_by_node, dim=0)
         return ys_by_node, yp_by_node
 
+class TopDown_Bottomup_YsYp(nn.Module):
+    def __init__(self, 
+                 d_model,
+                 nheads,
+                 dropout,
+                 add_self_loop=True,
+                 fill_loop_value=0.):
+        super().__init__()
+        self.bottomup_self_attn = GAT_Attention(flow='source_to_target',
+                                              d_model=d_model,
+                                              nheads=nheads,
+                                              dropout=dropout,
+                                              add_self_loop=add_self_loop,
+                                              fill_loop_value=fill_loop_value)
+        self.topdown_self_attn = GAT_Attention(flow='source_to_target',
+                                              d_model=d_model,
+                                              nheads=nheads,
+                                              dropout=dropout,
+                                              add_self_loop=add_self_loop,
+                                              fill_loop_value=fill_loop_value)
+
+    def with_pos_embed(self, tensor, pos: Optional[Tensor]):
+        return tensor if pos is None else tensor + pos
+    
+    def forward(self,
+                node_feats=None, edge_feats=None,
+                edge_index=None,
+                node_subseqs=None):
+        """不对node/edge的feature进行转换
+        Args:
+            node_batch_ids: V
+            edge_batch_ids: E
+
+            node_seg_ids: V
+            edge_seg_ids: E
+            node_feats: V c
+            edge_feats: E c
+            edge_memories: V nq c
+            node_memories: V nq c
+            edge_index: 2 E
+
+            node_subseqs: list[s c], V
+        """
+        bottomup_node_feats, topdown_node_feats = node_feats.clone(), node_feats.clone()
+        bottomup_edge_index, topdown_edge_index = edge_index, edge_index[[1,0],:]
+        
+        bottomup_node_feats = self.forward_graph(bottomup_edge_index, bottomup_node_feats, edge_feats, direction='bottomup')
+        topdown_node_feats = self.forward_graph(topdown_edge_index, topdown_node_feats, edge_feats, direction='topdown')
+        # ys, yp
+        return topdown_node_feats, bottomup_node_feats
+    
+    def forward_graph(self, edge_index, node_feats, edge_attr, direction):
+        device = node_feats.device
+        try:
+            dgl_graph = dgl.graph((edge_index[0, :], edge_index[1, :]))
+            topo_order = dgl.topological_nodes_generator(dgl_graph)
+        except:
+            exit()
+        for idx, frontier_nodes in enumerate(topo_order):
+            src, tgt, order_eid =  dgl_graph.in_edges(frontier_nodes.to(device), form='all')
+            if idx == 0:
+                assert len(src) == 0 and len(tgt) == 0 and len(order_eid) == 0
+            else:
+                # V c
+                if direction == 'bottomup':
+                    node_feats_2 = self.bottomup_self_attn(x=node_feats,
+                                                        edge_index=edge_index[:, order_eid],
+                                                        edge_attr=edge_attr[order_eid, :])
+                elif direction == 'topdown':
+                    node_feats_2 = self.topdown_self_attn(x=node_feats,
+                                                          edge_index=edge_index[:, order_eid],
+                                                          edge_attr=edge_attr[order_eid, :])
+                trans_mask = torch.zeros_like(node_feats).bool() # V c
+                trans_mask[frontier_nodes, :] = True
+                node_feats = torch.where(trans_mask, node_feats_2, node_feats)
+        return node_feats
+
+class Grounding_v1(geo_nn.MessagePassing):
+    def __init__(self, 
+                 d_model,
+                 get_ysyp={'name': 'subseq'},# subseq/topdown_bottomup
+                 flow='source_to_target',
+                 ):
+        super().__init__(aggr=None,
+                         flow=flow,)
+        self.ref_2 = nn.Linear(d_model, d_model, bias=False)
+        self.ref_1 = nn.Linear(d_model, 1, bias=False)
+        
+        self.context_2 = nn.Linear(3*d_model, d_model, bias=False)
+        self.context_1 = nn.Linear(d_model, 1, bias=False)
+        get_ysyp_name = get_ysyp.pop('name')
+        if get_ysyp_name == 'subseq':
+            self.get_ysyp = Subseq_YsYp(d_model)
+        elif get_ysyp_name == 'topdown_bottomup':
+            self.get_ysyp = TopDown_Bottomup_YsYp(**get_ysyp)
+
+    def with_pos_embed(self, tensor, pos: Optional[Tensor]):
+        return tensor if pos is None else tensor + pos
+    
     def forward(self,
                 node_batch_ids=None, edge_batch_ids=None, 
                 node_seg_ids=None, edge_seg_ids=None,
@@ -937,7 +1123,10 @@ class Grounding_v1(geo_nn.MessagePassing):
         node_query_feats = self.with_pos_embed(node_query_feats, node_query_pos) # V nq c
 
         # V c, V c
-        ys_by_node, yp_by_node = self.get_y_by_node(node_subseqs)
+        ys_by_node, yp_by_node = self.get_ysyp(node_subseqs=node_subseqs,
+                                                       node_feats=node_feats,
+                                                       edge_feats=edge_feats,
+                                                       edge_index=edge_index)
 
         # intialize score V nq
         # S(xi, v) = S_s(xi, y_s^v)
@@ -1008,4 +1197,6 @@ class Grounding_v1(geo_nn.MessagePassing):
 @register_graphLayer
 def grounding_v1(configs):
     return Grounding_v1(d_model=configs['d_model'],
-                        flow=configs['flow'])
+                        flow=configs['flow'],
+                        get_ysyp=configs['get_ysyp'] if 'get_ysyp' in configs else {'name': 'subseq'})
+

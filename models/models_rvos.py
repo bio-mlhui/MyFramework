@@ -1940,7 +1940,7 @@ class AMR_v0_detectObj_onlyObj(AMR_v0_detectObj):
                 # TODO: 添加一些其他可以加loss, 加postprocessing的东西, 输出的接口和trainer evaluation一致;, 输出的接口和task loss一致
                 'check_visualze': check_visualize,
                  'objdecoder_objseg': objdecoder_layer_preds } 
-
+from .layer_graph import batching_graph
 class AMR_v0_detOnlyObj_Grounding(nn.Module):
     def __init__(self, 
                  d_model=256,
@@ -2125,7 +2125,6 @@ class AMR_v0_detOnlyObj_Grounding(nn.Module):
         self.obj_decoder_mask_threshold = objdecoder['mask_threshold'] 
 
     def build_ref_decoder(self, refdecoder,):
-        self.decoder_nlayers = refdecoder['nlayers']
         from .layer_graph import graphLayer_entrypoint
         reason_layer = refdecoder['reason_layer']
         reason_layer_name = reason_layer.pop('name')
@@ -2133,7 +2132,21 @@ class AMR_v0_detOnlyObj_Grounding(nn.Module):
         self.decoder_reason_layer_choose_who = reason_layer['choose_who']
         create_reason_layer = graphLayer_entrypoint(reason_layer_name)
         self.decoder_reason_layer = create_reason_layer(reason_layer)
-    
+
+        trans_layer = refdecoder.pop('trans_layer', None)
+        if trans_layer is None:
+            self.decoder_trans_nlayers = 0
+            self.decoder_trans_layers = None
+        trans_layer_name = trans_layer.pop('name')
+        if trans_layer_name == 'none':
+            self.decoder_trans_nlayers = 0
+            self.decoder_trans_layers = None
+        else:
+            create_layer = graphLayer_entrypoint(trans_layer_name)
+            graph_layer = create_layer(trans_layer)
+            self.decoder_trans_nlayers = trans_layer['nlayers']
+            self.decoder_trans_layers = _get_clones(graph_layer, self.decoder_trans_nlayers)
+
     def encode_video(self, samples):
         bb_out = self.video_swint(samples)  
         nf, batch_size, *_ = bb_out[0].tensors.shape
@@ -2358,7 +2371,6 @@ class AMR_v0_detOnlyObj_Grounding(nn.Module):
         else:
             memories = obj_queries
             memories_pos = query_embed
-        from .layer_graph import batching_graph
         nodes_batch_ids, edges_batch_ids,\
             node_seg_ids, edges_seg_ids, \
             node_feats, edge_feats, \
@@ -2369,18 +2381,37 @@ class AMR_v0_detOnlyObj_Grounding(nn.Module):
 
         decoder_layer_preds = {}
         grounding_score = self.decoder_reason_layer(node_batch_ids=nodes_batch_ids, edge_batch_ids=edges_batch_ids, 
-                                            node_seg_ids=node_seg_ids, edge_seg_ids=edges_seg_ids,
-                                            node_feats=node_feats, edge_feats=edge_feats,
-                                            node_memories=node_memories, edge_memories=edge_memories,
-                                            edge_index=edge_index,
-                                            node_subseqs=node_subseqs) # V nq
+                                                node_seg_ids=node_seg_ids, edge_seg_ids=edges_seg_ids,
+                                                node_feats=node_feats, edge_feats=edge_feats,
+                                                node_memories=node_memories, edge_memories=edge_memories,
+                                                edge_index=edge_index,
+                                                node_subseqs=node_subseqs) # V nq
         g_score_by_batch = []
         for bch_idx in range(bt):
             bch_node_score = torch.stack([grounding_score[idx] for idx, batch_id in enumerate(nodes_batch_ids) if batch_id == bch_idx], dim=0)
             g_score_by_batch.append(bch_node_score) # vi nq
         decoder_layer_preds[f'layer{-1}_preds'] = {'grounding_score': g_score_by_batch}
-        for layer_idx in range(self.decoder_nlayers):
-            pass
+
+        if self.decoder_trans_layers is not None:
+            for layer_idx in range(self.decoder_trans_nlayers):
+                node_feats, edge_feats = self.decoder_trans_layers[layer_idx](node_batch_ids=nodes_batch_ids, edge_batch_ids=edges_batch_ids, 
+                                                                            node_seg_ids=node_seg_ids, edge_seg_ids=edges_seg_ids,
+                                                                            node_feats=node_feats, edge_feats=edge_feats,
+                                                                            node_memories=node_memories, edge_memories=edge_memories,
+                                                                            edge_index=edge_index,
+                                                                            node_subseqs=node_subseqs) # V nq
+                grounding_score = self.decoder_reason_layer(node_batch_ids=nodes_batch_ids, edge_batch_ids=edges_batch_ids, 
+                                            node_seg_ids=node_seg_ids, edge_seg_ids=edges_seg_ids,
+                                            node_feats=node_feats, edge_feats=edge_feats,
+                                            node_memories=node_memories, edge_memories=edge_memories,
+                                            edge_index=edge_index,
+                                            node_subseqs=node_subseqs) # V nq
+                g_score_by_batch = []
+                for bch_idx in range(bt):
+                    bch_node_score = torch.stack([grounding_score[idx] for idx, batch_id in enumerate(nodes_batch_ids) if batch_id == bch_idx], dim=0)
+                    g_score_by_batch.append(bch_node_score) # vi nq
+                decoder_layer_preds[f'layer{layer_idx}_preds'] = {'grounding_score': g_score_by_batch}
+
         return {'refdecoder_refseg': decoder_layer_preds,
                 # TODO: 添加一些其他可以加loss, 加postprocessing的东西, 输出的接口和trainer evaluation一致;, 输出的接口和task loss一致
                 'check_visualze': check_visualize,
@@ -2416,7 +2447,7 @@ class AMR_v0_detOnlyObj_Grounding(nn.Module):
             out_mask_logits = obj_last_layer_preds['pred_mask_logits'] # bt nq h w
 
             refdecoder_layer_preds = self.get_decoder_preds(decoder_layer_preds)
-            ref_last_layer_preds = refdecoder_layer_preds[f'layer{self.decoder_nlayers-1}_preds']
+            ref_last_layer_preds = refdecoder_layer_preds[f'layer{self.decoder_trans_nlayers-1}_preds']
             ref_last_layer_gscore = ref_last_layer_preds['grounding_score']  # bt nq 
             argmax_query_idx = ref_last_layer_gscore.argmax(-1)
             out_mask_logits = torch.stack([out_mask[max_query] for out_mask, max_query in zip(out_mask_logits, argmax_query_idx)], dim=0)
@@ -2464,7 +2495,7 @@ class AMR_v0_detOnlyObj_Grounding(nn.Module):
     def get_decoder_preds(self, model_outs):
         refseg_src = model_outs['refdecoder_refseg']
         if self.decoder_reason_layer_choose_who == '第一个':
-            for i in range(-1, self.decoder_nlayers):
+            for i in range(-1, self.decoder_trans_nlayers):
                 # list[vi nq], b -> b nq
                 layer_gscore = refseg_src[f'layer{i}_preds']['grounding_score']
                 layer_gscore = torch.stack([lg[0] for lg in layer_gscore], dim=0)
@@ -2535,7 +2566,7 @@ class AMR_v0_detOnlyObj_Grounding(nn.Module):
         match_as_gt_indices = match_as_gt_indices[ref_is_valid]
 
         refdecoder_choose_loss = 0.
-        for layer_idx in range(-1, self.decoder_nlayers):
+        for layer_idx in range(-1, self.decoder_trans_nlayers):
             layer_weight = layer_weights[layer_idx] 
             if layer_weight != 0: # bt c
                 refdecoder_gscore = refseg_src[f'layer{layer_idx}_preds']['grounding_score'] # bt nq
