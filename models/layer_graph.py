@@ -1074,6 +1074,84 @@ class TopDown_Bottomup_YsYp(nn.Module):
                 node_feats = torch.where(trans_mask, node_feats_2, node_feats)
         return node_feats
 
+class TopDown_TopDown_YsYp(nn.Module):
+    def __init__(self, 
+                 d_model,
+                 nheads,
+                 dropout,
+                 add_self_loop=True,
+                 fill_loop_value=0.):
+        super().__init__()
+        self.ys_self_attn = GAT_Attention(flow='source_to_target',
+                                              d_model=d_model,
+                                              nheads=nheads,
+                                              dropout=dropout,
+                                              add_self_loop=add_self_loop,
+                                              fill_loop_value=fill_loop_value)
+        self.yp_self_attn = GAT_Attention(flow='source_to_target',
+                                              d_model=d_model,
+                                              nheads=nheads,
+                                              dropout=dropout,
+                                              add_self_loop=add_self_loop,
+                                              fill_loop_value=fill_loop_value)
+
+    def with_pos_embed(self, tensor, pos: Optional[Tensor]):
+        return tensor if pos is None else tensor + pos
+    
+    def forward(self,
+                node_feats=None, edge_feats=None,
+                edge_index=None,
+                node_subseqs=None):
+        """不对node/edge的feature进行转换
+        Args:
+            node_batch_ids: V
+            edge_batch_ids: E
+
+            node_seg_ids: V
+            edge_seg_ids: E
+            node_feats: V c
+            edge_feats: E c
+            edge_memories: V nq c
+            node_memories: V nq c
+            edge_index: 2 E
+
+            node_subseqs: list[s c], V
+        """
+        ys_node_feats, yp_node_feats = node_feats.clone(), node_feats.clone()
+        ys_edge_index, yp_edge_index = edge_index[[1, 0], :], edge_index[[1, 0], :]
+        
+        ys_node_feats = self.forward_graph(ys_edge_index, ys_node_feats, edge_feats, direction='ys')
+        yp_node_feats = self.forward_graph(yp_edge_index, yp_node_feats, edge_feats, direction='yp')
+        # ys, yp
+        return ys_node_feats, yp_node_feats
+    
+    def forward_graph(self, edge_index, node_feats, edge_attr, direction):
+        device = node_feats.device
+        try:
+            dgl_graph = dgl.graph((edge_index[0, :], edge_index[1, :]))
+            topo_order = dgl.topological_nodes_generator(dgl_graph)
+        except:
+            exit()
+        for idx, frontier_nodes in enumerate(topo_order):
+            src, tgt, order_eid =  dgl_graph.in_edges(frontier_nodes.to(device), form='all')
+            if idx == 0:
+                assert len(src) == 0 and len(tgt) == 0 and len(order_eid) == 0
+            else:
+                # V c
+                if direction == 'ys':
+                    node_feats_2 = self.ys_self_attn(x=node_feats,
+                                                        edge_index=edge_index[:, order_eid],
+                                                        edge_attr=edge_attr[order_eid, :])
+                elif direction == 'yp':
+                    node_feats_2 = self.yp_self_attn(x=node_feats,
+                                                          edge_index=edge_index[:, order_eid],
+                                                          edge_attr=edge_attr[order_eid, :])
+                trans_mask = torch.zeros_like(node_feats).bool() # V c
+                trans_mask[frontier_nodes, :] = True
+                node_feats = torch.where(trans_mask, node_feats_2, node_feats)
+        return node_feats
+
+
 class Grounding_v1(geo_nn.MessagePassing):
     def __init__(self, 
                  d_model,
@@ -1092,6 +1170,8 @@ class Grounding_v1(geo_nn.MessagePassing):
             self.get_ysyp = Subseq_YsYp(d_model)
         elif get_ysyp_name == 'topdown_bottomup':
             self.get_ysyp = TopDown_Bottomup_YsYp(**get_ysyp)
+        elif get_ysyp_name == 'topdown_topdown':
+            self.get_ysyp = TopDown_TopDown_YsYp(**get_ysyp)
 
     def with_pos_embed(self, tensor, pos: Optional[Tensor]):
         return tensor if pos is None else tensor + pos
