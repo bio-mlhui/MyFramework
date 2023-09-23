@@ -2041,7 +2041,8 @@ class AMR_v0_detOnlyObj_Grounding(nn.Module):
                     'mask_out_stride': 4,
                     'mask_threshold': 0.5,
                     },
-                is_pretraining_seg=False
+                is_pretraining_seg=False,
+                detach_refdecoder_memory=False
                 ) -> None:
         super().__init__()
         self.d_model = d_model
@@ -2090,6 +2091,7 @@ class AMR_v0_detOnlyObj_Grounding(nn.Module):
         self.build_obj_decoder(objdecoder, d_model)
         self.build_ref_decoder(refdecoder)
         self.is_pretraining_seg = is_pretraining_seg
+        self.detach_refdecoder_memory = detach_refdecoder_memory
 
     def build_obj_decoder(self, objdecoder, d_model):
         # obj decoder
@@ -2350,8 +2352,12 @@ class AMR_v0_detOnlyObj_Grounding(nn.Module):
                                                                                         [scale_pos.clone() for scale_pos in multiscales_poses])
         if self.is_pretraining_seg:
             return {'objdecoder_objseg': objdecoder_layer_preds}
-        memories = obj_queries # nq bt c
-        memories_pos = query_embed # nq bt c
+        if self.detach_refdecoder_memory:
+            memories = obj_queries.detach() # nq bt c
+            memories_pos = query_embed.detach() # nq bt c
+        else:
+            memories = obj_queries
+            memories_pos = query_embed
         from .layer_graph import batching_graph
         nodes_batch_ids, edges_batch_ids,\
             node_seg_ids, edges_seg_ids, \
@@ -5812,7 +5818,8 @@ def amr_v0_detOnlyObj_grounding(device, configs):
         tasks=configs['tasks'],
         refdecoder=configs['refdecoder'],
         objdecoder=configs['objdecoder'],
-        is_pretraining_seg=configs['is_pretraining_seg']
+        is_pretraining_seg=configs['is_pretraining_seg'],
+        detach_refdecoder_memory=configs['detach_refdecoder_memory'] if 'detach_refdecoder_memory' in configs else False
     )
     model.to(device)
 
