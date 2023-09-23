@@ -780,7 +780,7 @@ def graph_layer_dropout(configs):
                           aggr=configs['aggr'])
 
 
-
+import networkx as nx
 from torch_geometric.data import Batch
 def batching_graph(amrs,
                     amr_token_feats,
@@ -835,12 +835,20 @@ def batching_graph(amrs,
         # s c, list[int]
         for node_ali in btc_node_alis:
             node_subseqs.append(btc_text_feat[:(node_ali+1)])
-    
+
+    node_dsends = [] # list[si c], V
+    icgd = list(zip(edge_index[0, :].tolist(), edge_index[1, :].tolist()))
+    nx_graph = nx.DiGraph(icgd)
+    for node_id in range(len(nodes_batch_ids)):
+        # s c, list[int]
+        dsends = list(nx.descendants(nx_graph, node_id))
+        dsends = [node_id] + dsends
+        node_dsends.append(node_feats[dsends])  
 
     return nodes_batch_ids, edges_batch_ids, \
         node_seg_ids, edges_seg_ids, \
             node_feats, edge_feats,\
-            node_memories, edge_memories, edge_index, node_subseqs
+            node_memories, edge_memories, edge_index, node_subseqs, node_dsends
 
 def build_batch_along_edge(sequence, num_edges_by_batch):
     """
@@ -976,7 +984,8 @@ class Subseq_YsYp(nn.Module):
     
     def forward(self, node_feats=None, edge_feats=None,
                 edge_index=None,
-                node_subseqs=None):
+                node_subseqs=None,
+                node_dsends=None):
         """
         node_subseqs: list[si c], V
         """
@@ -996,6 +1005,37 @@ class Subseq_YsYp(nn.Module):
         ys_by_node = torch.cat(ys_by_node, dim=0)
         yp_by_node = torch.cat(yp_by_node, dim=0)
         return ys_by_node, yp_by_node
+
+class Desends_YsYp(nn.Module):
+    def __init__(self, d_model) -> None:
+        super().__init__()
+        self.ys_softattn = nn.Linear(d_model, 1, bias=False)
+        self.yp_softattn = nn.Linear(d_model, 1, bias=False)
+    
+    def forward(self, node_feats=None, edge_feats=None,
+                edge_index=None,
+                node_subseqs=None,
+                node_dsends=None):
+        """
+        node_subseqs: list[si c], V
+        """
+        ys_by_node = []
+        yp_by_node = []
+        for descends in node_dsends:
+            # si c -> si
+            soft_attn = self.ys_softattn(descends).squeeze(-1).softmax(dim=0)
+            # 1 si @ si c
+            ys = soft_attn.unsqueeze(0) @ descends # 1 c
+            ys_by_node.append(ys)
+
+            soft_attn = self.yp_softattn(descends).squeeze(-1).softmax(dim=0)
+            yp = soft_attn.unsqueeze(0) @ descends # 1 c
+            yp_by_node.append(yp)
+
+        ys_by_node = torch.cat(ys_by_node, dim=0)
+        yp_by_node = torch.cat(yp_by_node, dim=0)
+        return ys_by_node, yp_by_node
+
 
 class TopDown_Bottomup_YsYp(nn.Module):
     def __init__(self, 
@@ -1024,7 +1064,8 @@ class TopDown_Bottomup_YsYp(nn.Module):
     def forward(self,
                 node_feats=None, edge_feats=None,
                 edge_index=None,
-                node_subseqs=None):
+                node_subseqs=None,
+                node_dsends=None):
         """不对node/edge的feature进行转换
         Args:
             node_batch_ids: V
@@ -1101,7 +1142,8 @@ class TopDown_TopDown_YsYp(nn.Module):
     def forward(self,
                 node_feats=None, edge_feats=None,
                 edge_index=None,
-                node_subseqs=None):
+                node_subseqs=None,
+                node_dsends=None):
         """不对node/edge的feature进行转换
         Args:
             node_batch_ids: V
@@ -1172,6 +1214,8 @@ class Grounding_v1(geo_nn.MessagePassing):
             self.get_ysyp = TopDown_Bottomup_YsYp(**get_ysyp)
         elif get_ysyp_name == 'topdown_topdown':
             self.get_ysyp = TopDown_TopDown_YsYp(**get_ysyp)
+        elif get_ysyp_name == 'descends':
+            self.get_ysyp = Desends_YsYp(d_model)
 
     def with_pos_embed(self, tensor, pos: Optional[Tensor]):
         return tensor if pos is None else tensor + pos
@@ -1182,7 +1226,8 @@ class Grounding_v1(geo_nn.MessagePassing):
                 node_feats=None, edge_feats=None,
                 edge_memories=None, node_memories=None,
                 edge_index=None,
-                node_subseqs=None):
+                node_subseqs=None,
+                node_dsends=None):
         """不对node/edge的feature进行转换
         Args:
             node_batch_ids: V
@@ -1206,7 +1251,8 @@ class Grounding_v1(geo_nn.MessagePassing):
         ys_by_node, yp_by_node = self.get_ysyp(node_subseqs=node_subseqs,
                                                        node_feats=node_feats,
                                                        edge_feats=edge_feats,
-                                                       edge_index=edge_index)
+                                                       edge_index=edge_index,
+                                                       node_dsends=node_dsends)
 
         # intialize score V nq
         # S(xi, v) = S_s(xi, y_s^v)

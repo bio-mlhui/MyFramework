@@ -2375,7 +2375,7 @@ class AMR_v0_detOnlyObj_Grounding(nn.Module):
             node_seg_ids, edges_seg_ids, \
             node_feats, edge_feats, \
             node_memories,edge_memories,\
-            edge_index, node_subseqs = \
+            edge_index, node_subseqs, node_dsends = \
               batching_graph(amrs, amr_token_feats, amr_token_seg_ids, memories.permute(1,0,2).clone(), memories_pos.permute(1,0,2).clone(),
                             text_feats, node_alignments) # memories是dict
 
@@ -2385,7 +2385,8 @@ class AMR_v0_detOnlyObj_Grounding(nn.Module):
                                                 node_feats=node_feats, edge_feats=edge_feats,
                                                 node_memories=node_memories, edge_memories=edge_memories,
                                                 edge_index=edge_index,
-                                                node_subseqs=node_subseqs) # V nq
+                                                node_subseqs=node_subseqs,
+                                                node_dsends=node_dsends) # V nq
         g_score_by_batch = []
         for bch_idx in range(bt):
             bch_node_score = torch.stack([grounding_score[idx] for idx, batch_id in enumerate(nodes_batch_ids) if batch_id == bch_idx], dim=0)
@@ -2405,7 +2406,8 @@ class AMR_v0_detOnlyObj_Grounding(nn.Module):
                                             node_feats=node_feats, edge_feats=edge_feats,
                                             node_memories=node_memories, edge_memories=edge_memories,
                                             edge_index=edge_index,
-                                            node_subseqs=node_subseqs) # V nq
+                                            node_subseqs=node_subseqs,
+                                            node_dsends=node_dsends) # V nq
                 g_score_by_batch = []
                 for bch_idx in range(bt):
                     bch_node_score = torch.stack([grounding_score[idx] for idx, batch_id in enumerate(nodes_batch_ids) if batch_id == bch_idx], dim=0)
