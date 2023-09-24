@@ -1326,3 +1326,207 @@ def grounding_v1(configs):
                         flow=configs['flow'],
                         get_ysyp=configs['get_ysyp'] if 'get_ysyp' in configs else {'name': 'subseq'})
 
+
+class Desends_YsYp_multihead(nn.Module):
+    def __init__(self, 
+                 d_model,
+                 nheads,
+                 dropout,) -> None:
+        super().__init__()
+        self.head_dim = d_model // nheads
+        self.nheads = nheads
+        # 1 h c
+        self.ys_softattn = nn.Parameter(torch.zeros([nheads, self.head_dim, 1])) # h c 1
+        self.yp_softattn = nn.Parameter(torch.zeros([nheads, self.head_dim, 1])) # h c 1
+        glorot(self.ys_softattn)
+        glorot(self.yp_softattn)
+        self.ys_to_out = nn.Sequential(nn.Linear(self.head_dim * self.nheads, d_model), # hc c
+                                    nn.Dropout(dropout))
+        self.yp_to_out = nn.Sequential(nn.Linear(self.head_dim * self.nheads, d_model), # hc c
+                                    nn.Dropout(dropout))
+    
+    def forward(self, node_feats=None, edge_feats=None,
+                edge_index=None,
+                node_subseqs=None,
+                node_dsends=None):
+        """
+        node_subseqs: list[si c], V
+        """
+        ys_by_node = [] # V hc
+        yp_by_node = [] # V hc
+        for descends in node_dsends:
+            # h si c * h 1 c -> h si
+            descends = rearrange(descends, 'si (h c) -> h si c', h=self.nheads)
+
+            # h si c @ h c 1 -> h si
+            soft_attn = (descends @ self.ys_softattn).squeeze(-1).softmax(dim=-1)
+            # h 1 si @ h si c -> h c -> hc
+            ys = (soft_attn.unsqueeze(1) @ descends).squeeze(1).flatten()
+            ys_by_node.append(ys)
+
+            # h si c @ h c 1 -> h si
+            soft_attn = (descends @ self.yp_softattn).squeeze(-1).softmax(dim=-1)
+            # h 1 si @ h si c -> h c -> hc
+            yp = (soft_attn.unsqueeze(1) @ descends).squeeze(1).flatten()
+            yp_by_node.append(yp)
+
+        ys_by_node = torch.stack(ys_by_node, dim=0)
+        yp_by_node = torch.stack(yp_by_node, dim=0)
+
+        return self.ys_to_out(ys_by_node), self.yp_to_out(yp_by_node)
+
+class Grounding_v1_multihead(geo_nn.MessagePassing):
+    def __init__(self, 
+                 d_model,
+                 nheads,
+                 get_ysyp={'name': 'subseq'},# subseq/topdown_bottomup
+                 flow='source_to_target',
+                 ):
+        super().__init__(aggr=None,
+                         flow=flow,)
+        self.head_dim = d_model // nheads
+        self.nheads = nheads
+        self.ref_2 = nn.Parameter(torch.zeros([1, self.nheads, self.head_dim, self.head_dim])) # 1 h c c
+        self.ref_1 = nn.Parameter(torch.zeros([1, self.nheads, self.head_dim, 1])) # 1 h c 1
+        glorot(self.ref_1)
+        glorot(self.ref_2)
+        
+        self.context_2 = nn.Parameter(torch.zeros([1, self.nheads, 3*self.head_dim, self.head_dim])) # 1 h 3c c
+        glorot(self.context_2)
+        self.context_1 = nn.Parameter(torch.zeros([1, self.nheads, self.head_dim, 1])) # 1 h c 1
+        glorot(self.context_1)
+        get_ysyp_name = get_ysyp.pop('name')
+        if get_ysyp_name == 'descends_multihead':
+            self.get_ysyp = Desends_YsYp_multihead(**get_ysyp)
+        else:
+            raise ValueError()
+
+    def with_pos_embed(self, tensor, pos: Optional[Tensor]):
+        return tensor if pos is None else tensor + pos
+    
+    def forward(self,
+                node_batch_ids=None, edge_batch_ids=None, 
+                node_seg_ids=None, edge_seg_ids=None,
+                node_feats=None, edge_feats=None,
+                edge_memories=None, node_memories=None,
+                edge_index=None,
+                node_subseqs=None,
+                node_dsends=None):
+        """不对node/edge的feature进行转换
+        Args:
+            node_batch_ids: V
+            edge_batch_ids: E
+
+            node_seg_ids: V
+            edge_seg_ids: E
+            node_feats: V c
+            edge_feats: E c
+            edge_memories: V nq c
+            node_memories: V nq c
+            edge_index: 2 E
+
+            node_subseqs: list[s c], V
+        """
+        device = edge_feats.device
+        node_query_feats, node_query_pos = node_memories['feat'], node_memories['pos']
+        node_query_feats = self.with_pos_embed(node_query_feats, node_query_pos) # V nq c
+        node_query_feats = rearrange(node_query_feats, 'V nq (h c) -> V h nq c',h=self.nheads)
+        # V c, V c
+        ys_by_node, yp_by_node = self.get_ysyp(node_subseqs=node_subseqs,
+                                                node_feats=node_feats,
+                                                edge_feats=edge_feats,
+                                                edge_index=edge_index,
+                                                node_dsends=node_dsends)
+        ys_by_node = rearrange(ys_by_node, 'V (h c) -> V h c', h=self.nheads)
+        yp_by_node = rearrange(yp_by_node, 'V (h c) -> V h c', h=self.nheads)
+        # intialize score V h_nq
+        # S(xi, v) = S_s(xi, y_s^v)
+        # V h nq c @ 1 h c c -> V h nq c
+        node_query_feats = node_query_feats @ self.ref_2
+        # V h nq c * V h 1 c -> V h nq c
+        ref_match = node_query_feats * (ys_by_node.unsqueeze(2))
+        ref_match = ref_match / ref_match.norm(dim=-1, keepdim=True)
+        # V h nq c @ 1 h c 1 -> V h nq 1
+        scores = ref_match @ self.ref_1
+        # V h_nq
+        scores = scores.flatten(1)
+
+        dgl_graph = dgl.graph((edge_index[0, :], edge_index[1, :]))
+        try:
+            traversal_order = dgl.topological_nodes_generator(dgl_graph)
+        except:
+            exit()
+        for idx, frontier_nodes in enumerate(traversal_order):
+            src, tgt, order_eid =  dgl_graph.in_edges(frontier_nodes.to(device), form='all')
+            if idx == 0:
+                assert len(src) == 0 and len(tgt) == 0 and len(order_eid) == 0
+            else:
+                # V h_nq
+                scores = self.propagate(edge_index[:, order_eid], 
+                                        size=None,
+                                        x=scores, # V h_nq
+                                        yp=yp_by_node.flatten(1), # V hc
+                                        edge_attr=edge_feats[order_eid, :], # E hc
+                                        node_nq=node_query_feats.flatten(1), # V h_nq_c
+                                        ) # arguments
+        scores = rearrange(scores, 'V (h nq) -> V h nq',h=self.nheads)
+        return scores.mean(dim=1) # V nq
+    
+    def message(self, edge_attr, x_j, node_nq_j, node_nq_i, yp_i) -> Tensor:
+        """
+        Args:
+            edge_attr: E hc
+            x_j: E h_nq
+            node_nq_j/i: E nqc
+            yp_i: E c
+        """
+        edge_attr = rearrange(edge_attr, 'E (h c) -> E h c', h=self.nheads)
+        x_j = rearrange(x_j, 'E (h nq) -> E h nq', h=self.nheads)
+        nq = x_j.shape[-1]
+        node_nq_i = rearrange(node_nq_i, 'E (h nq c) -> E h nq c',nq=nq,h=self.nheads)
+        node_nq_j = rearrange(node_nq_j, 'E (h nq c) -> E h nq c',nq=nq,h=self.nheads)
+        yp_i = rearrange(yp_i, 'E (h c) -> E h c', h=self.nheads)
+        
+        score = x_j.clone()
+        # E h 1 nq @ E h nq c -> E h 1 c
+        soft_attn_j = x_j.softmax(-1).unsqueeze(2)
+        context_feat_j = soft_attn_j @ node_nq_j
+        context_feat_j = context_feat_j.repeat(1,1, nq,1) # E h nq c
+        edge_attr = edge_attr.unsqueeze(2).repeat(1,1,nq, 1) # E h nq c
+        cat_feat = torch.cat([context_feat_j, node_nq_i, edge_attr], dim=-1) # E h nq 3c
+
+        # E h nq 3c @ 1 h 3c c -> E h nq c
+        cat_feat = cat_feat @ self.context_2 
+        # E h nq c * E h 1 c -> E h nq c
+        cat_feat = cat_feat * (yp_i.unsqueeze(2))
+        cat_feat = cat_feat / cat_feat.norm(dim=-1, keepdim=True)
+        # E h nq c @ 1 h c 1 -> E h nq 1 -> E h nq
+        context_score = (cat_feat @ self.context_1).squeeze(-1)
+        return (score + context_score).flatten(1)
+    
+    def aggregate(self, 
+                  inputs, # E h_nq
+                  x, # V h_nq
+                  index, # E, int 每个信息指向哪个节点
+                  dim_size=None):
+        x = rearrange(x, 'V (h nq) -> V h nq',h=self.nheads)
+        inputs = rearrange(inputs, 'E (h nq) -> E h nq',h=self.nheads)
+        out = [] # V  h nq
+        for tgt_node_idx in range(dim_size):
+            self_score = x[tgt_node_idx] # h nq
+            # 如果没有节点连向x_i, 那么message就是x_i本身
+            if tgt_node_idx not in index:
+                out.append(self_score)
+                continue
+            # Msg h nq
+            msgs = torch.stack([inputs[idx] for idx in range(len(index)) if index[idx] == tgt_node_idx], dim=0)
+            msgs = msgs.sum(dim=0) 
+            out.append(msgs + self_score)
+        return torch.stack(out, dim=0).flatten(1)
+
+@register_graphLayer
+def grounding_v1_multihead(configs):
+    return Grounding_v1_multihead(d_model=configs['d_model'],
+                        flow=configs['flow'],
+                        nheads=configs['nheads'],
+                        get_ysyp=configs['get_ysyp'] if 'get_ysyp' in configs else {'name': 'subseq'})

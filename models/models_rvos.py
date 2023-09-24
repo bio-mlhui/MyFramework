@@ -2137,15 +2137,16 @@ class AMR_v0_detOnlyObj_Grounding(nn.Module):
         if trans_layer is None:
             self.decoder_trans_nlayers = 0
             self.decoder_trans_layers = None
-        trans_layer_name = trans_layer.pop('name')
-        if trans_layer_name == 'none':
-            self.decoder_trans_nlayers = 0
-            self.decoder_trans_layers = None
         else:
-            create_layer = graphLayer_entrypoint(trans_layer_name)
-            graph_layer = create_layer(trans_layer)
-            self.decoder_trans_nlayers = trans_layer['nlayers']
-            self.decoder_trans_layers = _get_clones(graph_layer, self.decoder_trans_nlayers)
+            trans_layer_name = trans_layer.pop('name')
+            if trans_layer_name == 'none':
+                self.decoder_trans_nlayers = 0
+                self.decoder_trans_layers = None
+            else:
+                create_layer = graphLayer_entrypoint(trans_layer_name)
+                graph_layer = create_layer(trans_layer)
+                self.decoder_trans_nlayers = trans_layer['nlayers']
+                self.decoder_trans_layers = _get_clones(graph_layer, self.decoder_trans_nlayers)
 
     def encode_video(self, samples):
         bb_out = self.video_swint(samples)  
