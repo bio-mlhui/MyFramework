@@ -3092,17 +3092,19 @@ class AMR_v0_detOnlyObj_Grounding_AsObjLoss(AMR_v0_detOnlyObj_Grounding):
                                                             edge_index=edge_index,
                                                             node_subseqs=node_subseqs,
                                                             node_dsends=node_dsends)
-            node_gscore = torch.zeros([len(node_batch_ids), len(output)], device=output.device)
 
         out_class, out_mask, out_box, attn_mask = self.forward_objdecoder_heads(output, conved_features, attn_mask_target_size=size_list[0])
         decoder_layer_preds[f'layer{-1}_preds'] = {'pred_class_logits':out_class, 
                                                    'pred_mask_logits': out_mask, 'pred_box_logits': out_box}
                 
         if not self.is_pretraining_seg:
+            # 没Norm?
+            # node_memories, edge_memories = self.batching_memory(nodes_batch_ids=node_batch_ids, edges_batch_ids=edge_batch_ids,
+            #                                                 memories=output.permute(1,0,2), memories_pos=query_embed.permute(1,0,2))
             node_memories, edge_memories = self.batching_memory(nodes_batch_ids=node_batch_ids, edges_batch_ids=edge_batch_ids,
-                                                            memories=output.permute(1,0,2), memories_pos=query_embed.permute(1,0,2))
-            node_gscore = self.decoder_reason_layer(node_gscore,
-                                                node_batch_ids=node_batch_ids.clone(), edge_batch_ids=edge_batch_ids.clone(), 
+                                                            memories=self.obj_decoder_norm(output).permute(1,0,2),
+                                                            memories_pos=query_embed.permute(1,0,2))
+            node_gscore = self.decoder_reason_layer(node_batch_ids=node_batch_ids.clone(), edge_batch_ids=edge_batch_ids.clone(), 
                                                 node_seg_ids=node_seg_ids.clone(), edge_seg_ids=edge_seg_ids.clone(),
                                                 node_feats=node_feats.clone(), edge_feats=edge_feats.clone(),
                                                 edge_index=edge_index.clone(),
@@ -3139,10 +3141,13 @@ class AMR_v0_detOnlyObj_Grounding_AsObjLoss(AMR_v0_detOnlyObj_Grounding):
             decoder_layer_preds[f'layer{i}_preds'] = {'pred_class_logits':out_class, 
                                                     'pred_mask_logits': out_mask, 'pred_box_logits': out_box,}             
             if not self.is_pretraining_seg:
-                node_memories, edge_memories = self.batching_memory(node_batch_ids, edge_batch_ids,
-                                                        memories=output.permute(1,0,2), memories_pos=query_embed.permute(1,0,2))
-                node_gscore = self.decoder_reason_layer(node_gscore,
-                                            node_batch_ids=node_batch_ids.clone(), edge_batch_ids=edge_batch_ids.clone(), 
+                # 没Norm?
+                # node_memories, edge_memories = self.batching_memory(nodes_batch_ids=node_batch_ids, edges_batch_ids=edge_batch_ids,
+                #                                                 memories=output.permute(1,0,2), memories_pos=query_embed.permute(1,0,2))
+                node_memories, edge_memories = self.batching_memory(nodes_batch_ids=node_batch_ids, edges_batch_ids=edge_batch_ids,
+                                                            memories=self.obj_decoder_norm(output).permute(1,0,2),
+                                                            memories_pos=query_embed.permute(1,0,2))
+                node_gscore = self.decoder_reason_layer(node_batch_ids=node_batch_ids.clone(), edge_batch_ids=edge_batch_ids.clone(), 
                                             node_seg_ids=node_seg_ids.clone(), edge_seg_ids=edge_seg_ids.clone(),
                                             node_feats=node_feats.clone(), edge_feats=edge_feats.clone(),
                                             edge_index=edge_index.clone(),

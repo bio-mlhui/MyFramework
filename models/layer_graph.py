@@ -1557,7 +1557,6 @@ class Grounding_v1_multihead_noysyp(geo_nn.MessagePassing):
         return tensor if pos is None else tensor + pos
     
     def forward(self,
-                node_score,
                 node_batch_ids=None, edge_batch_ids=None, 
                 node_seg_ids=None, edge_seg_ids=None,
                 node_feats=None, edge_feats=None,
@@ -1621,7 +1620,7 @@ class Grounding_v1_multihead_noysyp(geo_nn.MessagePassing):
         scores = rearrange(scores, 'V (h nq) -> V h nq',h=self.nheads)
         scores = scores.mean(dim=1)
 
-        return scores + node_score # V nq
+        return scores # V nq
     
     def message(self, edge_attr, x_j, node_nq_j, node_nq_i, yp_i) -> Tensor:
         """
