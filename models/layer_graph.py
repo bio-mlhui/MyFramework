@@ -850,79 +850,6 @@ def batching_graph(amrs,
             node_feats, edge_feats,\
             node_memories, edge_memories, edge_index, node_subseqs, node_dsends
 
-def batching_graph_without_memory(amrs,
-                    amr_token_feats,
-                    amr_seg_ids,
-                    text_feats, node_alignments
-                    ):
-    """
-    Args:
-        amrs: list[Graph]
-        amr_token_feats: b (v+e)max c
-        amr_seg_ids: b (v+e)max
-        memories: b nq c
-        memories_pos: b nq c
-        text_feats: b smax c
-        node_alignments: list[list[int], si] batch
-    Returns:
-        _type_: _description_
-    """
-    device = amr_token_feats.device
-    nodes_batch_ids = []
-    edges_batch_ids = []
-    num_nodes_by_batch = [g.num_nodes for g in amrs]
-    for bch_idx, nnode in enumerate(num_nodes_by_batch):
-        nodes_batch_ids.extend([bch_idx] * nnode)
-    num_edges_by_batch = [g.num_edges for g in amrs]
-    for bch_idx, nedge in enumerate(num_edges_by_batch):
-        edges_batch_ids.extend([bch_idx] * nedge)
-    nodes_batch_ids = torch.tensor(nodes_batch_ids, device=device)
-    edges_batch_ids = torch.tensor(edges_batch_ids, device=device)
-    batched_amrs = Batch.from_data_list(amrs) # concate
-    edge_index = batched_amrs.edge_index.to(device)
-
-    node_feats = torch.cat([b_f[seg_ids>0] for b_f, seg_ids in zip(amr_token_feats, amr_seg_ids)], dim=0)
-    edge_feats  = torch.cat([b_f[seg_ids<0] for b_f, seg_ids in zip(amr_token_feats, amr_seg_ids)], dim=0)
-    node_seg_ids = torch.cat([seg_ids[seg_ids>0] for seg_ids in amr_seg_ids], dim=0)
-    edges_seg_ids = torch.cat([seg_ids[seg_ids<0] for seg_ids in amr_seg_ids], dim=0)
-
-    node_subseqs = [] # list[s c], V
-    for btc_text_feat, btc_node_alis in zip(text_feats, node_alignments):
-        # s c, list[int]
-        for node_ali in btc_node_alis:
-            node_subseqs.append(btc_text_feat[:(node_ali+1)])
-
-    node_dsends = [] # list[si c], V
-    icgd = list(zip(edge_index[0, :].tolist(), edge_index[1, :].tolist()))
-    nx_graph = nx.DiGraph(icgd)
-    for node_id in range(len(nodes_batch_ids)):
-        # s c, list[int]
-        dsends = list(nx.descendants(nx_graph, node_id))
-        dsends = [node_id] + dsends
-        node_dsends.append(node_feats[dsends])  
-
-    return nodes_batch_ids, edges_batch_ids, \
-        node_seg_ids, edges_seg_ids, \
-            node_feats, edge_feats, edge_index, node_subseqs, node_dsends
-
-def batching_memory(nodes_batch_ids,  edges_batch_ids,
-                    memories, # 
-                    memories_pos=None,
-                    ):
-    # V nq c
-    node_memories_feats = torch.stack([memories[bid] for bid in nodes_batch_ids], dim=0)
-    node_memories_poses = torch.stack([memories_pos[bid] for bid in nodes_batch_ids], dim=0) if memories_pos is not None else None
-
-    edge_memories_feats = torch.stack([memories[bid] for bid in edges_batch_ids], dim=0)
-    edge_memories_poses = torch.stack([memories_pos[bid] for bid in edges_batch_ids], dim=0) if memories_pos is not None else None
-
-    node_memories = {'feat': node_memories_feats, 'pos': node_memories_poses}
-    edge_memories = {'feat': edge_memories_feats, 'pos': edge_memories_poses}
-
-
-    return node_memories, edge_memories
-
-
 def build_batch_along_edge(sequence, num_edges_by_batch):
     """
     sequence: b ..
@@ -1603,3 +1530,159 @@ def grounding_v1_multihead(configs):
                         flow=configs['flow'],
                         nheads=configs['nheads'],
                         get_ysyp=configs['get_ysyp'] if 'get_ysyp' in configs else {'name': 'subseq'})
+
+
+class Grounding_v1_multihead_noysyp(geo_nn.MessagePassing):
+    def __init__(self, 
+                 d_model,
+                 nheads,
+                 flow='source_to_target',
+                 ):
+        super().__init__(aggr=None,
+                         flow=flow,)
+        self.head_dim = d_model // nheads
+        self.nheads = nheads
+        self.ref_2 = nn.Parameter(torch.zeros([1, self.nheads, self.head_dim, self.head_dim])) # 1 h c c
+        self.ref_1 = nn.Parameter(torch.zeros([1, self.nheads, self.head_dim, 1])) # 1 h c 1
+        glorot(self.ref_1)
+        glorot(self.ref_2)
+        
+        self.context_2 = nn.Parameter(torch.zeros([1, self.nheads, 3*self.head_dim, self.head_dim])) # 1 h 3c c
+        glorot(self.context_2)
+        self.context_1 = nn.Parameter(torch.zeros([1, self.nheads, self.head_dim, 1])) # 1 h c 1
+        glorot(self.context_1)
+
+
+    def with_pos_embed(self, tensor, pos: Optional[Tensor]):
+        return tensor if pos is None else tensor + pos
+    
+    def forward(self,
+                node_score,
+                node_batch_ids=None, edge_batch_ids=None, 
+                node_seg_ids=None, edge_seg_ids=None,
+                node_feats=None, edge_feats=None,
+                edge_memories=None, node_memories=None,
+                edge_index=None,
+                node_subseqs=None,
+                node_dsends=None,
+                ys_node_feats=None, yp_node_feats=None):
+        """不对node/edge的feature进行转换
+        Args:
+            node_score: V nq
+            node_batch_ids: V
+            edge_batch_ids: E
+
+            node_seg_ids: V
+            edge_seg_ids: E
+            node_feats: V c
+            edge_feats: E c
+            edge_memories: V nq c
+            node_memories: V nq c
+            edge_index: 2 E
+
+            node_subseqs: list[s c], V
+        """
+        device = edge_feats.device
+        node_query_feats, node_query_pos = node_memories['feat'], node_memories['pos']
+        node_query_feats = self.with_pos_embed(node_query_feats, node_query_pos) # V nq c
+        node_query_feats = rearrange(node_query_feats, 'V nq (h c) -> V h nq c',h=self.nheads)
+        ys_by_node = rearrange(ys_node_feats, 'V (h c) -> V h c', h=self.nheads)
+        yp_by_node = rearrange(yp_node_feats, 'V (h c) -> V h c', h=self.nheads)
+        # intialize score V h_nq
+        # S(xi, v) = S_s(xi, y_s^v)
+        # V h nq c @ 1 h c c -> V h nq c
+        node_query_feats = node_query_feats @ self.ref_2
+        # V h nq c * V h 1 c -> V h nq c
+        ref_match = node_query_feats * (ys_by_node.unsqueeze(2))
+        ref_match = ref_match / ref_match.norm(dim=-1, keepdim=True)
+        # V h nq c @ 1 h c 1 -> V h nq 1
+        scores = ref_match @ self.ref_1
+        # V h_nq
+        scores = scores.flatten(1)
+
+        dgl_graph = dgl.graph((edge_index[0, :], edge_index[1, :]))
+        try:
+            traversal_order = dgl.topological_nodes_generator(dgl_graph)
+        except:
+            exit()
+        for idx, frontier_nodes in enumerate(traversal_order):
+            src, tgt, order_eid =  dgl_graph.in_edges(frontier_nodes.to(device), form='all')
+            if idx == 0:
+                assert len(src) == 0 and len(tgt) == 0 and len(order_eid) == 0
+            else:
+                # V h_nq
+                scores = self.propagate(edge_index[:, order_eid], 
+                                        size=None,
+                                        x=scores, # V h_nq
+                                        yp=yp_by_node.flatten(1), # V hc
+                                        edge_attr=edge_feats[order_eid, :], # E hc
+                                        node_nq=node_query_feats.flatten(1), # V h_nq_c
+                                        ) # arguments
+        scores = rearrange(scores, 'V (h nq) -> V h nq',h=self.nheads)
+        scores = scores.mean(dim=1)
+
+        return scores + node_score # V nq
+    
+    def message(self, edge_attr, x_j, node_nq_j, node_nq_i, yp_i) -> Tensor:
+        """
+        Args:
+            edge_attr: E hc
+            x_j: E h_nq
+            node_nq_j/i: E nqc
+            yp_i: E c
+        """
+        edge_attr = rearrange(edge_attr, 'E (h c) -> E h c', h=self.nheads)
+        x_j = rearrange(x_j, 'E (h nq) -> E h nq', h=self.nheads)
+        nq = x_j.shape[-1]
+        node_nq_i = rearrange(node_nq_i, 'E (h nq c) -> E h nq c',nq=nq,h=self.nheads)
+        node_nq_j = rearrange(node_nq_j, 'E (h nq c) -> E h nq c',nq=nq,h=self.nheads)
+        yp_i = rearrange(yp_i, 'E (h c) -> E h c', h=self.nheads)
+        
+        score = x_j.clone()
+        # E h 1 nq @ E h nq c -> E h 1 c
+        soft_attn_j = x_j.softmax(-1).unsqueeze(2)
+        context_feat_j = soft_attn_j @ node_nq_j
+        context_feat_j = context_feat_j.repeat(1,1, nq,1) # E h nq c
+        edge_attr = edge_attr.unsqueeze(2).repeat(1,1,nq, 1) # E h nq c
+        cat_feat = torch.cat([context_feat_j, node_nq_i, edge_attr], dim=-1) # E h nq 3c
+
+        # E h nq 3c @ 1 h 3c c -> E h nq c
+        cat_feat = cat_feat @ self.context_2 
+        # E h nq c * E h 1 c -> E h nq c
+        cat_feat = cat_feat * (yp_i.unsqueeze(2))
+        cat_feat = cat_feat / cat_feat.norm(dim=-1, keepdim=True)
+        # E h nq c @ 1 h c 1 -> E h nq 1 -> E h nq
+        context_score = (cat_feat @ self.context_1).squeeze(-1)
+        return (score + context_score).flatten(1)
+    
+    def aggregate(self, 
+                  inputs, # E h_nq
+                  x, # V h_nq
+                  index, # E, int 每个信息指向哪个节点
+                  dim_size=None):
+        x = rearrange(x, 'V (h nq) -> V h nq',h=self.nheads)
+        inputs = rearrange(inputs, 'E (h nq) -> E h nq',h=self.nheads)
+        out = [] # V  h nq
+        for tgt_node_idx in range(dim_size):
+            self_score = x[tgt_node_idx] # h nq
+            # 如果没有节点连向x_i, 那么message就是x_i本身
+            if tgt_node_idx not in index:
+                out.append(self_score)
+                continue
+            # Msg h nq
+            msgs = torch.stack([inputs[idx] for idx in range(len(index)) if index[idx] == tgt_node_idx], dim=0)
+            msgs = msgs.sum(dim=0) 
+            out.append(msgs + self_score)
+        return torch.stack(out, dim=0).flatten(1)
+
+@register_graphLayer
+def grounding_v1_multihead_noysyp(configs):
+    return Grounding_v1_multihead_noysyp(d_model=configs['d_model'],
+            flow=configs['flow'],
+            nheads=configs['nheads'],)
+
+@register_graphLayer
+def desends_multihead(configs):
+    return Desends_YsYp_multihead(d_model=configs['d_model'],
+                                  nheads=configs['nheads'],
+                                  dropout=configs['dropout'])

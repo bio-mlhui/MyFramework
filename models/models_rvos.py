@@ -1940,7 +1940,7 @@ class AMR_v0_detectObj_onlyObj(AMR_v0_detectObj):
                 # TODO: 添加一些其他可以加loss, 加postprocessing的东西, 输出的接口和trainer evaluation一致;, 输出的接口和task loss一致
                 'check_visualze': check_visualize,
                  'objdecoder_objseg': objdecoder_layer_preds } 
-from .layer_graph import batching_graph, batching_graph_without_memory,batching_memory
+from .layer_graph import batching_graph
 class AMR_v0_detOnlyObj_Grounding(nn.Module):
     def __init__(self, 
                  d_model=256,
@@ -2786,7 +2786,7 @@ class AMR_v0_detOnlyObj_Grounding(nn.Module):
             (torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64))
             for i, j in indices
         ]
-
+import networkx as nx
 class AMR_v0_detOnlyObj_Grounding_AsObjLoss(AMR_v0_detOnlyObj_Grounding):
     def __init__(self, 
                 d_model=256,
@@ -2892,16 +2892,17 @@ class AMR_v0_detOnlyObj_Grounding_AsObjLoss(AMR_v0_detOnlyObj_Grounding):
             ) -> None:
         assert refdecoder['trans_layer']['name'] == 'none'
         super().__init__(d_model, max_stride, pt_dir, swint_pretrained_path, swint_freeze, swint_runnning_mode, video_projs, video_feat_scales, amrbart_wordEmbedding_freeze, amrtext_wordEmbedding_proj, fusion, parsing_encoder, loss_weight, tasks, refdecoder, objdecoder, is_pretraining_seg, detach_refdecoder_memory)
+        from .layer_graph import graphLayer_entrypoint
+        ysyp_config = refdecoder['get_ysyp']
+        ysyp_name = ysyp_config.pop('name')
+        create_ysyp = graphLayer_entrypoint(ysyp_name)
+        self.decoder_ysyp = create_ysyp(ysyp_config)
         from torch_geometric.nn.inits import glorot
         glorot(self.obj_decoder_query_embed.weight)
         glorot(self.obj_decoder_query_feats.weight)
-    def forward_objdecoder_heads(self, output, mask_features, attn_mask_target_size,
-                                 nodes_batch_ids=None, edge_batch_ids=None,
-                                 node_seg_ids=None, edge_seg_ids=None,
-                                 node_feats=None, edge_feats=None,
-                                 edge_index=None,
-                                 node_subseqs=None,
-                                 node_dsends=None):
+
+    def forward_objdecoder_heads(self, output, mask_features, attn_mask_target_size):
+                                 
         decoder_output = self.obj_decoder_norm(output) # n bt c
         decoder_output = decoder_output.transpose(0, 1)   # bt n c
         bt = decoder_output.shape[0]
@@ -2916,22 +2917,86 @@ class AMR_v0_detOnlyObj_Grounding_AsObjLoss(AMR_v0_detOnlyObj_Grounding):
         # bt n h w -> bt 1 n hw -> bt head n hw -> bt*head n hw
         attn_mask = (attn_mask.sigmoid().flatten(2).unsqueeze(1).repeat(1, self.obj_decoder_nheads, 1, 1).flatten(0, 1) < 0.5).bool()
         attn_mask = attn_mask.detach()
-        
-        node_memories, edge_memories = batching_memory(nodes_batch_ids, edge_batch_ids,
-                                                       memories=decoder_output, memories_pos=None)
-        grounding_score = self.decoder_reason_layer(node_batch_ids=nodes_batch_ids, edge_batch_ids=edge_batch_ids, 
-                                                node_seg_ids=node_seg_ids, edge_seg_ids=edge_seg_ids,
-                                                node_feats=node_feats, edge_feats=edge_feats,
-                                                node_memories=node_memories, edge_memories=edge_memories,
-                                                edge_index=edge_index,
-                                                node_subseqs=node_subseqs,
-                                                node_dsends=node_dsends) # V nq
-        g_score_by_batch = []
-        for bch_idx in range(bt):
-            bch_node_score = torch.stack([grounding_score[idx] for idx, batch_id in enumerate(nodes_batch_ids) if batch_id == bch_idx], dim=0)
-            g_score_by_batch.append(bch_node_score) # vi nq
+        return outputs_classes, outputs_mask, outputs_box, attn_mask
 
-        return outputs_classes, outputs_mask, outputs_box, attn_mask, g_score_by_batch
+    def get_batch_gscore(self, node_gscore, nodes_batch_ids, bt):
+        gscore_by_batch = []
+        for bch_idx in range(bt):
+            bch_node_score = torch.stack([node_gscore[idx] for idx, batch_id in enumerate(nodes_batch_ids) if batch_id == bch_idx], dim=0)
+            gscore_by_batch.append(bch_node_score) # vi nq
+        return gscore_by_batch
+
+    def batching_graph(self, amrs,
+                    amr_token_feats,
+                    amr_seg_ids,
+                    text_feats, node_alignments
+                    ):
+        """
+        Args:
+            amrs: list[Graph]
+            amr_token_feats: b (v+e)max c
+            amr_seg_ids: b (v+e)max
+            memories: b nq c
+            memories_pos: b nq c
+            text_feats: b smax c
+            node_alignments: list[list[int], si] batch
+        Returns:
+            _type_: _description_
+        """
+        device = amr_token_feats.device
+        nodes_batch_ids = []
+        edges_batch_ids = []
+        num_nodes_by_batch = [g.num_nodes for g in amrs]
+        for bch_idx, nnode in enumerate(num_nodes_by_batch):
+            nodes_batch_ids.extend([bch_idx] * nnode)
+        num_edges_by_batch = [g.num_edges for g in amrs]
+        for bch_idx, nedge in enumerate(num_edges_by_batch):
+            edges_batch_ids.extend([bch_idx] * nedge)
+        nodes_batch_ids = torch.tensor(nodes_batch_ids, device=device)
+        edges_batch_ids = torch.tensor(edges_batch_ids, device=device)
+        batched_amrs = Batch.from_data_list(amrs) # concate
+        edge_index = batched_amrs.edge_index.to(device)
+
+        node_feats = torch.cat([b_f[seg_ids>0] for b_f, seg_ids in zip(amr_token_feats, amr_seg_ids)], dim=0)
+        edge_feats  = torch.cat([b_f[seg_ids<0] for b_f, seg_ids in zip(amr_token_feats, amr_seg_ids)], dim=0)
+        node_seg_ids = torch.cat([seg_ids[seg_ids>0] for seg_ids in amr_seg_ids], dim=0)
+        edges_seg_ids = torch.cat([seg_ids[seg_ids<0] for seg_ids in amr_seg_ids], dim=0)
+
+        node_subseqs = [] # list[s c], V
+        for btc_text_feat, btc_node_alis in zip(text_feats, node_alignments):
+            # s c, list[int]
+            for node_ali in btc_node_alis:
+                node_subseqs.append(btc_text_feat[:(node_ali+1)])
+
+        node_dsends = [] # list[si c], V
+        icgd = list(zip(edge_index[0, :].tolist(), edge_index[1, :].tolist()))
+        nx_graph = nx.DiGraph(icgd)
+        for node_id in range(len(nodes_batch_ids)):
+            # s c, list[int]
+            dsends = list(nx.descendants(nx_graph, node_id))
+            dsends = [node_id] + dsends
+            node_dsends.append(node_feats[dsends])  
+
+        return nodes_batch_ids, edges_batch_ids, \
+            node_seg_ids, edges_seg_ids, \
+                node_feats, edge_feats, edge_index, node_subseqs, node_dsends
+
+    def batching_memory(self, nodes_batch_ids,  edges_batch_ids,
+                        memories, # 
+                        memories_pos=None,
+                        ):
+        # V nq c
+        node_memories_feats = torch.stack([memories[bid] for bid in nodes_batch_ids], dim=0)
+        node_memories_poses = torch.stack([memories_pos[bid] for bid in nodes_batch_ids], dim=0) if memories_pos is not None else None
+
+        edge_memories_feats = torch.stack([memories[bid] for bid in edges_batch_ids], dim=0)
+        edge_memories_poses = torch.stack([memories_pos[bid] for bid in edges_batch_ids], dim=0) if memories_pos is not None else None
+
+        node_memories = {'feat': node_memories_feats, 'pos': node_memories_poses}
+        edge_memories = {'feat': edge_memories_feats, 'pos': edge_memories_poses}
+
+
+        return node_memories, edge_memories
 
     def model_outputs(self, samples : NestedTensor, text_queries, auxiliary, perFrame_has_ann):
         """ text_auxiliary
@@ -3015,26 +3080,40 @@ class AMR_v0_detOnlyObj_Grounding_AsObjLoss(AMR_v0_detOnlyObj_Grounding):
         memories_pad_masks = [rearrange(mem_pad, 'bt h w -> bt (h w)') for mem_pad in memories_pad_masks]
         memories = [mem_feat + self.obj_decoder_level_embed.weight[i][None, None, :] for i, mem_feat in enumerate(memories)]
         query_embed = self.obj_decoder_query_embed.weight.unsqueeze(1).repeat(1, bt, 1) # n bt c
-        output = self.obj_decoder_query_feats.weight.unsqueeze(1).repeat(1, bt, 1)
-
-        nodes_batch_ids, edges_batch_ids,\
-            node_seg_ids, edges_seg_ids, \
-            node_feats, edge_feats, \
-            edge_index, node_subseqs, node_dsends = \
-              batching_graph_without_memory(amrs, amr_token_feats, amr_token_seg_ids,text_feats, node_alignments) # memories是dict
-
         decoder_layer_preds = {}
-        out_class, out_mask, out_box, attn_mask, gscore_by_batch = \
-            self.forward_objdecoder_heads(output, conved_features, attn_mask_target_size=size_list[0],
-                                          nodes_batch_ids=nodes_batch_ids.clone(), edge_batch_ids=edges_batch_ids.clone(),
-                                            node_seg_ids=node_seg_ids.clone(), edge_seg_ids=edges_seg_ids.clone(),
-                                            node_feats=node_feats.clone(), edge_feats=edge_feats.clone(),
-                                            edge_index=edge_index.clone(),
-                                            node_subseqs=[nsub.clone() for nsub in node_subseqs],
-                                            node_dsends=[ndes.clone() for ndes in node_dsends])
+        if not self.is_pretraining_seg:
+            node_batch_ids, edge_batch_ids,\
+                node_seg_ids, edge_seg_ids, \
+                node_feats, edge_feats, \
+                edge_index, node_subseqs, node_dsends = \
+                self.batching_graph(amrs, amr_token_feats, amr_token_seg_ids,text_feats, node_alignments) # memories是dict
+            ys_node_feats, yp_node_feats = self.decoder_ysyp(node_feats=node_feats, edge_feats=edge_feats,
+                                                            edge_index=edge_index,
+                                                            node_subseqs=node_subseqs,
+                                                            node_dsends=node_dsends)
+            node_gscore = torch.zeros([len(node_batch_ids), len(output)], device=output.device)
+
+        output = self.obj_decoder_query_feats.weight.unsqueeze(1).repeat(1, bt, 1)
+        out_class, out_mask, out_box, attn_mask = self.forward_objdecoder_heads(output, conved_features, attn_mask_target_size=size_list[0])
         decoder_layer_preds[f'layer{-1}_preds'] = {'pred_class_logits':out_class, 
-                                                   'pred_mask_logits': out_mask, 'pred_box_logits': out_box,
-                                                   'grounding_score': gscore_by_batch}
+                                                   'pred_mask_logits': out_mask, 'pred_box_logits': out_box}
+                
+        if not self.is_pretraining_seg:
+            node_memories, edge_memories = self.batching_memory(nodes_batch_ids=node_batch_ids, edges_batch_ids=edge_batch_ids,
+                                                            memories=output.permute(1,0,2), memories_pos=query_embed.permute(1,0,2))
+            node_gscore = self.decoder_reason_layer(node_gscore,
+                                                node_batch_ids=node_batch_ids.clone(), edge_batch_ids=edge_batch_ids.clone(), 
+                                                node_seg_ids=node_seg_ids.clone(), edge_seg_ids=edge_seg_ids.clone(),
+                                                node_feats=node_feats.clone(), edge_feats=edge_feats.clone(),
+                                                edge_index=edge_index.clone(),
+                                                node_subseqs=[nsub.clone() for nsub in node_subseqs],
+                                                node_dsends=[ndes.clone() for ndes in node_dsends],
+                                                ys_node_feats=ys_node_feats.clone(),
+                                                yp_node_feats=yp_node_feats.clone(),
+                                                node_memories=node_memories,
+                                                edge_memories=edge_memories) # V nq
+            gscore_by_batch = self.get_batch_gscore(node_gscore, node_batch_ids, bt=bt)
+            decoder_layer_preds[f'layer{-1}_preds']['grounding_score'] = gscore_by_batch
 
         for i in range(self.obj_decoder_nlayers):
             level_index = i % len(self.obj_decoder_used_scales)
@@ -3056,18 +3135,26 @@ class AMR_v0_detOnlyObj_Grounding_AsObjLoss(AMR_v0_detOnlyObj_Grounding):
             output = self.obj_decoder_ffn_layers[i](
                 output # n bt c
             )
-            # bt n c
-            out_class, out_mask, out_box, attn_mask, gscore_by_batch = \
-                self.forward_objdecoder_heads(output, conved_features, attn_mask_target_size=size_list[(i + 1) % len(self.obj_decoder_used_scales)],
-                                          nodes_batch_ids=nodes_batch_ids.clone(), edge_batch_ids=edges_batch_ids.clone(),
-                                            node_seg_ids=node_seg_ids.clone(), edge_seg_ids=edges_seg_ids.clone(),
+            out_class, out_mask, out_box, attn_mask = self.forward_objdecoder_heads(output, conved_features, attn_mask_target_size=size_list[(i + 1) % len(self.obj_decoder_used_scales)],)
+            decoder_layer_preds[f'layer{i}_preds'] = {'pred_class_logits':out_class, 
+                                                    'pred_mask_logits': out_mask, 'pred_box_logits': out_box,}             
+            if not self.is_pretraining_seg:
+                node_memories, edge_memories = self.batching_memory(node_batch_ids, edge_batch_ids,
+                                                        memories=output.permute(1,0,2), memories_pos=query_embed.permute(1,0,2))
+                node_gscore = self.decoder_reason_layer(node_gscore,
+                                            node_batch_ids=node_batch_ids.clone(), edge_batch_ids=edge_batch_ids.clone(), 
+                                            node_seg_ids=node_seg_ids.clone(), edge_seg_ids=edge_seg_ids.clone(),
                                             node_feats=node_feats.clone(), edge_feats=edge_feats.clone(),
                                             edge_index=edge_index.clone(),
                                             node_subseqs=[nsub.clone() for nsub in node_subseqs],
-                                            node_dsends=[ndes.clone() for ndes in node_dsends])
-            decoder_layer_preds[f'layer{i}_preds'] = {'pred_class_logits':out_class, 
-                                                    'pred_mask_logits': out_mask, 'pred_box_logits': out_box,
-                                                    'grounding_score': gscore_by_batch}
+                                            node_dsends=[ndes.clone() for ndes in node_dsends],
+                                            ys_node_feats=ys_node_feats.clone(),
+                                            yp_node_feats=yp_node_feats.clone(),
+                                            node_memories=node_memories,
+                                            edge_memories=edge_memories) # V nq
+                gscore_by_batch = self.get_batch_gscore(node_gscore, node_batch_ids, bt=bt)
+                decoder_layer_preds[f'layer{i}_preds']['grounding_score'] = gscore_by_batch
+            
         assert len(decoder_layer_preds) == self.obj_decoder_nlayers + 1
         return {'objdecoder_objseg': decoder_layer_preds}
 
