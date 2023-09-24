@@ -3080,6 +3080,7 @@ class AMR_v0_detOnlyObj_Grounding_AsObjLoss(AMR_v0_detOnlyObj_Grounding):
         memories_pad_masks = [rearrange(mem_pad, 'bt h w -> bt (h w)') for mem_pad in memories_pad_masks]
         memories = [mem_feat + self.obj_decoder_level_embed.weight[i][None, None, :] for i, mem_feat in enumerate(memories)]
         query_embed = self.obj_decoder_query_embed.weight.unsqueeze(1).repeat(1, bt, 1) # n bt c
+        output = self.obj_decoder_query_feats.weight.unsqueeze(1).repeat(1, bt, 1)
         decoder_layer_preds = {}
         if not self.is_pretraining_seg:
             node_batch_ids, edge_batch_ids,\
@@ -3093,7 +3094,6 @@ class AMR_v0_detOnlyObj_Grounding_AsObjLoss(AMR_v0_detOnlyObj_Grounding):
                                                             node_dsends=node_dsends)
             node_gscore = torch.zeros([len(node_batch_ids), len(output)], device=output.device)
 
-        output = self.obj_decoder_query_feats.weight.unsqueeze(1).repeat(1, bt, 1)
         out_class, out_mask, out_box, attn_mask = self.forward_objdecoder_heads(output, conved_features, attn_mask_target_size=size_list[0])
         decoder_layer_preds[f'layer{-1}_preds'] = {'pred_class_logits':out_class, 
                                                    'pred_mask_logits': out_mask, 'pred_box_logits': out_box}
