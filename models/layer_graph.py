@@ -850,6 +850,79 @@ def batching_graph(amrs,
             node_feats, edge_feats,\
             node_memories, edge_memories, edge_index, node_subseqs, node_dsends
 
+def batching_graph_without_memory(amrs,
+                    amr_token_feats,
+                    amr_seg_ids,
+                    text_feats, node_alignments
+                    ):
+    """
+    Args:
+        amrs: list[Graph]
+        amr_token_feats: b (v+e)max c
+        amr_seg_ids: b (v+e)max
+        memories: b nq c
+        memories_pos: b nq c
+        text_feats: b smax c
+        node_alignments: list[list[int], si] batch
+    Returns:
+        _type_: _description_
+    """
+    device = amr_token_feats.device
+    nodes_batch_ids = []
+    edges_batch_ids = []
+    num_nodes_by_batch = [g.num_nodes for g in amrs]
+    for bch_idx, nnode in enumerate(num_nodes_by_batch):
+        nodes_batch_ids.extend([bch_idx] * nnode)
+    num_edges_by_batch = [g.num_edges for g in amrs]
+    for bch_idx, nedge in enumerate(num_edges_by_batch):
+        edges_batch_ids.extend([bch_idx] * nedge)
+    nodes_batch_ids = torch.tensor(nodes_batch_ids, device=device)
+    edges_batch_ids = torch.tensor(edges_batch_ids, device=device)
+    batched_amrs = Batch.from_data_list(amrs) # concate
+    edge_index = batched_amrs.edge_index.to(device)
+
+    node_feats = torch.cat([b_f[seg_ids>0] for b_f, seg_ids in zip(amr_token_feats, amr_seg_ids)], dim=0)
+    edge_feats  = torch.cat([b_f[seg_ids<0] for b_f, seg_ids in zip(amr_token_feats, amr_seg_ids)], dim=0)
+    node_seg_ids = torch.cat([seg_ids[seg_ids>0] for seg_ids in amr_seg_ids], dim=0)
+    edges_seg_ids = torch.cat([seg_ids[seg_ids<0] for seg_ids in amr_seg_ids], dim=0)
+
+    node_subseqs = [] # list[s c], V
+    for btc_text_feat, btc_node_alis in zip(text_feats, node_alignments):
+        # s c, list[int]
+        for node_ali in btc_node_alis:
+            node_subseqs.append(btc_text_feat[:(node_ali+1)])
+
+    node_dsends = [] # list[si c], V
+    icgd = list(zip(edge_index[0, :].tolist(), edge_index[1, :].tolist()))
+    nx_graph = nx.DiGraph(icgd)
+    for node_id in range(len(nodes_batch_ids)):
+        # s c, list[int]
+        dsends = list(nx.descendants(nx_graph, node_id))
+        dsends = [node_id] + dsends
+        node_dsends.append(node_feats[dsends])  
+
+    return nodes_batch_ids, edges_batch_ids, \
+        node_seg_ids, edges_seg_ids, \
+            node_feats, edge_feats, edge_index, node_subseqs, node_dsends
+
+def batching_memory(nodes_batch_ids,  edges_batch_ids,
+                    memories, # 
+                    memories_pos=None,
+                    ):
+    # V nq c
+    node_memories_feats = torch.stack([memories[bid] for bid in nodes_batch_ids], dim=0)
+    node_memories_poses = torch.stack([memories_pos[bid] for bid in nodes_batch_ids], dim=0) if memories_pos is not None else None
+
+    edge_memories_feats = torch.stack([memories[bid] for bid in edges_batch_ids], dim=0)
+    edge_memories_poses = torch.stack([memories_pos[bid] for bid in edges_batch_ids], dim=0) if memories_pos is not None else None
+
+    node_memories = {'feat': node_memories_feats, 'pos': node_memories_poses}
+    edge_memories = {'feat': edge_memories_feats, 'pos': edge_memories_poses}
+
+
+    return node_memories, edge_memories
+
+
 def build_batch_along_edge(sequence, num_edges_by_batch):
     """
     sequence: b ..
