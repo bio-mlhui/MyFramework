@@ -2888,7 +2888,8 @@ class AMR_v0_detOnlyObj_Grounding_AsObjLoss(AMR_v0_detOnlyObj_Grounding):
                 'mask_threshold': 0.5,
                 },
             is_pretraining_seg=False,
-            detach_refdecoder_memory=False
+            detach_refdecoder_memory=False,
+            layer_if_choose=None
             ) -> None:
         assert refdecoder['trans_layer']['name'] == 'none'
         super().__init__(d_model, max_stride, pt_dir, swint_pretrained_path, swint_freeze, swint_runnning_mode, video_projs, video_feat_scales, amrbart_wordEmbedding_freeze, amrtext_wordEmbedding_proj, fusion, parsing_encoder, loss_weight, tasks, refdecoder, objdecoder, is_pretraining_seg, detach_refdecoder_memory)
@@ -2900,6 +2901,11 @@ class AMR_v0_detOnlyObj_Grounding_AsObjLoss(AMR_v0_detOnlyObj_Grounding):
         from torch_geometric.nn.inits import glorot
         glorot(self.obj_decoder_query_embed.weight)
         glorot(self.obj_decoder_query_feats.weight)
+        if layer_if_choose is None:
+            self.layer_if_choose = [True] * (self.obj_decoder_nlayers + 1)
+        else:
+            self.layer_if_choose = layer_if_choose
+        assert self.layer_if_choose[-2]
 
     def forward_objdecoder_heads(self, output, mask_features, attn_mask_target_size):
                                  
@@ -3097,7 +3103,7 @@ class AMR_v0_detOnlyObj_Grounding_AsObjLoss(AMR_v0_detOnlyObj_Grounding):
         decoder_layer_preds[f'layer{-1}_preds'] = {'pred_class_logits':out_class, 
                                                    'pred_mask_logits': out_mask, 'pred_box_logits': out_box}
                 
-        if not self.is_pretraining_seg:
+        if (not self.is_pretraining_seg) and (self.layer_if_choose[-1]):
             # 没Norm?
             # node_memories, edge_memories = self.batching_memory(nodes_batch_ids=node_batch_ids, edges_batch_ids=edge_batch_ids,
             #                                                 memories=output.permute(1,0,2), memories_pos=query_embed.permute(1,0,2))
@@ -3140,7 +3146,7 @@ class AMR_v0_detOnlyObj_Grounding_AsObjLoss(AMR_v0_detOnlyObj_Grounding):
             out_class, out_mask, out_box, attn_mask = self.forward_objdecoder_heads(output, conved_features, attn_mask_target_size=size_list[(i + 1) % len(self.obj_decoder_used_scales)],)
             decoder_layer_preds[f'layer{i}_preds'] = {'pred_class_logits':out_class, 
                                                     'pred_mask_logits': out_mask, 'pred_box_logits': out_box,}             
-            if not self.is_pretraining_seg:
+            if (not self.is_pretraining_seg) and (self.layer_if_choose[i]):
                 # 没Norm?
                 # node_memories, edge_memories = self.batching_memory(nodes_batch_ids=node_batch_ids, edges_batch_ids=edge_batch_ids,
                 #                                                 memories=output.permute(1,0,2), memories_pos=query_embed.permute(1,0,2))
@@ -3242,9 +3248,10 @@ class AMR_v0_detOnlyObj_Grounding_AsObjLoss(AMR_v0_detOnlyObj_Grounding):
         if self.decoder_reason_layer_choose_who == '第一个':
             for i in range(-1, self.obj_decoder_nlayers):
                 # list[vi nq], b -> b nq
-                layer_gscore = objseg_src[f'layer{i}_preds']['grounding_score']
-                layer_gscore = torch.stack([lg[0] for lg in layer_gscore], dim=0)
-                objseg_src[f'layer{i}_preds']['grounding_score'] = layer_gscore
+                if 'grounding_score' in objseg_src[f'layer{i}_preds']:
+                    layer_gscore = objseg_src[f'layer{i}_preds']['grounding_score']
+                    layer_gscore = torch.stack([lg[0] for lg in layer_gscore], dim=0)
+                    objseg_src[f'layer{i}_preds']['grounding_score'] = layer_gscore
         return objseg_src  
 
     def forward(self, samples : NestedTensor, text_queries, auxiliary, targets, visualize=False):
@@ -3323,7 +3330,7 @@ class AMR_v0_detOnlyObj_Grounding_AsObjLoss(AMR_v0_detOnlyObj_Grounding):
                     classes_losses = AMR_v0_detOnlyObj_Grounding.obj_decoder_class_loss(layer_pred, targets, layer_matching_indices, class_weight)
                     for k in classes_losses.keys():
                         loss_value[k] += layer_weight * classes_losses[k]
-                if loss_weight['objdecoder_choose'] != 0:
+                if (loss_weight['objdecoder_choose'] != 0) and ('grounding_score' in layer_pred):
                     chhose_losses = self.ref_choose_loss(layer_pred, targets, layer_matching_indices, num_ref_boxes)
                     for k in chhose_losses.keys():
                         loss_value[k] += layer_weight * chhose_losses[k]
@@ -6454,7 +6461,8 @@ def amr_v0_detOnlyObj_grounding_asobjLoss(device, configs):
         refdecoder=configs['refdecoder'],
         objdecoder=configs['objdecoder'],
         is_pretraining_seg=configs['is_pretraining_seg'],
-        detach_refdecoder_memory=configs['detach_refdecoder_memory'] if 'detach_refdecoder_memory' in configs else False
+        detach_refdecoder_memory=configs['detach_refdecoder_memory'] if 'detach_refdecoder_memory' in configs else False,
+        layer_if_choose=configs['layer_if_choose'] if 'layer_if_choose' in configs else None
     )
     model.to(device)
 
