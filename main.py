@@ -110,7 +110,7 @@ if __name__=="__main__":
             'project': args.task,
             'group': args.group,
             'name': args.schedule_model_configs,
-            'id': f'{args.task}_{args.group}_{args.schedule_model_configs}_inferbug',
+            'id': f'{args.task}_{args.group}_{args.schedule_model_configs}_inferbug2',
             'mode': 'online',
             'resume': 'must',
             'configs': copy.deepcopy(configs)
@@ -144,7 +144,7 @@ if __name__=="__main__":
             'project': args.task,
             'group': args.group,
             'name': args.schedule_model_configs,
-            'id': f'{args.task}_{args.group}_{args.schedule_model_configs}_inferbug',
+            'id': f'{args.task}_{args.group}_{args.schedule_model_configs}_inferbug2',
             'mode': 'online',
             'resume': 'must',
             'configs': copy.deepcopy(configs)
@@ -157,7 +157,7 @@ if __name__=="__main__":
             'project': args.task,
             'group': args.group,
             'name': args.schedule_model_configs,
-            'id': f'{args.task}_{args.group}_{args.schedule_model_configs}_inferbug',
+            'id': f'{args.task}_{args.group}_{args.schedule_model_configs}_inferbug2',
             'mode': 'online',
             'resume': None,
             'configs': copy.deepcopy(configs)

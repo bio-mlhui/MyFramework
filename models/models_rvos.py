@@ -2256,7 +2256,7 @@ class AMR_v0_detOnlyObj_Grounding(nn.Module):
                 tgt=output,  # n bt c
                 memory=memories[level_index], # hw bt  c
                 memory_mask=attn_mask, # bt*head n hw
-                memory_key_padding_mask=memories_pad_masks[level_index], # bt hw
+                memory_key_padding_mask=None, # bt hw
                 pos=memories_poses[level_index],  # hw bt  c
                 query_pos=query_embed, # n bt  c
             )
