@@ -846,7 +846,7 @@ def batching_graph(amrs,
         edges_batch_ids.extend([bch_idx] * nedge)
     nodes_batch_ids = torch.tensor(nodes_batch_ids, device=device)
     edges_batch_ids = torch.tensor(edges_batch_ids, device=device)
-    edge_depth = get_edge_depth(amrs) # list[Ei], batch
+    # edge_depth = get_edge_depth(amrs) # list[Ei], batch
     batched_amrs = Batch.from_data_list(amrs) # concate
     edge_index = batched_amrs.edge_index.to(device)
 
