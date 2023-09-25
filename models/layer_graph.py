@@ -883,7 +883,7 @@ def batching_graph(amrs,
     return nodes_batch_ids, edges_batch_ids, \
         node_seg_ids, edges_seg_ids, \
             node_feats, edge_feats,\
-            node_memories, edge_memories, edge_index, edge_depth, node_subseqs, node_dsends
+            node_memories, edge_memories, edge_index, node_subseqs, node_dsends
 
 def build_batch_along_edge(sequence, num_edges_by_batch):
     """
