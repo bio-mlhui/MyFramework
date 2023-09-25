@@ -440,7 +440,7 @@ def a2ds_schedule(configs, is_distributed, process_id, num_processes):
 
     
     if amr_are_used:
-        amr_legi_augs = ['fixsize', 'justnormalize', 'resize', 'hflip_fixsize']
+        amr_legi_augs = ['fixsize', 'justnormalize', 'resize', 'hflip_fixsize', 'hflip_ResizeSmaller', "resizeSmaller"]
         assert train_augmentation['name'] in amr_legi_augs
         assert validate_augmentation['name'] in amr_legi_augs
     

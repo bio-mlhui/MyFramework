@@ -1941,6 +1941,7 @@ class AMR_v0_detectObj_onlyObj(AMR_v0_detectObj):
                 'check_visualze': check_visualize,
                  'objdecoder_objseg': objdecoder_layer_preds } 
 from .layer_graph import batching_graph
+import networkx as nx
 class AMR_v0_detOnlyObj_Grounding(nn.Module):
     def __init__(self, 
                  d_model=256,
@@ -2376,7 +2377,7 @@ class AMR_v0_detOnlyObj_Grounding(nn.Module):
             node_seg_ids, edges_seg_ids, \
             node_feats, edge_feats, \
             node_memories,edge_memories,\
-            edge_index, node_subseqs, node_dsends = \
+            edge_index, edge_depth, node_subseqs, node_dsends = \
               batching_graph(amrs, amr_token_feats, amr_token_seg_ids, memories.permute(1,0,2).clone(), memories_pos.permute(1,0,2).clone(),
                             text_feats, node_alignments) # memories是dict
 
@@ -2786,7 +2787,7 @@ class AMR_v0_detOnlyObj_Grounding(nn.Module):
             (torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64))
             for i, j in indices
         ]
-import networkx as nx
+
 class AMR_v0_detOnlyObj_Grounding_AsObjLoss(AMR_v0_detOnlyObj_Grounding):
     def __init__(self, 
                 d_model=256,
@@ -3357,6 +3358,220 @@ class AMR_v0_detOnlyObj_Grounding_AsObjLoss(AMR_v0_detOnlyObj_Grounding):
         choose_loss = choose_loss.sum() / num_boxes
         return {'objdecoder_choose': choose_loss}
 
+class AMR_v0_detOnlyObj_Groudning_multiReason(AMR_v0_detOnlyObj_Grounding):
+    def __init__(self, 
+                d_model=256,
+                max_stride=64,
+                pt_dir='/home/xhh/pt',
+                # video encoder
+                swint_pretrained_path='pretrained_swin_transformer/swin_tiny_patch244_window877_kinetics400_1k.pth',
+                swint_freeze=True,
+                swint_runnning_mode='train',
+                video_projs = [
+                {'name': 'conv2d', 'in_channels': 96,  'out_channels': 256, 'kernel_size': 3, 'padding':1, 'bias':True,},
+                {'name': 'conv2d', 'in_channels': 192, 'out_channels': 256, 'kernel_size': 1, 'bias':True,},
+                {'name': 'conv2d', 'in_channels': 384, 'out_channels': 256, 'kernel_size': 1, 'bias':True,},
+                {'name': 'conv2d', 'in_channels': 768, 'out_channels': 256, 'kernel_size': 1, 'bias':True,},
+                {'name': 'conv2d', 'in_channels': 768, 'out_channels': 256, 'kernel_size': 3, 'stride':2, 'padding': 1, \
+                    'bias':True,}],
+            video_feat_scales=[[1,4],[1,8],[1,16],[1,32], [1,64]],
+
+            # amrtext
+            amrbart_wordEmbedding_freeze=True,
+            amrtext_wordEmbedding_proj = {
+                'name': 'FeatureResizer',
+                'input_feat_size': 1024,
+                'output_feat_size': 256,
+                'dropout':0,
+                'do_ln':True},
+            
+            fusion={
+                'name': 'VisionLanguageFusionModule',
+                'd_model':256,
+                'nheads': 8,
+                'dropout':0.},
+            parsing_encoder={
+                'name':'deform_video_2d_fpn',
+                'd_ffn': 2048,
+                'dropout':0.,
+                'activation': 'relu',
+                'nheads': 8,
+                'fused_scales':[[1,8],[1,16],[1,32],[1,64]],
+                'fpn_strides': [[1,4],[1,8]],
+                'npoints':4,
+                'nlayers': 6,},
+            loss_weight={'refdecoder_mask': 5,
+                            'refdecoder_dice': 5,
+                            'refdecoder_giou': 0,
+                            'refdecoder_bbox': 0,
+                },
+            tasks = {'refdecoder_refseg': {'layer_weights': {-1:1., 0:1., 1:1., 2:1., 3:1., 4:1., 5:1., 6:1., 7:1., 8:1.,},
+                                            },
+            },
+            refdecoder={
+                'nlayers': 9,
+                'amr_cross_video_layer':{
+                    'name': 'cross_attention',
+                    'amr_cross': ['只有2/3','只有2/3','只有2/3','只有2/3','只有2/3','只有2/3','只有2/3','只有2/3','只有2/3',],
+                    'd_model': 256,
+                    'nhead': 8,
+                    'dropout': 0.,
+                },
+                'amr_self_layer':{
+                    'name': 'graph_layer_v1', # 只更新node
+                    'd_model': 256,
+                    'flow': 'source_to_target',
+                    'aggr': 'min'
+                },
+                # add ffn layer
+                'ffn_layer':{
+                    'name': 'ffn',
+                    'd_model': 256,
+                },
+                'used_scales': [[1,32],[1,16],[1,8]],
+                'conved_scale': [1,4],
+                'choose_who': '第一个'
+                },
+            objdecoder={ 
+                'num_classes': 7,
+                'nqueries': 100,
+                'nlayers': 9,
+                'cross_layer':{
+                    'name': 'cross_attention',
+                    'd_model': 256,
+                    'nhead': 8,
+                    'dropout': 0.,
+                },
+                'self_layer':{
+                    'name': 'self_attention',
+                    'd_model': 256,
+                    'd_model': 256,
+                    'nhead': 8,
+                    'dropout': 0.,
+                },
+                'ffn_layer':{
+                    'name': 'ffn',
+                    'd_model': 256,
+                },
+                'used_scales': [[1,32],[1,16],[1,8]],
+                'conved_scale': [1,4],
+                'mask_out_stride': 4,
+                'mask_threshold': 0.5,
+                },
+            is_pretraining_seg=False,
+            detach_refdecoder_memory=False
+            ) -> None:
+        super().__init__(d_model, max_stride, pt_dir, swint_pretrained_path, swint_freeze, swint_runnning_mode, video_projs, video_feat_scales, amrbart_wordEmbedding_freeze, amrtext_wordEmbedding_proj, fusion, parsing_encoder, loss_weight, tasks, refdecoder, objdecoder, is_pretraining_seg, detach_refdecoder_memory)
+
+
+    def model_outputs(self, samples : NestedTensor, text_queries, auxiliary, perFrame_has_ann):
+        """ text_auxiliary
+        'amrs': list[T(2 E_i)]
+        'seg_ids': b (V+E)max
+        'token_splits': list[list[int]]
+        'tokens_ids': b max
+        """
+        # 你想visualize的东西
+        check_visualize = {} 
+        nf, batch_size, *_, device = *samples.tensors.shape, samples.tensors.device
+        # b T c H W
+        multiscales, multiscales_pad_masks, multiscales_poses = self.encode_video(samples)
+        # list[Graph], b (V+E)max c, b (V+E)max 
+        amrs, amr_token_feats, amr_token_seg_ids, text_feats, text_pad_masks, node_alignments = self.encode_text(text_queries, auxiliary, device)
+        text_pos = self.text1d_pos(text_pad_masks, hidden_dim=text_feats.shape[-1]).permute(0, 2, 1) # b smax c
+        fusion_mem = torch.cat([text_feats, amr_token_feats], dim=1) 
+        fusion_mem_pad_mask = torch.cat([text_pad_masks, amr_token_seg_ids==0], dim=-1)
+        fusion_mem_pos = torch.cat([text_pos, torch.zeros_like(amr_token_feats)], dim=1)     
+        for lvl, (feat, pad_mask, poses) in enumerate(zip(multiscales, multiscales_pad_masks, multiscales_poses)):
+            bs, nf, _, h, w = feat.shape
+            feat = rearrange(feat, 'b t c h w -> (t h w) b c')
+            poses = rearrange(poses, 'b t c h w -> (t h w) b c')
+            feat, attn_weight = self.cross_product(tgt=feat,
+                                                    memory=fusion_mem.permute(1,0,2), 
+                                                    memory_key_padding_mask=fusion_mem_pad_mask,
+                                                    pos=fusion_mem_pos.permute(1,0,2), 
+                                                    query_pos=poses)
+            check_visualize[f'scale{lvl} attention weights'] = attn_weight
+            multiscales[lvl] = rearrange(feat, '(t h w) b c -> b t c h w',t=nf, h=h,w=w)
+            
+        # 从这里开始变成2d， 只关注每一帧
+        nf = multiscales[0].shape[1]
+        # b T c h w -> bT c h w -> bt c h w
+        for idx, scale_feat in enumerate(multiscales):
+            multiscales[idx] = scale_feat.flatten(0, 1)[perFrame_has_ann]
+        for idx, scale_pad in enumerate(multiscales_pad_masks):
+            multiscales_pad_masks[idx] = scale_pad.flatten(0,1)[perFrame_has_ann]
+        for idx, scale_pos in enumerate(multiscales_poses):
+            multiscales_poses[idx] = scale_pos.flatten(0,1)[perFrame_has_ann]
+        bt = multiscales[0].shape[0]
+        # b s c -> bT s c, bT s -> bt s c, bt s
+        amr_token_feats = repeat(amr_token_feats, 'b s c -> (b t) s c', t=nf)[perFrame_has_ann]
+        amr_token_seg_ids = repeat(amr_token_seg_ids, 'b s -> (b t) s', t=nf)[perFrame_has_ann]
+        text_feats = repeat(text_feats, 'b s c -> (b t) s c',t=nf)[perFrame_has_ann]
+        # list[list[int], vi], batch
+        # batch -> bt
+        repeated_node_alignments = [] 
+        for idx in range(batch_size):
+            for _ in range(nf):
+                repeated_node_alignments.append(copy.deepcopy(node_alignments[idx]))
+        filtered_rnas = []
+        for idx, hsnn in enumerate(perFrame_has_ann):
+            if hsnn:
+                filtered_rnas.append(repeated_node_alignments[idx])
+        assert len(filtered_rnas) != 0
+        node_alignments = filtered_rnas
+        
+        repeated_amrs = [] # bT -> bt
+        for idx in range(batch_size):
+            for _ in range(nf):
+                repeated_amrs.append(copy.deepcopy(amrs[idx]))
+        filtered_amrs = []
+        for idx, hsnn in enumerate(perFrame_has_ann):
+            if hsnn:
+                filtered_amrs.append(repeated_amrs[idx])
+        assert len(filtered_amrs) != 0
+        amrs = filtered_amrs
+        
+        # 多模态特征进一步parsing  # bt hw_sigma head num_scale num_point 2
+        # n bt c, bt n,
+        multiscales, _, _ = self.obj_parsing_encoder(multiscales, multiscales_pad_masks, multiscales_poses, self.video_feat_scales)
+
+        # n bt c, bt n,
+        obj_queries, query_embed, objdecoder_layer_preds = self.forward_obj_decoder([scale_feat.clone() for scale_feat in multiscales],
+                                                                                        [scale_pad.clone() for scale_pad in multiscales_pad_masks],
+                                                                                        [scale_pos.clone() for scale_pos in multiscales_poses])
+        if self.is_pretraining_seg:
+            return {'objdecoder_objseg': objdecoder_layer_preds}
+        if self.detach_refdecoder_memory:
+            memories = obj_queries.detach() # nq bt c
+            memories_pos = query_embed.detach() # nq bt c
+        else:
+            memories = obj_queries
+            memories_pos = query_embed
+        nodes_batch_ids, edges_batch_ids,\
+            node_seg_ids, edges_seg_ids, \
+            node_feats, edge_feats, \
+            node_memories,edge_memories,\
+            edge_index, edge_depth, node_subseqs, node_dsends = \
+              batching_graph(amrs, amr_token_feats, amr_token_seg_ids, memories.permute(1,0,2).clone(), memories_pos.permute(1,0,2).clone(),
+                            text_feats, node_alignments) # memories是dict
+
+        decoder_layer_preds = {}
+        # list[list[nq], number_i], batch
+        grounding_scores = self.decoder_reason_layer(node_batch_ids=nodes_batch_ids, edge_batch_ids=edges_batch_ids, 
+                                                node_seg_ids=node_seg_ids, edge_seg_ids=edges_seg_ids,
+                                                node_feats=node_feats, edge_feats=edge_feats,
+                                                node_memories=node_memories, edge_memories=edge_memories,
+                                                edge_index=edge_index,
+                                                node_subseqs=node_subseqs,
+                                                node_dsends=node_dsends) 
+        decoder_layer_preds[f'layer{-1}_preds'] = {'grounding_scores': grounding_scores}
+
+        assert self.decoder_trans_layers is None
+        return {'refdecoder_refseg': decoder_layer_preds,
+                # TODO: 添加一些其他可以加loss, 加postprocessing的东西, 输出的接口和trainer evaluation一致;, 输出的接口和task loss一致
+                'check_visualze': check_visualize,
+                 'objdecoder_objseg': objdecoder_layer_preds } 
 
 
 # 只有obj进行fusion
