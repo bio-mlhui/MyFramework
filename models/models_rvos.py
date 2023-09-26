@@ -2303,21 +2303,22 @@ class AMR_v0_detOnlyObj_Grounding(nn.Module):
         multiscales, multiscales_pad_masks, multiscales_poses = self.encode_video(samples)
         # list[Graph], b (V+E)max c, b (V+E)max 
         amrs, amr_token_feats, amr_token_seg_ids, text_feats, text_pad_masks, node_alignments = self.encode_text(text_queries, auxiliary, device)
-        text_pos = self.text1d_pos(text_pad_masks, hidden_dim=text_feats.shape[-1]).permute(0, 2, 1) # b smax c
-        fusion_mem = torch.cat([text_feats, amr_token_feats], dim=1) 
-        fusion_mem_pad_mask = torch.cat([text_pad_masks, amr_token_seg_ids==0], dim=-1)
-        fusion_mem_pos = torch.cat([text_pos, torch.zeros_like(amr_token_feats)], dim=1)     
-        for lvl, (feat, pad_mask, poses) in enumerate(zip(multiscales, multiscales_pad_masks, multiscales_poses)):
-            bs, nf, _, h, w = feat.shape
-            feat = rearrange(feat, 'b t c h w -> (t h w) b c')
-            poses = rearrange(poses, 'b t c h w -> (t h w) b c')
-            feat, attn_weight = self.cross_product(tgt=feat,
-                                                    memory=fusion_mem.permute(1,0,2), 
-                                                    memory_key_padding_mask=fusion_mem_pad_mask,
-                                                    pos=fusion_mem_pos.permute(1,0,2), 
-                                                    query_pos=poses)
-            check_visualize[f'scale{lvl} attention weights'] = attn_weight
-            multiscales[lvl] = rearrange(feat, '(t h w) b c -> b t c h w',t=nf, h=h,w=w)
+        text_pos = self.text1d_pos(text_pad_masks, hidden_dim=text_feats.shape[-1]).permute(0, 2, 1) # b smax c  
+        if self.cross_product is not None:
+            fusion_mem = torch.cat([text_feats, amr_token_feats], dim=1) 
+            fusion_mem_pad_mask = torch.cat([text_pad_masks, amr_token_seg_ids==0], dim=-1)
+            fusion_mem_pos = torch.cat([text_pos, torch.zeros_like(amr_token_feats)], dim=1)   
+            for lvl, (feat, pad_mask, poses) in enumerate(zip(multiscales, multiscales_pad_masks, multiscales_poses)):
+                bs, nf, _, h, w = feat.shape
+                feat = rearrange(feat, 'b t c h w -> (t h w) b c')
+                poses = rearrange(poses, 'b t c h w -> (t h w) b c')
+                feat, attn_weight = self.cross_product(tgt=feat,
+                                                        memory=fusion_mem.permute(1,0,2), 
+                                                        memory_key_padding_mask=fusion_mem_pad_mask,
+                                                        pos=fusion_mem_pos.permute(1,0,2), 
+                                                        query_pos=poses)
+                check_visualize[f'scale{lvl} attention weights'] = attn_weight
+                multiscales[lvl] = rearrange(feat, '(t h w) b c -> b t c h w',t=nf, h=h,w=w)
             
         # 从这里开始变成2d， 只关注每一帧
         nf = multiscales[0].shape[1]
