@@ -2890,9 +2890,14 @@ class AMR_v0_detOnlyObj_Grounding_weightedQuery(AMR_v0_detOnlyObj_Grounding):
                     'mask_threshold': 0.5,
                     },
                 is_pretraining_seg=False,
-                detach_refdecoder_memory=False
+                detach_refdecoder_memory=False,
+                adpt=None
                 ) -> None:
         super().__init__(d_model, max_stride, pt_dir, swint_pretrained_path, swint_freeze, swint_runnning_mode, video_projs, video_feat_scales, amrbart_wordEmbedding_freeze, amrtext_wordEmbedding_proj, fusion, parsing_encoder, loss_weight, tasks, refdecoder, objdecoder, is_pretraining_seg, detach_refdecoder_memory)
+        self.use_adpt = False
+        if adpt is not None:
+            self.use_adpt = True
+            self.adpt_param = adpt
 
     def forward_obj_decoder(self, memories, memories_poses, memories_pad_masks, conved_features):
         # bt c h w -> hw bt c,  cross attention里video不用padding mask
@@ -3103,7 +3108,30 @@ class AMR_v0_detOnlyObj_Grounding_weightedQuery(AMR_v0_detOnlyObj_Grounding):
 
         if not self.is_pretraining_seg:
             refseg_src = model_outs['refdecoder_refseg']
-            loss_value_dict.update(self.refdecoder_refseg_loss(refseg_src, targets))
+            refseg_losses = self.refdecoder_refseg_loss(refseg_src, targets)
+            if self.use_adpt:
+                # list[([], [])], batch
+                objdecoder_last_matching_res = matching_result[-1]
+                target_masks = obj_decoder_targets['masks'] # bt n H W
+                objseg_pred_masks = objseg_src[f'layer{self.obj_decoder_nlayers-1}_preds']['pred_mask_logits'].detach()
+                objseg_pred_masks = (objseg_pred_masks.sigmoid() > 0.5)
+                ious = []
+                for btc_idx, (src_indices, tgt_indices) in enumerate(objdecoder_last_matching_res):
+                    btc_tgt_masks = target_masks[btc_idx][tgt_indices].flatten(1).float() # n hw
+                    btc_src_masks = objseg_pred_masks[btc_idx][src_indices].flatten(1).float() # n hw
+                    numerator = (btc_src_masks * btc_tgt_masks).sum(1)
+                    denominator = btc_src_masks.sum(-1) + btc_tgt_masks.sum(-1)
+                    iou = numerator / (denominator + 1e-5) # n
+                    for iiou in iou:
+                        assert (iiou <= 1.) and (iiou >=0.)
+                    ious.append(iou)
+                mean_iou = torch.cat(ious).mean() # 0-1
+                weight = self.get_adpt_weight(mean_iou)
+            else:
+                weight = 1.
+            for loss_key, loss_value in refseg_losses.items():
+                refseg_losses[loss_key] = loss_value * weight
+            loss_value_dict.update(refseg_losses)
 
         loss = sum((loss_value_dict[k] * self.loss_weight[k] for k in loss_value_dict.keys()))
         if not math.isfinite(loss.item()):
@@ -3116,6 +3144,14 @@ class AMR_v0_detOnlyObj_Grounding_weightedQuery(AMR_v0_detOnlyObj_Grounding):
         grad_total_norm = get_total_grad_norm(self.parameters(), norm_type=2)
         return loss_dict_unscaled, loss_dict_scaled, grad_total_norm 
 
+    def get_adpt_weight(self, mean_iou):
+
+        if self.adpt_param['name'] == 'sigmoid':
+            gamma = self.adpt_param['gamma']
+            center =self.adpt_param['center']
+            return 1 / (1 + math.exp(-gamma*(mean_iou - center)))
+        else:
+            raise ValueError()
 
     @torch.no_grad()
     def sample(self, samples, text_queries, auxiliary, targets, visualize=False):
@@ -7165,7 +7201,8 @@ def amr_v0_detOnlyObj_grounding_weightedquery(device, configs):
         refdecoder=configs['refdecoder'],
         objdecoder=configs['objdecoder'],
         is_pretraining_seg=configs['is_pretraining_seg'],
-        detach_refdecoder_memory=configs['detach_refdecoder_memory'] if 'detach_refdecoder_memory' in configs else False
+        detach_refdecoder_memory=configs['detach_refdecoder_memory'] if 'detach_refdecoder_memory' in configs else False,
+        adpt=configs['adpt'] if 'adpt' in configs else None
     )
     model.to(device)
 
