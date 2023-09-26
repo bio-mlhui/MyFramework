@@ -2789,6 +2789,492 @@ class AMR_v0_detOnlyObj_Grounding(nn.Module):
             for i, j in indices
         ]
 
+class AMR_v0_detOnlyObj_Grounding_weightedQuery(AMR_v0_detOnlyObj_Grounding):
+    def __init__(self, 
+                 d_model=256,
+                 max_stride=64,
+                 pt_dir='/home/xhh/pt',
+                 # video encoder
+                 swint_pretrained_path='pretrained_swin_transformer/swin_tiny_patch244_window877_kinetics400_1k.pth',
+                 swint_freeze=True,
+                 swint_runnning_mode='train',
+                 video_projs = [
+                    {'name': 'conv2d', 'in_channels': 96,  'out_channels': 256, 'kernel_size': 3, 'padding':1, 'bias':True,},
+                    {'name': 'conv2d', 'in_channels': 192, 'out_channels': 256, 'kernel_size': 1, 'bias':True,},
+                    {'name': 'conv2d', 'in_channels': 384, 'out_channels': 256, 'kernel_size': 1, 'bias':True,},
+                    {'name': 'conv2d', 'in_channels': 768, 'out_channels': 256, 'kernel_size': 1, 'bias':True,},
+                    {'name': 'conv2d', 'in_channels': 768, 'out_channels': 256, 'kernel_size': 3, 'stride':2, 'padding': 1, \
+                        'bias':True,}],
+                video_feat_scales=[[1,4],[1,8],[1,16],[1,32], [1,64]],
+
+                # amrtext
+                amrbart_wordEmbedding_freeze=True,
+                amrtext_wordEmbedding_proj = {
+                    'name': 'FeatureResizer',
+                    'input_feat_size': 1024,
+                    'output_feat_size': 256,
+                    'dropout':0,
+                    'do_ln':True},
+                
+                fusion={
+                    'name': 'VisionLanguageFusionModule',
+                    'd_model':256,
+                    'nheads': 8,
+                    'dropout':0.},
+                parsing_encoder={
+                    'name':'deform_video_2d_fpn',
+                    'd_ffn': 2048,
+                    'dropout':0.,
+                    'activation': 'relu',
+                    'nheads': 8,
+                    'fused_scales':[[1,8],[1,16],[1,32],[1,64]],
+                    'fpn_strides': [[1,4],[1,8]],
+                    'npoints':4,
+                    'nlayers': 6,},
+                loss_weight={'refdecoder_mask': 5,
+                             'refdecoder_dice': 5,
+                             'refdecoder_giou': 0,
+                             'refdecoder_bbox': 0,
+                 },
+                tasks = {'refdecoder_refseg': {'layer_weights': {-1:1., 0:1., 1:1., 2:1., 3:1., 4:1., 5:1., 6:1., 7:1., 8:1.,},
+                                                },
+                },
+                refdecoder={
+                    'nlayers': 9,
+                    'amr_cross_video_layer':{
+                        'name': 'cross_attention',
+                        'amr_cross': ['只有2/3','只有2/3','只有2/3','只有2/3','只有2/3','只有2/3','只有2/3','只有2/3','只有2/3',],
+                        'd_model': 256,
+                        'nhead': 8,
+                        'dropout': 0.,
+                    },
+                    'amr_self_layer':{
+                        'name': 'graph_layer_v1', # 只更新node
+                        'd_model': 256,
+                        'flow': 'source_to_target',
+                        'aggr': 'min'
+                    },
+                    # add ffn layer
+                    'ffn_layer':{
+                        'name': 'ffn',
+                        'd_model': 256,
+                    },
+                    'used_scales': [[1,32],[1,16],[1,8]],
+                    'conved_scale': [1,4],
+                    'choose_who': '第一个'
+                    },
+                objdecoder={ 
+                    'num_classes': 7,
+                    'nqueries': 100,
+                    'nlayers': 9,
+                    'cross_layer':{
+                        'name': 'cross_attention',
+                        'd_model': 256,
+                        'nhead': 8,
+                        'dropout': 0.,
+                    },
+                    'self_layer':{
+                        'name': 'self_attention',
+                        'd_model': 256,
+                        'd_model': 256,
+                        'nhead': 8,
+                        'dropout': 0.,
+                    },
+                    'ffn_layer':{
+                        'name': 'ffn',
+                        'd_model': 256,
+                    },
+                    'used_scales': [[1,32],[1,16],[1,8]],
+                    'conved_scale': [1,4],
+                    'mask_out_stride': 4,
+                    'mask_threshold': 0.5,
+                    },
+                is_pretraining_seg=False,
+                detach_refdecoder_memory=False
+                ) -> None:
+        super().__init__(d_model, max_stride, pt_dir, swint_pretrained_path, swint_freeze, swint_runnning_mode, video_projs, video_feat_scales, amrbart_wordEmbedding_freeze, amrtext_wordEmbedding_proj, fusion, parsing_encoder, loss_weight, tasks, refdecoder, objdecoder, is_pretraining_seg, detach_refdecoder_memory)
+
+    def forward_obj_decoder(self, memories, memories_poses, memories_pad_masks, conved_features):
+        # bt c h w -> hw bt c,  cross attention里video不用padding mask
+        bt = memories[0].shape[0]
+        size_list = [mem_feat.shape[-2:] for mem_feat in memories]
+        memories = [rearrange(mem_feat, 'bt c h w -> (h w) bt c') for mem_feat in memories]
+        memories_poses = [rearrange(mem_pos, 'bt c h w -> (h w) bt c') for mem_pos in memories_poses]
+        memories_pad_masks = [rearrange(mem_pad, 'bt h w -> bt (h w)') for mem_pad in memories_pad_masks]
+        memories = [mem_feat + self.obj_decoder_level_embed.weight[i][None, None, :] for i, mem_feat in enumerate(memories)]
+        query_embed = self.obj_decoder_query_embed.weight.unsqueeze(1).repeat(1, bt, 1) # n bt c
+        output = self.obj_decoder_query_feats.weight.unsqueeze(1).repeat(1, bt, 1)
+        decoder_layer_preds = {}
+        out_class, out_mask, out_box, attn_mask = self.forward_objdecoder_heads(output, conved_features, attn_mask_target_size=size_list[0])
+        decoder_layer_preds[f'layer{-1}_preds'] = {'pred_class_logits':out_class, 'pred_mask_logits': out_mask, 'pred_box_logits': out_box, 'queries':output.clone() }
+        for i in range(self.obj_decoder_nlayers):
+            level_index = i % len(self.obj_decoder_used_scales)
+            attn_mask[torch.where(attn_mask.sum(-1) == attn_mask.shape[-1])] = False 
+            output = self.obj_decoder_cross_video_layers[i](
+                tgt=output,  # n bt c
+                memory=memories[level_index], # hw bt  c
+                memory_mask=attn_mask, # bt*head n hw
+                memory_key_padding_mask=None, # bt hw
+                pos=memories_poses[level_index],  # hw bt  c
+                query_pos=query_embed, # n bt  c
+            )
+            output = self.obj_decoder_self_layers[i](
+                output, # n bt  c
+                tgt_mask=None,
+                tgt_key_padding_mask=None,
+                query_pos=query_embed, # n bt c
+            )
+            output = self.obj_decoder_ffn_layers[i](
+                output # n bt c
+            )
+            # bt n c
+            out_class, out_mask, out_box, attn_mask = self.forward_objdecoder_heads(output, conved_features, 
+                                                                                attn_mask_target_size=size_list[(i + 1) % len(self.obj_decoder_used_scales)])
+            decoder_layer_preds[f'layer{i}_preds'] = {'pred_class_logits':out_class, 
+                                                      'pred_mask_logits': out_mask,
+                                                        'pred_box_logits': out_box,
+                                                         'queries':output.clone() }
+        assert len(decoder_layer_preds) == self.obj_decoder_nlayers + 1
+        return output, query_embed, decoder_layer_preds # n bt c
+
+    def forward_objdecoder_heads(self, output, mask_features, attn_mask_target_size,
+                                 return_attn_mask=True):
+        decoder_output = self.obj_decoder_norm(output) # n bt c
+        decoder_output = decoder_output.transpose(0, 1)   # bt n c
+        
+        outputs_classes = self.obj_decoder_class_embed(decoder_output)  # bt n c
+        outputs_box = self.obj_decoder_box_embed(decoder_output) # bt n 4
+        mask_embed = self.obj_decoder_mask_embed(decoder_output)  # bt n d
+        outputs_mask = torch.einsum("bqc,bchw->bqhw", mask_embed, mask_features)  # bt n h w
+
+        if return_attn_mask:
+            attn_mask = outputs_mask
+            attn_mask = F.interpolate(attn_mask, size=attn_mask_target_size, mode="bilinear", align_corners=False) # bt n h w, real
+            # bt n h w -> bt 1 n hw -> bt head n hw -> bt*head n hw
+            attn_mask = (attn_mask.sigmoid().flatten(2).unsqueeze(1).repeat(1, self.obj_decoder_nheads, 1, 1).flatten(0, 1) < 0.5).bool()
+            attn_mask = attn_mask.detach()
+            
+            return outputs_classes, outputs_mask, outputs_box, attn_mask
+        else:
+            return outputs_classes, outputs_mask, outputs_box
+
+    def model_outputs(self, samples : NestedTensor, text_queries, auxiliary, perFrame_has_ann):
+        """ text_auxiliary
+        'amrs': list[T(2 E_i)]
+        'seg_ids': b (V+E)max
+        'token_splits': list[list[int]]
+        'tokens_ids': b max
+        """
+        # 你想visualize的东西
+        check_visualize = {} 
+        nf, batch_size, *_, device = *samples.tensors.shape, samples.tensors.device
+        # b T c H W
+        multiscales, multiscales_pad_masks, multiscales_poses = self.encode_video(samples)
+        # list[Graph], b (V+E)max c, b (V+E)max 
+        amrs, amr_token_feats, amr_token_seg_ids, text_feats, text_pad_masks, node_alignments = self.encode_text(text_queries, auxiliary, device)
+        text_pos = self.text1d_pos(text_pad_masks, hidden_dim=text_feats.shape[-1]).permute(0, 2, 1) # b smax c  
+        if self.cross_product is not None:
+            fusion_mem = torch.cat([text_feats, amr_token_feats], dim=1) 
+            fusion_mem_pad_mask = torch.cat([text_pad_masks, amr_token_seg_ids==0], dim=-1)
+            fusion_mem_pos = torch.cat([text_pos, torch.zeros_like(amr_token_feats)], dim=1)   
+            for lvl, (feat, pad_mask, poses) in enumerate(zip(multiscales, multiscales_pad_masks, multiscales_poses)):
+                bs, nf, _, h, w = feat.shape
+                feat = rearrange(feat, 'b t c h w -> (t h w) b c')
+                poses = rearrange(poses, 'b t c h w -> (t h w) b c')
+                feat, attn_weight = self.cross_product(tgt=feat,
+                                                        memory=fusion_mem.permute(1,0,2), 
+                                                        memory_key_padding_mask=fusion_mem_pad_mask,
+                                                        pos=fusion_mem_pos.permute(1,0,2), 
+                                                        query_pos=poses)
+                check_visualize[f'scale{lvl} attention weights'] = attn_weight
+                multiscales[lvl] = rearrange(feat, '(t h w) b c -> b t c h w',t=nf, h=h,w=w)
+            
+        # 从这里开始变成2d， 只关注每一帧
+        nf = multiscales[0].shape[1]
+        # b T c h w -> bT c h w -> bt c h w
+        for idx, scale_feat in enumerate(multiscales):
+            multiscales[idx] = scale_feat.flatten(0, 1)[perFrame_has_ann]
+        for idx, scale_pad in enumerate(multiscales_pad_masks):
+            multiscales_pad_masks[idx] = scale_pad.flatten(0,1)[perFrame_has_ann]
+        for idx, scale_pos in enumerate(multiscales_poses):
+            multiscales_poses[idx] = scale_pos.flatten(0,1)[perFrame_has_ann]
+        bt = multiscales[0].shape[0]
+        # b s c -> bT s c, bT s -> bt s c, bt s
+        amr_token_feats = repeat(amr_token_feats, 'b s c -> (b t) s c', t=nf)[perFrame_has_ann]
+        amr_token_seg_ids = repeat(amr_token_seg_ids, 'b s -> (b t) s', t=nf)[perFrame_has_ann]
+        text_feats = repeat(text_feats, 'b s c -> (b t) s c',t=nf)[perFrame_has_ann]
+        # list[list[int], vi], batch
+        # batch -> bt
+        repeated_node_alignments = [] 
+        for idx in range(batch_size):
+            for _ in range(nf):
+                repeated_node_alignments.append(copy.deepcopy(node_alignments[idx]))
+        filtered_rnas = []
+        for idx, hsnn in enumerate(perFrame_has_ann):
+            if hsnn:
+                filtered_rnas.append(repeated_node_alignments[idx])
+        assert len(filtered_rnas) != 0
+        node_alignments = filtered_rnas
+        
+        repeated_amrs = [] # bT -> bt
+        for idx in range(batch_size):
+            for _ in range(nf):
+                repeated_amrs.append(copy.deepcopy(amrs[idx]))
+        filtered_amrs = []
+        for idx, hsnn in enumerate(perFrame_has_ann):
+            if hsnn:
+                filtered_amrs.append(repeated_amrs[idx])
+        assert len(filtered_amrs) != 0
+        amrs = filtered_amrs
+        
+        # 多模态特征进一步parsing  # bt hw_sigma head num_scale num_point 2
+        # n bt c, bt n,
+        multiscales, _, _ = self.obj_parsing_encoder(multiscales, multiscales_pad_masks, multiscales_poses, self.video_feat_scales)
+
+        # bt c h w
+        obj_memories, obj_memories_poses, obj_memories_pad_masks, obj_conved_features = self.get_objdecoder_memories(multiscales, multiscales_pad_masks, multiscales_poses)
+        # n bt c, bt n,
+        obj_queries, query_embed, objdecoder_layer_preds = self.forward_obj_decoder(obj_memories, obj_memories_poses, obj_memories_pad_masks, obj_conved_features)
+        if self.is_pretraining_seg:
+            return {'objdecoder_objseg': objdecoder_layer_preds}
+        if self.detach_refdecoder_memory:
+            memories = obj_queries.detach() # nq bt c
+            memories_pos = query_embed.detach() # nq bt c
+        else:
+            memories = obj_queries
+            memories_pos = query_embed
+        nodes_batch_ids, edges_batch_ids,\
+            node_seg_ids, edges_seg_ids, \
+            node_feats, edge_feats, \
+            node_memories,edge_memories,\
+            edge_index,  node_subseqs, node_dsends = \
+              batching_graph(amrs, amr_token_feats, amr_token_seg_ids, memories.permute(1,0,2).clone(), memories_pos.permute(1,0,2).clone(),
+                            text_feats, node_alignments) # memories是dict
+
+        decoder_layer_preds = {}
+        grounding_score = self.decoder_reason_layer(node_batch_ids=nodes_batch_ids, edge_batch_ids=edges_batch_ids, 
+                                                node_seg_ids=node_seg_ids, edge_seg_ids=edges_seg_ids,
+                                                node_feats=node_feats, edge_feats=edge_feats,
+                                                node_memories=node_memories, edge_memories=edge_memories,
+                                                edge_index=edge_index,
+                                                node_subseqs=node_subseqs,
+                                                node_dsends=node_dsends) # V nq
+        weighted_query_by_batch = []
+        for bch_idx in range(bt):
+            # vi nq
+            bch_node_score = torch.stack([grounding_score[idx] for idx, batch_id in enumerate(nodes_batch_ids) if batch_id == bch_idx], dim=0)
+            bch_node_probs = bch_node_score.softmax(-1)
+            bch_queries = obj_queries[:, bch_idx] # nq c
+            # vi c
+            weighted_query = bch_node_probs @ bch_queries
+            if self.decoder_reason_layer_choose_who == '第一个':
+                weighted_query = weighted_query[0] # c
+            weighted_query_by_batch.append(weighted_query) # c
+        weighted_query_by_batch = torch.stack(weighted_query_by_batch, dim=0).unsqueeze(0) # 1 bt c
+        # bt 1 class, bt 1 h w, bt 1 4
+        out_class, out_mask, out_box = self.forward_objdecoder_heads(weighted_query_by_batch, obj_conved_features, attn_mask_target_size=None,
+                                                                     return_attn_mask=False)
+        
+        decoder_layer_preds[f'layer{-1}_preds'] = {'pred_mask_logits': out_mask.squeeze(1), 'pred_box_logits': out_box.squeeze(1), 'pred_class_logits': out_class}
+    
+        assert self.decoder_trans_layers is None
+        return {'refdecoder_refseg': decoder_layer_preds,
+                # TODO: 添加一些其他可以加loss, 加postprocessing的东西, 输出的接口和trainer evaluation一致;, 输出的接口和task loss一致
+                'check_visualze': check_visualize,
+                 'objdecoder_objseg': objdecoder_layer_preds } 
+
+    def forward(self, samples : NestedTensor, text_queries, auxiliary, targets, visualize=False):
+        if not isinstance(samples, NestedTensor):
+            samples = nested_tensor_from_videos_list_with_stride(samples, max_stride=self.max_stride)
+        T, batch_size, _, H, W = samples.tensors.shape
+        perFrame_has_ann = [torch.tensor(t['has_ann']) for t in targets]
+        perFrame_has_ann = torch.cat([F.pad(t.float(), pad=(0, T-len(t))).bool() for t in perFrame_has_ann], dim=0) # bT
+        
+        # bt n H W, 
+        model_outs = self.model_outputs(samples, text_queries, auxiliary, perFrame_has_ann) 
+        objseg_src = model_outs['objdecoder_objseg']
+        for idx in range(batch_size):
+            h, w = targets[idx]['masks'].shape[-2:]
+            # n t h w -> n t H W
+            targets[idx]['masks'] = F.pad(targets[idx]['masks'].float(), pad=(0, W-w, 0, H-h)).bool()
+        
+        obj_decoder_targets = self.obj_decoder_targets_handler(targets)
+        loss_value_dict, matching_result = self.obj_decoder_objseg_loss(objseg_src, obj_decoder_targets)
+
+        if not self.is_pretraining_seg:
+            refseg_src = model_outs['refdecoder_refseg']
+            loss_value_dict.update(self.refdecoder_refseg_loss(refseg_src, targets))
+
+        loss = sum((loss_value_dict[k] * self.loss_weight[k] for k in loss_value_dict.keys()))
+        if not math.isfinite(loss.item()):
+            print("Loss is {}, stopping training".format(loss.item()))
+            print(loss)
+            sys.exit(1)
+        loss.backward()
+        loss_dict_unscaled = {k: v for k, v in loss_value_dict.items()}
+        loss_dict_scaled = {f'{k}_scaled': v * self.loss_weight[k] for k, v in loss_value_dict.items()}    
+        grad_total_norm = get_total_grad_norm(self.parameters(), norm_type=2)
+        return loss_dict_unscaled, loss_dict_scaled, grad_total_norm 
+
+
+    @torch.no_grad()
+    def sample(self, samples, text_queries, auxiliary, targets, visualize=False):
+        if not isinstance(samples, NestedTensor):
+            samples = nested_tensor_from_videos_list_with_stride(samples, max_stride=self.max_stride)
+        T, batch_size, _, H, W = samples.tensors.shape
+        perFrame_has_ann = [t['has_ann'] for t in targets] # bool, t
+        ann_number_by_batch = [f.int().sum() for f in perFrame_has_ann]
+        perFrame_has_ann = torch.cat([F.pad(t.float(), pad=(0, T-len(t))).bool() for t in perFrame_has_ann], dim=0) # bT
+        # bt' n h w -> bt' h w
+        decoder_layer_preds = self.model_outputs(samples, text_queries, auxiliary, perFrame_has_ann)
+        objseg_preds = decoder_layer_preds['objdecoder_objseg']
+        obj_last_layer_preds = objseg_preds[f'layer{self.obj_decoder_nlayers-1}_preds']
+
+        if self.is_pretraining_seg:
+            out_mask_logits = obj_last_layer_preds['pred_mask_logits'] # bt nq h w
+            for idx in range(batch_size):
+                h, w = targets[idx]['masks'].shape[-2:]
+                # n t h w -> n t H W
+                targets[idx]['masks'] = F.pad(targets[idx]['masks'].float(), pad=(0, W-w, 0, H-h)).bool()
+            obj_decoder_targets = self.obj_decoder_targets_handler(targets)
+            _, matching_result = self.obj_decoder_objseg_loss(objseg_preds, obj_decoder_targets)
+            matching_result = matching_result[-1] # list(tgt, src), bt
+            gt_referent_idx = obj_decoder_targets['referent_idx'] # list[int], bt
+            out_mask_logits = torch.stack([out_mask[tgt_idx[src_idx.tolist().index(gt_ref_idx)]] 
+                                            for out_mask, gt_ref_idx, (tgt_idx, src_idx) in zip(out_mask_logits, gt_referent_idx, matching_result)], dim=0)
+        else:
+            ref_preds = decoder_layer_preds['refdecoder_refseg'][f'layer{self.decoder_trans_nlayers-1}_preds']
+            out_mask_logits = ref_preds['pred_mask_logits'] # bt h w
+        # # # bt 1 h w
+        query_pred_masks = F.interpolate(out_mask_logits.unsqueeze(1), 
+                                         scale_factor=self.obj_decoder_mask_out_stride, mode="bilinear", align_corners=False)
+        query_pred_masks = (query_pred_masks.sigmoid() > self.obj_decoder_mask_threshold) 
+        # bt' 1
+        query_pred_is_referred_prob = torch.ones([len(query_pred_masks)]).unsqueeze(1).to(query_pred_masks.device).float()
+        
+        size_original = [] #list[h,w], bt'
+        size_after_aug = [] #list[h,w], bt'
+        
+        # 保证没有temporal增强
+        for bth_idx in range(batch_size):
+            size_original.extend([targets[bth_idx]['orig_size'][-2:].tolist()]*ann_number_by_batch[bth_idx])
+            size_after_aug.extend([targets[bth_idx]['size'][-2:].tolist()]*ann_number_by_batch[bth_idx])
+        processed_pred_masks = []
+        for f_pred_masks, orig_size, after_aug_size, in zip(query_pred_masks, size_original, size_after_aug):
+            f_mask_h, f_mask_w = after_aug_size  
+            f_pred_masks = f_pred_masks[:, :f_mask_h, :f_mask_w] 
+            if (orig_size[0] != after_aug_size[0]) or (orig_size[1] != after_aug_size[1]):
+                # n h w -> 1 n h w -> n h w
+                f_pred_masks = F.interpolate(f_pred_masks.unsqueeze(0).float(), size=orig_size, mode="nearest")[0]
+            processed_pred_masks.append(f_pred_masks) # n h w
+            
+        # list[n h w], bt -> list[n t' h w], b
+        by_batch_preds = []
+        by_batch_preds_probs = []
+        cnt = 0
+        # bt n -> list[n], bt -> list[n t'], b
+        query_pred_is_referred_prob = query_pred_is_referred_prob.split(1, dim=0)
+        query_pred_is_referred_prob = [qq.squeeze(0) for qq in query_pred_is_referred_prob]
+        for bth_idx in range(batch_size):
+            by_batch_preds.append(torch.stack(processed_pred_masks[cnt:(cnt+ann_number_by_batch[bth_idx])], dim=1))
+            by_batch_preds_probs.append(torch.stack(query_pred_is_referred_prob[cnt:(cnt+ann_number_by_batch[bth_idx])], dim=1))
+            cnt += ann_number_by_batch[bth_idx]
+        assert cnt == len(processed_pred_masks)
+        return {
+            'query_pred_masks': by_batch_preds, # [n t' h w], batch
+            'query_pred_is_referred_prob': by_batch_preds_probs, # [n t'], batch
+        }
+
+
+
+    # task loss
+    def refdecoder_refseg_loss(self, decoder_layer_preds, targets):
+        layer_weights = self.tasks['refdecoder_refseg']['layer_weights']
+        loss_weight = self.loss_weight
+        if 'mask_loss_type' in self.tasks['refdecoder_refseg']:
+            mask_loss_type = self.tasks['refdecoder_refseg']['mask_loss_type']
+        else:
+            mask_loss_type = 'ce'
+        
+        # list[t] -> bt
+        target_valid = torch.cat([t["valid"][t['referent_idx']] for t in targets], dim=0).long()
+        num_boxes = target_valid.sum().item() 
+        num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=target_valid.device)
+        if is_dist_avail_and_initialized():
+            torch.distributed.all_reduce(num_boxes)
+        num_boxes = torch.clamp(num_boxes / get_world_size(), min=1).item()
+        
+
+        loss_value = {'refdecoder_mask': torch.tensor(0, device=target_valid.device).float(), 
+                      'refdecoder_bbox': torch.tensor(0, device=target_valid.device).float(), 
+                      'refdecoder_giou': torch.tensor(0, device=target_valid.device).float(),
+                      'refdecoder_dice': torch.tensor(0, device=target_valid.device).float(), }
+        for i in range(-1, self.decoder_trans_nlayers):
+            layer_weight = layer_weights[i] 
+            if layer_weight != 0:
+                layer_pred = decoder_layer_preds[f'layer{i}_preds'] # bT H W
+                if loss_weight['refdecoder_mask'] != 0 or loss_weight['refdecoder_dice'] !=0:
+                    masks_losses = AMR_v0_detOnlyObj_Grounding_weightedQuery.refdecoder_masks_loss(layer_pred, targets, num_boxes, self.obj_decoder_mask_out_stride, mask_loss_type)
+                    for k in masks_losses.keys():
+                        loss_value[k] += layer_weight * masks_losses[k]
+                if loss_weight['refdecoder_bbox'] != 0 or loss_weight['refdecoder_giou'] !=0:
+                    boxes_losses = AMR_v0_detOnlyObj_Grounding_weightedQuery.refdecoder_boxes_loss(layer_pred, targets, num_boxes)
+                    for k in boxes_losses.keys():
+                        loss_value[k] += layer_weight * boxes_losses[k]
+        return loss_value         
+
+    @staticmethod
+    def refdecoder_boxes_loss(outputs, targets,num_boxes): 
+        # list[t] -> bt
+        is_consistent = torch.cat([t['valid'][t['referent_idx']] for t in targets]).bool()
+        src_boxes = outputs['pred_box_logits'].sigmoid()  # bt 4
+        # list[t 4] -> bt 4
+        target_boxes = torch.cat([t['boxes'][t['referent_idx']] for t in targets], dim=0).to(src_boxes)  
+        
+        src_boxes = src_boxes[is_consistent]  # bt 4
+        target_boxes = target_boxes[is_consistent] # bt 4
+
+        loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
+        losses = {}
+        losses['refdecoder_bbox'] = loss_bbox.sum() / num_boxes
+        # bt
+        loss_giou = 1 - torch.diag(box_ops.generalized_box_iou(
+                                    box_ops.box_cxcywh_to_xyxy(src_boxes),
+                                    box_ops.box_cxcywh_to_xyxy(target_boxes)))
+        losses['refdecoder_giou'] = loss_giou.sum() / num_boxes
+        return losses
+    
+    @staticmethod
+    def refdecoder_masks_loss(outputs, targets, num_boxes, decoder_mask_out_stride, mask_loss_type):
+        # list[n t] -> list[t] -> bt
+        is_consistent = torch.cat([t['valid'][t['referent_idx']] for t in targets]).bool()
+        
+        src_masks = outputs["pred_mask_logits"]  # bT h w  )
+        
+        # list[n t h w] -> list[t h w] -> bt h w
+        target_masks = torch.cat([t["masks"][t['referent_idx']] for t in targets], dim=0).to(src_masks) # list[t h w] -> bt h w
+
+        start = int(decoder_mask_out_stride // 2)
+        im_h, im_w = target_masks.shape[-2:]
+        target_masks = target_masks[:, start::decoder_mask_out_stride, start::decoder_mask_out_stride] 
+        assert target_masks.size(1) * decoder_mask_out_stride == im_h
+        assert target_masks.size(2) * decoder_mask_out_stride == im_w
+        
+        src_masks = src_masks[is_consistent].flatten(1) # bt hw
+        target_masks = target_masks[is_consistent].flatten(1) # bt hw
+        
+        if mask_loss_type == 'ce':
+            mask_loss = ce_mask_loss(src_masks, target_masks, num_boxes)
+        elif mask_loss_type == 'focal':
+            mask_loss = sigmoid_focal_loss(src_masks, target_masks, num_boxes)
+        losses = {
+            "refdecoder_mask": mask_loss,
+            "refdecoder_dice": dice_loss(src_masks, target_masks, num_boxes),
+        }
+        return losses 
+
+
+
 class AMR_v0_detOnlyObj_Grounding_AsObjLoss(AMR_v0_detOnlyObj_Grounding):
     def __init__(self, 
                 d_model=256,
@@ -6656,6 +7142,47 @@ def amr_v0_detOnlyObj_grounding(device, configs):
     optimizer = get_optimizer(param_dicts=param_dicts, configs=configs['optimization']['optimizer'])
 
     return model, optimizer 
+
+
+
+@register_model
+def amr_v0_detOnlyObj_grounding_weightedquery(device, configs):
+    model = AMR_v0_detOnlyObj_Grounding_weightedQuery(
+        d_model=configs['d_model'],
+        pt_dir=configs['pt_dir'],
+        max_stride=configs['max_stride'],
+        swint_pretrained_path=configs['swint_pretrained_path'],
+        swint_freeze=configs['swint_freeze'],
+        swint_runnning_mode=configs['swint_runnning_mode'],
+        video_projs=configs['video_projs'],
+        video_feat_scales=configs['video_feat_scales'],
+        amrbart_wordEmbedding_freeze=configs['amrbart_wordEmbedding_freeze'],
+        amrtext_wordEmbedding_proj=configs['amrtext_wordEmbedding_proj'],
+        fusion=configs['fusion'],
+        parsing_encoder=configs['parsing_encoder'],
+        loss_weight=configs['loss_weight'],
+        tasks=configs['tasks'],
+        refdecoder=configs['refdecoder'],
+        objdecoder=configs['objdecoder'],
+        is_pretraining_seg=configs['is_pretraining_seg'],
+        detach_refdecoder_memory=configs['detach_refdecoder_memory'] if 'detach_refdecoder_memory' in configs else False
+    )
+    model.to(device)
+
+
+    param_dicts = [
+        {"params": [p for n, p in model.named_parameters() 
+                    if (("video_swint" not in n) and ("amrbart_wordEmbedding" not in n) and p.requires_grad)]},
+        {"params": [p for n, p in model.named_parameters() if ("video_swint" in n) and p.requires_grad],
+            "lr": configs['optimization']['vid_backbone_lr']},
+        {"params": [p for n, p in model.named_parameters() if ("amrbart_wordEmbedding" in n) and p.requires_grad],
+            "lr": configs['optimization']['text_backbone_lr']}, 
+    ] # CHECK params dict every run
+    optimizer = get_optimizer(param_dicts=param_dicts, configs=configs['optimization']['optimizer'])
+
+    return model, optimizer 
+
+
 
 @register_model
 def amr_v0_detOnlyObj_grounding_asobjLoss(device, configs):
