@@ -2043,7 +2043,8 @@ class AMR_v0_detOnlyObj_Grounding(nn.Module):
                     'mask_threshold': 0.5,
                     },
                 is_pretraining_seg=False,
-                detach_refdecoder_memory=False
+                detach_refdecoder_memory=False,
+                freeze_obj_decoder=False,
                 ) -> None:
         super().__init__()
         self.d_model = d_model
@@ -2093,6 +2094,12 @@ class AMR_v0_detOnlyObj_Grounding(nn.Module):
         self.build_ref_decoder(refdecoder)
         self.is_pretraining_seg = is_pretraining_seg
         self.detach_refdecoder_memory = detach_refdecoder_memory
+        
+        if freeze_obj_decoder:
+            for n, p in self.named_parameters():
+                if p.requires_grad:
+                    if ('obj_decoder' in n) or ('video_proj' in n) or ('obj_parsing_encoder' in n) or ('cross_product' in n):
+                        p.requires_grad_(False)
 
     def build_obj_decoder(self, objdecoder, d_model):
         # obj decoder
@@ -2891,7 +2898,7 @@ class AMR_v0_detOnlyObj_Grounding_weightedQuery(AMR_v0_detOnlyObj_Grounding):
                     },
                 is_pretraining_seg=False,
                 detach_refdecoder_memory=False,
-                adpt=None
+                adpt=None,
                 ) -> None:
         super().__init__(d_model, max_stride, pt_dir, swint_pretrained_path, swint_freeze, swint_runnning_mode, video_projs, video_feat_scales, amrbart_wordEmbedding_freeze, amrtext_wordEmbedding_proj, fusion, parsing_encoder, loss_weight, tasks, refdecoder, objdecoder, is_pretraining_seg, detach_refdecoder_memory)
         self.use_adpt = False
@@ -7162,7 +7169,8 @@ def amr_v0_detOnlyObj_grounding(device, configs):
         refdecoder=configs['refdecoder'],
         objdecoder=configs['objdecoder'],
         is_pretraining_seg=configs['is_pretraining_seg'],
-        detach_refdecoder_memory=configs['detach_refdecoder_memory'] if 'detach_refdecoder_memory' in configs else False
+        detach_refdecoder_memory=configs['detach_refdecoder_memory'] if 'detach_refdecoder_memory' in configs else False,
+        freeze_obj_decoder=configs['freeze_obj_decoder'] if 'freeze_obj_decoder' in configs else False
     )
     model.to(device)
 
