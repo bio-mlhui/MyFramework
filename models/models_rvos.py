@@ -2898,9 +2898,15 @@ class AMR_v0_detOnlyObj_Grounding_weightedQuery(AMR_v0_detOnlyObj_Grounding):
                     },
                 is_pretraining_seg=False,
                 detach_refdecoder_memory=False,
+                freeze_obj_decoder=False,
                 adpt=None,
                 ) -> None:
-        super().__init__(d_model, max_stride, pt_dir, swint_pretrained_path, swint_freeze, swint_runnning_mode, video_projs, video_feat_scales, amrbart_wordEmbedding_freeze, amrtext_wordEmbedding_proj, fusion, parsing_encoder, loss_weight, tasks, refdecoder, objdecoder, is_pretraining_seg, detach_refdecoder_memory)
+        super().__init__(d_model, max_stride, pt_dir,
+                          swint_pretrained_path, swint_freeze, swint_runnning_mode,
+                            video_projs, video_feat_scales, amrbart_wordEmbedding_freeze, 
+                            amrtext_wordEmbedding_proj, fusion, parsing_encoder, loss_weight, 
+                            tasks, refdecoder, objdecoder, is_pretraining_seg, detach_refdecoder_memory,
+                            freeze_obj_decoder=freeze_obj_decoder,)
         self.use_adpt = False
         if adpt is not None:
             self.use_adpt = True
@@ -7210,6 +7216,7 @@ def amr_v0_detOnlyObj_grounding_weightedquery(device, configs):
         objdecoder=configs['objdecoder'],
         is_pretraining_seg=configs['is_pretraining_seg'],
         detach_refdecoder_memory=configs['detach_refdecoder_memory'] if 'detach_refdecoder_memory' in configs else False,
+        freeze_obj_decoder=configs['freeze_obj_decoder'] if 'freeze_obj_decoder' in configs else False,
         adpt=configs['adpt'] if 'adpt' in configs else None
     )
     model.to(device)
