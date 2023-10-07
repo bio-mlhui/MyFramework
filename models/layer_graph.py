@@ -1714,6 +1714,7 @@ class Grounding_v1_multihead_v2(geo_nn.MessagePassing):
 def grounding_v1_multihead_v2(configs):
     return Grounding_v1_multihead_v2(d_model=configs['d_model'],
                         flow=configs['flow'],
+                        self_score=configs['self_score'] if 'self_score' in configs else 'dot',
                         nheads=configs['nheads'],)
 
 
