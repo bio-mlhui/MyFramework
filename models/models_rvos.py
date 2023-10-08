@@ -2796,22 +2796,20 @@ class AMR_v0_detOnlyObj_Grounding(nn.Module):
             for i, j in indices
         ]
 
-
+from models.pretrained_video_instance_decoder.pt_obj_decoder import pt_obj_decoder_entrypoint
+from torch_geometric.nn.inits import glorot
+from .layer_fusion import fusion_entrypoint
 class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
     def __init__(self, 
                  d_model=256,
                  max_stride=64,
                  pt_dir='/home/xhh/pt',
                  # obj decoder
-                 objdec_pretrained_path='pretrained_swin_transformer/swin_tiny_patch244_window877_kinetics400_1k.pth',
-                 objdec_freeze=True,
-                 objdec_projs = [
-                    {'name': 'conv2d', 'in_channels': 96,  'out_channels': 256, 'kernel_size': 3, 'padding':1, 'bias':True,},
-                    {'name': 'conv2d', 'in_channels': 192, 'out_channels': 256, 'kernel_size': 1, 'bias':True,},
-                    {'name': 'conv2d', 'in_channels': 384, 'out_channels': 256, 'kernel_size': 1, 'bias':True,},
-                    {'name': 'conv2d', 'in_channels': 768, 'out_channels': 256, 'kernel_size': 1, 'bias':True,},
-                    {'name': 'conv2d', 'in_channels': 768, 'out_channels': 256, 'kernel_size': 3, 'stride':2, 'padding': 1, \
-                        'bias':True,}],
+                 obj_decoder = {
+                     'name':None,
+                     'path': None,
+                     'freeze': True,
+                 },
                 # amrtext
                 amrbart_wordEmbedding_freeze=True,
                 amrtext_wordEmbedding_proj = {
@@ -2826,16 +2824,6 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
                     'd_model':256,
                     'nheads': 8,
                     'dropout':0.},
-                parsing_encoder={
-                    'name':'deform_video_2d_fpn',
-                    'd_ffn': 2048,
-                    'dropout':0.,
-                    'activation': 'relu',
-                    'nheads': 8,
-                    'fused_scales':[[1,8],[1,16],[1,32],[1,64]],
-                    'fpn_strides': [[1,4],[1,8]],
-                    'npoints':4,
-                    'nlayers': 6,},
                 loss_weight={'refdecoder_mask': 5,
                              'refdecoder_dice': 5,
                              'refdecoder_giou': 0,
@@ -2869,8 +2857,6 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
                     'choose_who': '第一个'
                     },
                 is_pretraining_seg=False,
-                detach_refdecoder_memory=False,
-                freeze_obj_decoder=False,
                 ) -> None:
         super().__init__()
         self.d_model = d_model
@@ -2878,28 +2864,12 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
         self.tasks = tasks
         self.pt_dir = pt_dir
         self.max_stride = max_stride
-        # video encoder
-        from .video_swin import VideoSwinTransformer
-        self.video_swint = VideoSwinTransformer(backbone_pretrained=True,
-                                                backbone_pretrained_path=os.path.join(pt_dir, swint_pretrained_path),
-                                                running_mode=swint_runnning_mode)
-        if swint_freeze:
-            for p in self.video_swint.parameters():
-                p.requires_grad_(False) 
-                 
-        assert len(video_projs) == len(video_feat_scales)
-        self.video_feat_scales = video_feat_scales
-        backbone_channels, backbone_scales = self.video_swint.get_desc()
-        assert len(backbone_channels) == len(backbone_scales)
-        self.video_proj = nn.ModuleList()
-        for proj_config in video_projs:
-            assert proj_config.pop('name') == 'conv2d'
-            self.video_proj.append(nn.Sequential(nn.Conv2d(**proj_config),
-                                                 nn.GroupNorm(32, d_model)))
-        self.video_3d_pos = build_position_encoding(position_embedding_name='3d',
-                                                    hidden_dim=d_model)
+
+        create_obj_decoder = pt_obj_decoder_entrypoint(obj_decoder['name'])
+        self.obj_decoder = create_obj_decoder(obj_decoder)
+        self.obj_query_proj = nn.Linear(self.obj_decoder.out_dim, d_model)
         
-        # amr encoder
+        
         from .amr_utils.utils import BartForConditionalGeneration
         AMRBart = BartForConditionalGeneration.from_pretrained(os.path.join(self.pt_dir, 'amr', 'AMRBART_pretrain'))
         self.amrbart_wordEmbedding = AMRBart.model.shared
@@ -2908,23 +2878,15 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
                 p.requires_grad_(False) 
         assert amrtext_wordEmbedding_proj.pop('name') == 'FeatureResizer'
         self.amrtext_wordEmbedding_proj = FeatureResizer(**amrtext_wordEmbedding_proj)
-        self.text1d_pos = build_position_encoding(position_embedding_name='1d')
         
-        self.fusion_amr_who_cross = fusion.pop('amr_cross', None)
-        fusion_name = fusion.pop('name')
-        self.cross_product = get_fusion(fusion_name, fusion)
+        create_fusion_module = fusion_entrypoint(fusion.pop('name'))
+        self.fusion_module = create_fusion_module(fusion)
 
-        self.obj_parsing_encoder = get_parsing_encoder(parsing_encoder.pop('name'),
-                                                               parsing_encoder)
         self.build_ref_decoder(refdecoder)
         self.is_pretraining_seg = is_pretraining_seg
-        self.detach_refdecoder_memory = detach_refdecoder_memory
-        
-        if freeze_obj_decoder:
-            for n, p in self.named_parameters():
-                if p.requires_grad:
-                    if ('obj_decoder' in n) or ('video_proj' in n) or ('obj_parsing_encoder' in n) or ('cross_product' in n):
-                        p.requires_grad_(False)
+
+        glorot(self.obj_query_proj)
+        glorot(self.amrtext_wordEmbedding_proj)
 
     def build_ref_decoder(self, refdecoder,):
         from .layer_graph import graphLayer_entrypoint
@@ -2949,35 +2911,7 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
                 graph_layer = create_layer(trans_layer)
                 self.decoder_trans_nlayers = trans_layer['nlayers']
                 self.decoder_trans_layers = _get_clones(graph_layer, self.decoder_trans_nlayers)
-
-    def encode_video(self, samples):
-        bb_out = self.video_swint(samples)  
-        nf, batch_size, *_ = bb_out[0].tensors.shape
-        orig_pad_mask = samples.mask.permute(1, 0, 2, 3) # b t h w
-        for layer_out in bb_out:
-            layer_out.tensors = rearrange(layer_out.tensors, 't b c h w -> (b t) c h w')
-            layer_out.mask = rearrange(layer_out.mask, 't b h w -> b t h w')
-        multiscales = []
-        multiscales_pad_masks = []
-        multiscales_poses = []
-        for lvl, feat in enumerate(bb_out): 
-            src, pad_mask = feat.decompose() 
-            src_proj_l = self.video_proj[lvl](src.clone())
-            src_proj_l = rearrange(src_proj_l, '(b t) c h w -> b t c h w',t=nf,b=batch_size)
-            multiscales.append(src_proj_l)
-            multiscales_pad_masks.append(pad_mask)
-            multiscales_poses.append(self.video_3d_pos(src_proj_l, None))
-            if lvl == (len(bb_out) - 1):
-                for idx in range(lvl+1, len(self.video_proj)):
-                    src_proj_l = self.video_proj[idx](src.clone())
-                    src_proj_l = rearrange(src_proj_l, '(b t) c h w -> b t c h w',t=nf,b=batch_size)
-                    pad_mask = F.interpolate(orig_pad_mask.float(),
-                                             size=src_proj_l.shape[-2:],mode='nearest') > 0.5
-                    multiscales.append(src_proj_l)
-                    multiscales_pad_masks.append(pad_mask)
-                    multiscales_poses.append(self.video_3d_pos(src_proj_l, None))
-        return multiscales, multiscales_pad_masks, multiscales_poses
-    
+ 
     def encode_text(self, text_queries, text_auxiliary, device):
         amrs = text_auxiliary['amrs'] # list[Graph]
         batch_size = len(amrs)
@@ -3017,37 +2951,18 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
         # 你想visualize的东西
         check_visualize = {} 
         nf, batch_size, *_, device = *samples.tensors.shape, samples.tensors.device
-        # b T c H W
-        multiscales, multiscales_pad_masks, multiscales_poses = self.encode_video(samples)
+        # b t nq c
+        obj_queries, objdecoder_layer_preds = self.obj_decoder(samples)
+
         # list[Graph], b (V+E)max c, b (V+E)max 
-        amrs, amr_token_feats, amr_token_seg_ids, text_feats, text_pad_masks, node_alignments = self.encode_text(text_queries, auxiliary, device)
-        text_pos = self.text1d_pos(text_pad_masks, hidden_dim=text_feats.shape[-1]).permute(0, 2, 1) # b smax c  
-        if self.cross_product is not None:
-            fusion_mem = torch.cat([text_feats, amr_token_feats], dim=1) 
-            fusion_mem_pad_mask = torch.cat([text_pad_masks, amr_token_seg_ids==0], dim=-1)
-            fusion_mem_pos = torch.cat([text_pos, torch.zeros_like(amr_token_feats)], dim=1)   
-            for lvl, (feat, pad_mask, poses) in enumerate(zip(multiscales, multiscales_pad_masks, multiscales_poses)):
-                bs, nf, _, h, w = feat.shape
-                feat = rearrange(feat, 'b t c h w -> (t h w) b c')
-                poses = rearrange(poses, 'b t c h w -> (t h w) b c')
-                feat, attn_weight = self.cross_product(tgt=feat,
-                                                        memory=fusion_mem.permute(1,0,2), 
-                                                        memory_key_padding_mask=fusion_mem_pad_mask,
-                                                        pos=fusion_mem_pos.permute(1,0,2), 
-                                                        query_pos=poses)
-                check_visualize[f'scale{lvl} attention weights'] = attn_weight
-                multiscales[lvl] = rearrange(feat, '(t h w) b c -> b t c h w',t=nf, h=h,w=w)
+        amrs, amr_token_feats, amr_token_seg_ids, text_feats, text_pad_masks, node_alignments = self.encode_text(text_queries, auxiliary, device) 
+
+        obj_queries, amr_token_feats, text_feats = self.fusion_module(query_feat=obj_queries, 
+                                                                text_feats=text_feats,
+                                                                amr_feats=amr_token_feats,
+                                                                amr_pad_masks = amr_token_seg_ids==0,
+                                                                text_pad_masks=text_pad_masks)
             
-        # 从这里开始变成2d， 只关注每一帧
-        nf = multiscales[0].shape[1]
-        # b T c h w -> bT c h w -> bt c h w
-        for idx, scale_feat in enumerate(multiscales):
-            multiscales[idx] = scale_feat.flatten(0, 1)[perFrame_has_ann]
-        for idx, scale_pad in enumerate(multiscales_pad_masks):
-            multiscales_pad_masks[idx] = scale_pad.flatten(0,1)[perFrame_has_ann]
-        for idx, scale_pos in enumerate(multiscales_poses):
-            multiscales_poses[idx] = scale_pos.flatten(0,1)[perFrame_has_ann]
-        bt = multiscales[0].shape[0]
         # b s c -> bT s c, bT s -> bt s c, bt s
         amr_token_feats = repeat(amr_token_feats, 'b s c -> (b t) s c', t=nf)[perFrame_has_ann]
         amr_token_seg_ids = repeat(amr_token_seg_ids, 'b s -> (b t) s', t=nf)[perFrame_has_ann]
@@ -3076,28 +2991,15 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
         assert len(filtered_amrs) != 0
         amrs = filtered_amrs
         
-        # 多模态特征进一步parsing  # bt hw_sigma head num_scale num_point 2
-        # n bt c, bt n,
-        multiscales, _, _ = self.obj_parsing_encoder(multiscales, multiscales_pad_masks, multiscales_poses, self.video_feat_scales)
-
-        # n bt c, bt n,
-        obj_queries, query_embed, objdecoder_layer_preds = self.forward_obj_decoder([scale_feat.clone() for scale_feat in multiscales],
-                                                                                        [scale_pad.clone() for scale_pad in multiscales_pad_masks],
-                                                                                        [scale_pos.clone() for scale_pos in multiscales_poses])
         if self.is_pretraining_seg:
             return {'objdecoder_objseg': objdecoder_layer_preds}
-        if self.detach_refdecoder_memory:
-            memories = obj_queries.detach() # nq bt c
-            memories_pos = query_embed.detach() # nq bt c
-        else:
-            memories = obj_queries
-            memories_pos = query_embed
+        memories = obj_queries
         nodes_batch_ids, edges_batch_ids,\
             node_seg_ids, edges_seg_ids, \
             node_feats, edge_feats, \
             node_memories,edge_memories,\
             edge_index,  node_subseqs, node_dsends = \
-              batching_graph(amrs, amr_token_feats, amr_token_seg_ids, memories.permute(1,0,2).clone(), memories_pos.permute(1,0,2).clone(),
+              batching_graph(amrs, amr_token_feats, amr_token_seg_ids, memories.permute(1,0,2).clone(), None,
                             text_feats, node_alignments) # memories是dict
 
         decoder_layer_preds = {}
@@ -7689,6 +7591,35 @@ def amr_v0_detOnlyObj_grounding(device, configs):
     return model, optimizer 
 
 
+@register_model
+def amr_v0_detOnlyObj_grounding_ptObjDet(device, configs):
+    model = AMR_v0_detOnlyObj_Grounding_ptObjDet(
+        d_model=configs['d_model'],
+        pt_dir=configs['pt_dir'],
+        max_stride=configs['max_stride'],
+        obj_decoder=configs['obj_decoder'],
+        amrbart_wordEmbedding_freeze=configs['amrbart_wordEmbedding_freeze'],
+        amrtext_wordEmbedding_proj=configs['amrtext_wordEmbedding_proj'],
+        fusion=configs['fusion'],
+        loss_weight=configs['loss_weight'],
+        tasks=configs['tasks'],
+        refdecoder=configs['refdecoder'],
+        is_pretraining_seg=configs['is_pretraining_seg'],
+    )
+    model.to(device)
+
+
+    param_dicts = [
+        {"params": [p for n, p in model.named_parameters() 
+                    if (("video_swint" not in n) and ("amrbart_wordEmbedding" not in n) and p.requires_grad)]},
+        {"params": [p for n, p in model.named_parameters() if ("obj_decoder" in n) and p.requires_grad],
+            "lr": configs['optimization']['vid_backbone_lr']},
+        {"params": [p for n, p in model.named_parameters() if ("amrbart_wordEmbedding" in n) and p.requires_grad],
+            "lr": configs['optimization']['text_backbone_lr']}, 
+    ] # CHECK params dict every run
+    optimizer = get_optimizer(param_dicts=param_dicts, configs=configs['optimization']['optimizer'])
+
+    return model, optimizer 
 
 @register_model
 def amr_v0_detOnlyObj_grounding_weightedquery(device, configs):

@@ -855,15 +855,22 @@ def batching_graph(amrs,
     node_seg_ids = torch.cat([seg_ids[seg_ids>0] for seg_ids in amr_seg_ids], dim=0)
     edges_seg_ids = torch.cat([seg_ids[seg_ids<0] for seg_ids in amr_seg_ids], dim=0)
 
-    # V nq c
-    node_memories_feats = torch.stack([memories[bid] for bid in nodes_batch_ids], dim=0)
-    node_memories_poses = torch.stack([memories_pos[bid] for bid in nodes_batch_ids], dim=0)
+    if memories_pos != None:
+        # V nq c
+        node_memories_feats = torch.stack([memories[bid] for bid in nodes_batch_ids], dim=0)
+        node_memories_poses = torch.stack([memories_pos[bid] for bid in nodes_batch_ids], dim=0)
 
-    edge_memories_feats = torch.stack([memories[bid] for bid in edges_batch_ids], dim=0)
-    edge_memories_poses = torch.stack([memories_pos[bid] for bid in edges_batch_ids], dim=0)
+        edge_memories_feats = torch.stack([memories[bid] for bid in edges_batch_ids], dim=0)
+        edge_memories_poses = torch.stack([memories_pos[bid] for bid in edges_batch_ids], dim=0)
 
-    node_memories = {'feat': node_memories_feats, 'pos': node_memories_poses}
-    edge_memories = {'feat': edge_memories_feats, 'pos': edge_memories_poses}
+        node_memories = {'feat': node_memories_feats, 'pos': node_memories_poses}
+        edge_memories = {'feat': edge_memories_feats, 'pos': edge_memories_poses}
+    else:
+        # V nq c
+        node_memories_feats = torch.stack([memories[bid] for bid in nodes_batch_ids], dim=0)
+        edge_memories_feats = torch.stack([memories[bid] for bid in edges_batch_ids], dim=0)
+        node_memories = {'feat': node_memories_feats, 'pos': None}
+        edge_memories = {'feat': edge_memories_feats, 'pos': None}        
 
     node_subseqs = [] # list[s c], V
     for btc_text_feat, btc_node_alis in zip(text_feats, node_alignments):
@@ -1571,13 +1578,16 @@ class Grounding_v1_multihead_v2(geo_nn.MessagePassing):
                  d_model,
                  nheads,
                  flow='source_to_target',
-                 self_score='dot' # dot/zero
+                 self_score='dot', # dot/zero
+                 random_drop=False,
+                 drop_p=None,
                  ):
         super().__init__(aggr=None,
                          flow=flow,)
         self.head_dim = d_model // nheads
         self.nheads = nheads
-        
+        self.random_drop = random_drop
+        self.drop_p=drop_p
         
         self.context_2 = nn.Parameter(torch.zeros([1, self.nheads, 2*self.head_dim, self.head_dim])) # 1 h 2c c
         glorot(self.context_2)
@@ -1594,6 +1604,7 @@ class Grounding_v1_multihead_v2(geo_nn.MessagePassing):
             pass
         else:
             raise ValueError()
+        
         
     def with_pos_embed(self, tensor, pos: Optional[Tensor]):
         return tensor if pos is None else tensor + pos
@@ -1699,15 +1710,22 @@ class Grounding_v1_multihead_v2(geo_nn.MessagePassing):
         inputs = rearrange(inputs, 'E (h nq) -> E h nq',h=self.nheads)
         out = [] # V  h nq
         for tgt_node_idx in range(dim_size):
-            self_score = x[tgt_node_idx] # h nq
             # 如果没有节点连向x_i, 那么message就是x_i本身
             if tgt_node_idx not in index:
-                out.append(self_score)
-                continue
-            # Msg h nq
-            msgs = torch.stack([inputs[idx] for idx in range(len(index)) if index[idx] == tgt_node_idx], dim=0)
-            msgs = msgs.sum(dim=0) 
-            out.append(msgs + self_score)
+                out.append(x[tgt_node_idx])
+            else:
+                self_score = x[tgt_node_idx]
+                # Msg+1 h nq
+                msgs = torch.stack([inputs[idx] for idx in range(len(index)) if index[idx] == tgt_node_idx], dim=0)
+                node_aggr_scores = torch.cat([msgs, self_score.unsqueeze(0)], dim=0)
+                if (self.training) and (self.random_drop):
+                    num_msgs = len(node_aggr_scores)
+                    save_prob = (1 - self.drop_p) * torch.ones(num_msgs)
+                    save_mask = torch.bernoulli(save_prob).float().to(node_aggr_scores.device)
+                    dropped_scores = save_mask[:, None, None] * node_aggr_scores
+                    out.append(dropped_scores.sum(dim=0))
+                else:
+                    out.append(node_aggr_scores.sum(dim=0))
         return torch.stack(out, dim=0).flatten(1)
 
 @register_graphLayer
@@ -1715,7 +1733,9 @@ def grounding_v1_multihead_v2(configs):
     return Grounding_v1_multihead_v2(d_model=configs['d_model'],
                         flow=configs['flow'],
                         self_score=configs['self_score'] if 'self_score' in configs else 'dot',
-                        nheads=configs['nheads'],)
+                        nheads=configs['nheads'],
+                        random_drop=configs['random_drop'] if 'random_drop' in configs else False,
+                        drop_p=configs['drop_p'] if 'drop_p' in configs else None)
 
 
 class Grounding_v1_multihead_v3(geo_nn.MessagePassing):
