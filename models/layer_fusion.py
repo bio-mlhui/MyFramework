@@ -39,8 +39,10 @@ class NoFusion(nn.Module):
         super().__init__()
 
     def forward(self, 
-                query_feat, text_feat,text_pad_mask):
-        return query_feat, text_feat
+                query_feat, amr_feats, amr_pad_masks,
+                text_pad_mask=None,
+                text_feats=None):
+        return query_feat, amr_feats, text_feats
     
 @register_fusion
 def no_fusion(configs):

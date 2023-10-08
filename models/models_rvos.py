@@ -2796,7 +2796,7 @@ class AMR_v0_detOnlyObj_Grounding(nn.Module):
             for i, j in indices
         ]
 
-from models.pretrained_video_instance_decoder.pt_obj_decoder import pt_obj_decoder_entrypoint
+from models.pretrained_video_instance_decoder import pt_obj_decoder_entrypoint
 from torch_geometric.nn.inits import glorot
 from .layer_fusion import fusion_entrypoint
 class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
@@ -2864,6 +2864,7 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
         self.tasks = tasks
         self.pt_dir = pt_dir
         self.max_stride = max_stride
+        self.is_pretraining_seg = is_pretraining_seg
 
         create_obj_decoder = pt_obj_decoder_entrypoint(obj_decoder['name'])
         self.obj_decoder = create_obj_decoder(obj_decoder)
@@ -2883,8 +2884,6 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
         self.fusion_module = create_fusion_module(fusion)
 
         self.build_ref_decoder(refdecoder)
-        self.is_pretraining_seg = is_pretraining_seg
-
         glorot(self.obj_query_proj)
         glorot(self.amrtext_wordEmbedding_proj)
 

@@ -1579,6 +1579,7 @@ class Grounding_v1_multihead_v2(geo_nn.MessagePassing):
                  nheads,
                  flow='source_to_target',
                  self_score='dot', # dot/zero
+                 score_aggr='sum',
                  random_drop=False,
                  drop_p=None,
                  ):
@@ -1605,6 +1606,7 @@ class Grounding_v1_multihead_v2(geo_nn.MessagePassing):
         else:
             raise ValueError()
         
+        self.score_aggr = score_aggr
         
     def with_pos_embed(self, tensor, pos: Optional[Tensor]):
         return tensor if pos is None else tensor + pos
@@ -1721,18 +1723,35 @@ class Grounding_v1_multihead_v2(geo_nn.MessagePassing):
                 if (self.training) and (self.random_drop):
                     num_msgs = len(node_aggr_scores)
                     save_prob = (1 - self.drop_p) * torch.ones(num_msgs)
-                    save_mask = torch.bernoulli(save_prob).float().to(node_aggr_scores.device)
-                    dropped_scores = save_mask[:, None, None] * node_aggr_scores
-                    out.append(dropped_scores.sum(dim=0))
+                    save_mask = torch.bernoulli(save_prob).bool().to(node_aggr_scores.device)
+                    if save_mask.any():
+                        dropped_scores = node_aggr_scores[save_mask]
+                        out.append(self.aggr_multiple(dropped_scores))
+                    else:
+                        out.append(torch.zeros_like(node_aggr_scores[0])) # h nq
                 else:
-                    out.append(node_aggr_scores.sum(dim=0))
-        return torch.stack(out, dim=0).flatten(1)
+                    out.append(self.aggr_multiple(node_aggr_scores))
 
+        return torch.stack(out, dim=0).flatten(1)
+    
+    def aggr_multiple(self, msgs):
+        # msg h nq
+        if self.score_aggr == 'sum':
+            return msgs.sum(dim=0)
+        elif self.score_aggr == 'min':
+            num_msgs, head, nq = msgs.shape
+            msgs = msgs.flatten(1) # msg nq
+            intersect_msgs, _ = msgs.min(dim=0)
+            intersect_msgs = rearrange(intersect_msgs, '(h nq) -> h nq',h=head, nq=nq)
+            return intersect_msgs
+        else:
+            raise ValueError()
 @register_graphLayer
 def grounding_v1_multihead_v2(configs):
     return Grounding_v1_multihead_v2(d_model=configs['d_model'],
                         flow=configs['flow'],
                         self_score=configs['self_score'] if 'self_score' in configs else 'dot',
+                        score_aggr=configs['score_aggr'] if 'score_aggr' in configs else 'sum',
                         nheads=configs['nheads'],
                         random_drop=configs['random_drop'] if 'random_drop' in configs else False,
                         drop_p=configs['drop_p'] if 'drop_p' in configs else None)
@@ -2043,7 +2062,7 @@ class Grounding_v1_multihead_multiLayer(nn.Module):
                                                 node_dsends=node_dsends)
         for layer_idx in range(self.num_layers):
             scores = self.score_layers[layer_idx](
-                                            node_scores,
+                                            scores,
                                             node_batch_ids=node_batch_ids, edge_batch_ids=edge_batch_ids, 
                                             node_seg_ids=node_seg_ids, edge_seg_ids=edge_seg_ids,
                                             node_feats=node_feats, edge_feats=edge_feats,
