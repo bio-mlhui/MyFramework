@@ -135,7 +135,7 @@ class VidQuery_Text_v2(nn.Module):
     
     def forward(self, 
                 query_feat, amr_feats, amr_pad_masks,
-                text_pad_mask=None,
+                text_pad_masks=None,
                 text_feats=None):
         lquery, lamr = query_feat.shape[1], amr_feats.shape[1]
         src = torch.cat([query_feat, amr_feats], dim=1)
@@ -143,10 +143,10 @@ class VidQuery_Text_v2(nn.Module):
         src_pos = torch.zeros_like(src)
 
         if text_feats is not None:
-            assert text_pad_mask is not None
-            text_pos = self.text1d_pos(text_pad_mask, hidden_dim=text_feats.shape[-1])
+            assert text_pad_masks is not None
+            text_pos = self.text1d_pos(text_pad_masks, hidden_dim=text_feats.shape[-1]).permute(0, 2, 1) # b s c
             src = torch.cat([src, text_feats], dim=1)
-            src_pad_mask = torch.cat([src_pad_mask, text_pad_mask], dim=1)
+            src_pad_mask = torch.cat([src_pad_mask, text_pad_masks], dim=1)
             src_pos = torch.cat([src_pos, text_pos], dim=1)
             ltext = text_feats.shape[1]
         else:
@@ -155,7 +155,7 @@ class VidQuery_Text_v2(nn.Module):
         src =  self.self_module(src=src.permute(1,0,2),
                                 mask=None,
                                 src_key_padding_mask=src_pad_mask,
-                                pos=src_pos.permute(1,0,2))[0]
+                                pos=src_pos.permute(1,0,2))
         src = src.permute(1,0,2)
 
         return src.split([lquery, lamr, ltext], dim=1)
