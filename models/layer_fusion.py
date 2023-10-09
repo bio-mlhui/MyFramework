@@ -60,20 +60,18 @@ class VidQuery_Text_v1(nn.Module):
 
     def forward(self, 
                 query_feat, amr_feats, amr_pad_masks,
-                text_pad_mask=None,
+                text_pad_masks=None,
                 text_feats=None):
-        memory = amr_feats
-        memory_key_padding_mask = amr_pad_masks
-        memory_pos = torch.zeros_like(amr_feats)
+        memory = amr_feats.clone() # b v+e_max c
+        memory_key_padding_mask = amr_pad_masks # b v+e_max
+        memory_pos = torch.zeros_like(amr_feats) 
 
         if text_feats is not None:
-            assert text_pad_mask is not None
-            text_pos = self.text1d_pos(text_pad_mask, hidden_dim=text_feats.shape[-1])
+            assert text_pad_masks is not None
+            text_pos = self.text1d_pos(text_pad_masks, hidden_dim=text_feats.shape[-1]).permute(0, 2, 1) # b s c
             memory = torch.cat([memory, text_feats], dim=1)
-            memory_key_padding_mask = torch.cat([memory_key_padding_mask, text_pad_mask], dim=1)
+            memory_key_padding_mask = torch.cat([memory_key_padding_mask, text_pad_masks], dim=1)
             memory_pos = torch.cat([memory_pos,text_pos], dim=1)
-
-        text_pos = self.text1d_pos(text_pad_mask, hidden_dim=text_feats.shape[-1])
         query_feat =  self.cross_module(tgt=query_feat.permute(1,0,2),
                                         memory=memory.permute(1,0,2), 
                                         memory_key_padding_mask=memory_key_padding_mask,
@@ -84,6 +82,42 @@ class VidQuery_Text_v1(nn.Module):
 @register_fusion
 def vidquery_text_v1(configs):
     return VidQuery_Text_v1(configs)
+
+
+# b nq c, b s c, 只转换query
+class VidQuery_Text_v3(nn.Module):
+    def __init__(self, configs) -> None:
+        super().__init__()
+        self.cross_module = VisionLanguageFusionModule(d_model=configs['d_model'],
+                                                       nhead=configs['nhead'],
+                                                       dropout=configs['dropout'])
+        self.text1d_pos = build_position_encoding(position_embedding_name='1d')
+        # amr shortest path positional embedding
+
+    def forward(self, 
+                query_feat, amr_feats, amr_pad_masks,
+                text_pad_masks=None,
+                text_feats=None):
+        memory = amr_feats.clone() # b v+e_max c
+        memory_key_padding_mask = amr_pad_masks # b v+e_max
+        memory_pos = torch.zeros_like(amr_feats) 
+
+        if text_feats is not None:
+            assert text_pad_masks is not None
+            text_pos = self.text1d_pos(text_pad_masks, hidden_dim=text_feats.shape[-1]).permute(0, 2, 1) # b s c
+            memory = torch.cat([memory, text_feats], dim=1)
+            memory_key_padding_mask = torch.cat([memory_key_padding_mask, text_pad_masks], dim=1)
+            memory_pos = torch.cat([memory_pos,text_pos], dim=1)
+        query_feat =  self.cross_module(tgt=query_feat.permute(1,0,2),
+                                        memory=memory.permute(1,0,2), 
+                                        memory_key_padding_mask=memory_key_padding_mask,
+                                        pos=memory_pos.permute(1,0,2), 
+                                        query_pos=None)[0]
+        return query_feat.permute(1,0,2), amr_feats, text_feats
+    
+@register_fusion
+def vidquery_text_v3(configs):
+    return VidQuery_Text_v3(configs)
 
 
 # b nq c, b s c, 两个都转换

@@ -2966,6 +2966,7 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
         nf, batch_size, *_, device = *samples.tensors.shape, samples.tensors.device
         # b nq c, b t nq h w
         obj_queries, pred_masks = self.obj_decoder(samples)
+        obj_queries = self.obj_query_proj(obj_queries)
         if self.is_pretraining_seg:
             return {'objdecoder_objseg': pred_masks}
         # list[Graph], b (V+E)max c, b (V+E)max 
