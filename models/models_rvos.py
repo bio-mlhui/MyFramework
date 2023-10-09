@@ -2867,9 +2867,8 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
         self.is_pretraining_seg = is_pretraining_seg
 
         create_obj_decoder = pt_obj_decoder_entrypoint(obj_decoder['name'])
-        self.obj_decoder = create_obj_decoder(obj_decoder)
+        self.obj_decoder = create_obj_decoder(obj_decoder, pt_dir)
         self.obj_query_proj = nn.Linear(self.obj_decoder.out_dim, d_model)
-        
         
         from .amr_utils.utils import BartForConditionalGeneration
         AMRBart = BartForConditionalGeneration.from_pretrained(os.path.join(self.pt_dir, 'amr', 'AMRBART_pretrain'))
@@ -2884,8 +2883,12 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
         self.fusion_module = create_fusion_module(fusion)
 
         self.build_ref_decoder(refdecoder)
-        glorot(self.obj_query_proj)
-        glorot(self.amrtext_wordEmbedding_proj)
+        torch.nn.init.uniform_(self.obj_query_proj.weight)
+        torch.nn.init.zeros_(self.obj_query_proj.bias)
+        torch.nn.init.uniform_(self.amrtext_wordEmbedding_proj.fc.weight)
+        torch.nn.init.zeros_(self.amrtext_wordEmbedding_proj.fc.bias)
+        self.obj_decoder_mask_out_stride = 4
+        self.obj_decoder_mask_threshold = 0.5
 
     def build_ref_decoder(self, refdecoder,):
         from .layer_graph import graphLayer_entrypoint
@@ -2940,7 +2943,18 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
         node_alignments = text_auxiliary['node_alignments']
         return amrs, amr_token_feats, amr_token_seg_ids, text_feats, text_pad_masks, node_alignments
 
-    def model_outputs(self, samples : NestedTensor, text_queries, auxiliary, perFrame_has_ann):
+    def get_decoder_preds(self, model_outs):
+        refseg_src = model_outs['refdecoder_refseg']
+        if self.decoder_reason_layer_choose_who == '第一个':
+            for i in range(-1, self.decoder_trans_nlayers):
+                # list[vi nq], b -> b nq
+                layer_gscore = refseg_src[f'layer{i}_preds']['grounding_score']
+                layer_gscore = torch.stack([lg[0] for lg in layer_gscore], dim=0)
+                refseg_src[f'layer{i}_preds']['grounding_score'] = layer_gscore
+        return refseg_src  
+
+
+    def model_outputs(self, samples : NestedTensor, text_queries, auxiliary):
         """ text_auxiliary
         'amrs': list[T(2 E_i)]
         'seg_ids': b (V+E)max
@@ -2950,49 +2964,19 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
         # 你想visualize的东西
         check_visualize = {} 
         nf, batch_size, *_, device = *samples.tensors.shape, samples.tensors.device
-        # b t nq c
-        obj_queries, objdecoder_layer_preds = self.obj_decoder(samples)
-
+        # b nq c, b t nq h w
+        obj_queries, pred_masks = self.obj_decoder(samples)
+        if self.is_pretraining_seg:
+            return {'objdecoder_objseg': pred_masks}
         # list[Graph], b (V+E)max c, b (V+E)max 
         amrs, amr_token_feats, amr_token_seg_ids, text_feats, text_pad_masks, node_alignments = self.encode_text(text_queries, auxiliary, device) 
 
         obj_queries, amr_token_feats, text_feats = self.fusion_module(query_feat=obj_queries, 
-                                                                text_feats=text_feats,
-                                                                amr_feats=amr_token_feats,
-                                                                amr_pad_masks = amr_token_seg_ids==0,
-                                                                text_pad_masks=text_pad_masks)
-            
-        # b s c -> bT s c, bT s -> bt s c, bt s
-        amr_token_feats = repeat(amr_token_feats, 'b s c -> (b t) s c', t=nf)[perFrame_has_ann]
-        amr_token_seg_ids = repeat(amr_token_seg_ids, 'b s -> (b t) s', t=nf)[perFrame_has_ann]
-        text_feats = repeat(text_feats, 'b s c -> (b t) s c',t=nf)[perFrame_has_ann]
-        # list[list[int], vi], batch
-        # batch -> bt
-        repeated_node_alignments = [] 
-        for idx in range(batch_size):
-            for _ in range(nf):
-                repeated_node_alignments.append(copy.deepcopy(node_alignments[idx]))
-        filtered_rnas = []
-        for idx, hsnn in enumerate(perFrame_has_ann):
-            if hsnn:
-                filtered_rnas.append(repeated_node_alignments[idx])
-        assert len(filtered_rnas) != 0
-        node_alignments = filtered_rnas
-        
-        repeated_amrs = [] # bT -> bt
-        for idx in range(batch_size):
-            for _ in range(nf):
-                repeated_amrs.append(copy.deepcopy(amrs[idx]))
-        filtered_amrs = []
-        for idx, hsnn in enumerate(perFrame_has_ann):
-            if hsnn:
-                filtered_amrs.append(repeated_amrs[idx])
-        assert len(filtered_amrs) != 0
-        amrs = filtered_amrs
-        
-        if self.is_pretraining_seg:
-            return {'objdecoder_objseg': objdecoder_layer_preds}
-        memories = obj_queries
+                                                                    text_feats=text_feats,
+                                                                    amr_feats=amr_token_feats,
+                                                                    amr_pad_masks = amr_token_seg_ids==0,
+                                                                    text_pad_masks=text_pad_masks)
+        memories = obj_queries.permute(1,0,2)
         nodes_batch_ids, edges_batch_ids,\
             node_seg_ids, edges_seg_ids, \
             node_feats, edge_feats, \
@@ -3010,7 +2994,7 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
                                                 node_subseqs=node_subseqs,
                                                 node_dsends=node_dsends) # V nq
         g_score_by_batch = []
-        for bch_idx in range(bt):
+        for bch_idx in range(batch_size):
             bch_node_score = torch.stack([grounding_score[idx] for idx, batch_id in enumerate(nodes_batch_ids) if batch_id == bch_idx], dim=0)
             g_score_by_batch.append(bch_node_score) # vi nq
         decoder_layer_preds[f'layer{-1}_preds'] = {'grounding_score': g_score_by_batch}
@@ -3039,7 +3023,7 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
         return {'refdecoder_refseg': decoder_layer_preds,
                 # TODO: 添加一些其他可以加loss, 加postprocessing的东西, 输出的接口和trainer evaluation一致;, 输出的接口和task loss一致
                 'check_visualze': check_visualize,
-                 'objdecoder_objseg': objdecoder_layer_preds } 
+                 'objdecoder_objseg': pred_masks} 
 
 
     @torch.no_grad()
@@ -3049,32 +3033,39 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
         T, batch_size, _, H, W = samples.tensors.shape
         perFrame_has_ann = [t['has_ann'] for t in targets] # bool, t
         ann_number_by_batch = [f.int().sum() for f in perFrame_has_ann]
-        perFrame_has_ann = torch.cat([F.pad(t.float(), pad=(0, T-len(t))).bool() for t in perFrame_has_ann], dim=0) # bT
-        # bt' n h w -> bt' h w
-        decoder_layer_preds = self.model_outputs(samples, text_queries, auxiliary, perFrame_has_ann)
-        objseg_preds = decoder_layer_preds['objdecoder_objseg']
-        obj_last_layer_preds = objseg_preds[f'layer{self.obj_decoder_nlayers-1}_preds']
-
+        perFrame_has_ann = torch.stack([F.pad(t.float(), pad=(0, T-len(t))).bool() for t in perFrame_has_ann], dim=0) # b T
+        decoder_layer_preds = self.model_outputs(samples, text_queries, auxiliary)
+        # b nq T h w
+        out_mask_logits = decoder_layer_preds['objdecoder_objseg'].permute(0,2,1,3,4)
         if self.is_pretraining_seg:
-            out_mask_logits = obj_last_layer_preds['pred_mask_logits'] # bt nq h w
             for idx in range(batch_size):
                 h, w = targets[idx]['masks'].shape[-2:]
                 # n t h w -> n t H W
                 targets[idx]['masks'] = F.pad(targets[idx]['masks'].float(), pad=(0, W-w, 0, H-h)).bool()
-            obj_decoder_targets = self.obj_decoder_targets_handler(targets)
-            _, matching_result = self.obj_decoder_objseg_loss(objseg_preds, obj_decoder_targets)
-            matching_result = matching_result[-1] # list(tgt, src), bt
-            gt_referent_idx = obj_decoder_targets['referent_idx'] # list[int], bt
-            out_mask_logits = torch.stack([out_mask[tgt_idx[src_idx.tolist().index(gt_ref_idx)]] 
-                                            for out_mask, gt_ref_idx, (tgt_idx, src_idx) in zip(out_mask_logits, gt_referent_idx, matching_result)], dim=0)
-        else:
-            out_mask_logits = obj_last_layer_preds['pred_mask_logits'] # bt nq h w
+            # list[n t h w]
+            tgt_masks = [targets[idx]['masks'] for idx in range(batch_size)]
+            for btc_idx in range(batch_size):
+                start = int(self.obj_decoder_mask_out_stride // 2)
+                im_h, im_w = tgt_masks[btc_idx].shape[-2:]
+                tgt_masks[btc_idx] = tgt_masks[btc_idx][:, :, start::self.obj_decoder_mask_out_stride, start::self.obj_decoder_mask_out_stride] 
+                assert tgt_masks[btc_idx].size(2) * self.obj_decoder_mask_out_stride == im_h
+                assert tgt_masks[btc_idx].size(3) * self.obj_decoder_mask_out_stride == im_w
 
+            gt_referent_idx = [targets[idx]['referent_idx'] for idx in range(batch_size)] # list[int], b
+            _, matching_result = self.obj_decoder_objseg_loss(out_mask_logits, perFrame_has_ann, tgt_masks)
+            # list[t h w] -> b t h w
+            out_mask_logits = torch.stack([out_mask[tgt_idx[src_idx.tolist().index(gt_ref_idx)]][has_ann]
+                                            for out_mask, gt_ref_idx, (tgt_idx, src_idx), has_ann in zip(out_mask_logits, gt_referent_idx, matching_result,
+                                                                                                         perFrame_has_ann)], dim=0)
+            out_mask_logits = out_mask_logits.flatten(0,1) # bt h w
+        else:
             refdecoder_layer_preds = self.get_decoder_preds(decoder_layer_preds)
             ref_last_layer_preds = refdecoder_layer_preds[f'layer{self.decoder_trans_nlayers-1}_preds']
-            ref_last_layer_gscore = ref_last_layer_preds['grounding_score']  # bt nq 
+            ref_last_layer_gscore = ref_last_layer_preds['grounding_score']  # b nq 
             argmax_query_idx = ref_last_layer_gscore.argmax(-1)
+            # b T h w
             out_mask_logits = torch.stack([out_mask[max_query] for out_mask, max_query in zip(out_mask_logits, argmax_query_idx)], dim=0)
+            out_mask_logits = out_mask_logits.flatten(0,1)[perFrame_has_ann.flatten()]
         # # # bt 1 h w
         query_pred_masks = F.interpolate(out_mask_logits.unsqueeze(1), 
                                          scale_factor=self.obj_decoder_mask_out_stride, mode="bilinear", align_corners=False)
@@ -3115,28 +3106,38 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
             'query_pred_is_referred_prob': by_batch_preds_probs, # [n t'], batch
         }
 
-
     def forward(self, samples : NestedTensor, text_queries, auxiliary, targets, visualize=False):
         if not isinstance(samples, NestedTensor):
             samples = nested_tensor_from_videos_list_with_stride(samples, max_stride=self.max_stride)
         T, batch_size, _, H, W = samples.tensors.shape
-        perFrame_has_ann = [torch.tensor(t['has_ann']) for t in targets]
-        perFrame_has_ann = torch.cat([F.pad(t.float(), pad=(0, T-len(t))).bool() for t in perFrame_has_ann], dim=0) # bT
+        perFrame_has_ann = [t['has_ann'] for t in targets] # bool, t
+        ann_number_by_batch = [f.int().sum() for f in perFrame_has_ann]
+        perFrame_has_ann = torch.stack([F.pad(t.float(), pad=(0, T-len(t))).bool() for t in perFrame_has_ann], dim=0) # b T
         
         # bt n H W, 
-        model_outs = self.model_outputs(samples, text_queries, auxiliary, perFrame_has_ann) 
-        objseg_src = model_outs['objdecoder_objseg']
+        model_outs = self.model_outputs(samples, text_queries, auxiliary) 
+        # b nq T h w
+        out_mask_logits = model_outs['objdecoder_objseg'].permute(0,2,1,3,4)
         for idx in range(batch_size):
             h, w = targets[idx]['masks'].shape[-2:]
             # n t h w -> n t H W
             targets[idx]['masks'] = F.pad(targets[idx]['masks'].float(), pad=(0, W-w, 0, H-h)).bool()
-        
-        obj_decoder_targets = self.obj_decoder_targets_handler(targets)
-        loss_value_dict, matching_result = self.obj_decoder_objseg_loss(objseg_src, obj_decoder_targets)
+        # list[n t h w]
+        tgt_masks = [targets[idx]['masks'] for idx in range(batch_size)]
+        for btc_idx in range(batch_size):
+            start = int(self.obj_decoder_mask_out_stride // 2)
+            im_h, im_w = tgt_masks[btc_idx].shape[-2:]
+            tgt_masks[btc_idx] = tgt_masks[btc_idx][:, :, start::self.obj_decoder_mask_out_stride, start::self.obj_decoder_mask_out_stride] 
+            assert tgt_masks[btc_idx].size(2) * self.obj_decoder_mask_out_stride == im_h
+            assert tgt_masks[btc_idx].size(3) * self.obj_decoder_mask_out_stride == im_w
+
+        gt_referent_idx = [targets[idx]['referent_idx'] for idx in range(batch_size)] # list[int], b
+        isvalid = [targets[idx]['valid'] for idx in range(batch_size)] # list[n t], b
+        loss_value_dict, matching_result = self.obj_decoder_objseg_loss(out_mask_logits, perFrame_has_ann, tgt_masks)
 
         if not self.is_pretraining_seg:
             refseg_src = self.get_decoder_preds(model_outs)
-            loss_value_dict.update(self.ref_choose_loss(refseg_src, obj_decoder_targets, matching_result[-1]))
+            loss_value_dict.update(self.ref_choose_loss(refseg_src, tgt_masks, gt_referent_idx, isvalid, matching_result))
 
         loss = sum((loss_value_dict[k] * self.loss_weight[k] for k in loss_value_dict.keys()))
         if not math.isfinite(loss.item()):
@@ -3149,46 +3150,140 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
         grad_total_norm = get_total_grad_norm(self.parameters(), norm_type=2)
         return loss_dict_unscaled, loss_dict_scaled, grad_total_norm 
    
-    def ref_choose_loss(self, refseg_src, targets, decoder_last_layer_matching_results):
+    def ref_choose_loss(self, refseg_src, tgt_masks, referent_idx, is_valid,  decoder_last_layer_matching_results):
         """
         Args:
             refseg_src: dict{layer-1pred: {queries: bt c}}
-            targets (_type_): batch[dict{'masks', 'referent_idx'}]
-            matching_result_by_layer: list[(tgt_idx, src_idx), bt]
+            list[n t h w], batch
+            list[src, tgt], batch
+            list[n t], batch
         """
-        tgt_masks = targets['masks']
-        referent_idx = targets['referent_idx'] # list[int], bt
         device=tgt_masks[0].device 
+        # thw.any()
         num_boxes = sum([t[refidx].flatten().any().int() for t, refidx in zip(tgt_masks,referent_idx)])
         num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=device)
         if is_dist_avail_and_initialized():
             torch.distributed.all_reduce(num_boxes)
         num_boxes = torch.clamp(num_boxes / get_world_size(), min=1).item()
 
-        is_valid = targets['is_valid'] # list[ni], bt
-
-        ref_is_valid = torch.tensor([isva[ridx] for isva, ridx in zip(is_valid, referent_idx)]).bool() # bt
+        ref_is_valid = torch.tensor([isva[ridx].any() for isva, ridx in zip(is_valid, referent_idx)]).bool() # b
 
         layer_weights = self.tasks['refdecoder_refseg']['layer_weights']
         
         match_as_gt_indices = [] # list[int], bt
-        for ref_idx, (tgt_idx, src_idx) in zip(referent_idx,  decoder_last_layer_matching_results): # bt
+        for ref_idx, (tgt_idx, src_idx) in zip(referent_idx,  decoder_last_layer_matching_results): # b
             sel_idx = src_idx.tolist().index(ref_idx)
             match_as_gt_idx = tgt_idx[sel_idx]
             match_as_gt_indices.append(match_as_gt_idx.item())
-        match_as_gt_indices = torch.tensor(match_as_gt_indices).long().to(device) # bt
+        match_as_gt_indices = torch.tensor(match_as_gt_indices).long().to(device) # b
         match_as_gt_indices = match_as_gt_indices[ref_is_valid]
 
         refdecoder_choose_loss = 0.
         for layer_idx in range(-1, self.decoder_trans_nlayers):
             layer_weight = layer_weights[layer_idx] 
             if layer_weight != 0: # bt c
-                refdecoder_gscore = refseg_src[f'layer{layer_idx}_preds']['grounding_score'] # bt nq
+                refdecoder_gscore = refseg_src[f'layer{layer_idx}_preds']['grounding_score'] # b nq
                 refdecoder_gscore = refdecoder_gscore[ref_is_valid]
-                choose_loss = F.cross_entropy(refdecoder_gscore, match_as_gt_indices, reduction='none') # bt
+                choose_loss = F.cross_entropy(refdecoder_gscore, match_as_gt_indices, reduction='none') # b
                 choose_loss = choose_loss.sum() / num_boxes
                 refdecoder_choose_loss += (choose_loss * layer_weight)
         return {'refdecoder_choose': refdecoder_choose_loss}
+
+    # task loss
+    def obj_decoder_objseg_loss(self, out_mask_logits, perFrame_has_ann, tgt_masks):
+        # b nq T h w
+        # b T
+        # list[n t h w]
+        loss_weight = self.loss_weight
+        # n thw -> n
+        num_boxes = sum([t.flatten(1).any(-1).int().sum() for t in tgt_masks])
+        num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=tgt_masks[0].device)
+        if is_dist_avail_and_initialized():
+            torch.distributed.all_reduce(num_boxes)
+        num_boxes = torch.clamp(num_boxes / get_world_size(), min=1).item()
+        
+        loss_value = {'objdecoder_mask': torch.tensor(0, device=tgt_masks[0].device).float(), 
+                      'objdecoder_dice': torch.tensor(0, device=tgt_masks[0].device).float(),}
+        
+        matching_indices = self.obj_decoder_matching(out_mask_logits, perFrame_has_ann, tgt_masks)
+        if loss_weight['objdecoder_mask'] != 0 or loss_weight['objdecoder_dice'] !=0:
+            masks_losses = self.obj_decoder_masks_loss(out_mask_logits, perFrame_has_ann, tgt_masks, matching_indices, num_boxes)
+            for k in masks_losses.keys():
+                loss_value[k] += masks_losses[k]
+        return loss_value, matching_indices       
+
+    @torch.no_grad()
+    def obj_decoder_matching(self, out_mask_logits, perFrame_has_ann, tgt_masks):
+        # b nq T h w
+        # b T
+        # list[n t h w]
+        src_masks_logits = out_mask_logits  # b nq T h w
+        batch_size, nq, T, h, w = src_masks_logits.shape 
+        indices = [] 
+        for i in range(batch_size):
+            out_mask = src_masks_logits[i]  # nq T h w
+            out_mask = out_mask[:, perFrame_has_ann[i]] # nq t h w
+            tgt_mask = tgt_masks[i].to(out_mask) # n t H W
+            
+            cost_mask = batch_sigmoid_ce_loss(out_mask.flatten(1), tgt_mask.flatten(1)) # nq hw : n hw -> nq n
+            cost_dice = batch_dice_loss(out_mask.flatten(1), tgt_mask.flatten(1))
+
+            C = self.tasks['objdecoder_objseg']['matching_costs']['mask'] * cost_mask + \
+                self.tasks['objdecoder_objseg']['matching_costs']['dice'] * cost_dice 
+            C = C.cpu()
+            indices.append(linear_sum_assignment(C))
+            
+        return [
+            (torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64))
+            for i, j in indices
+        ]
+
+    def binary_cross_entropy_mask_loss(self, src_masks, has_ann, tgt_masks):
+        # n T h w, n t h w, T, -> list[cross_entropy], n
+        src_masks = src_masks[:, has_ann].flatten(1) # n thw
+        tgt_masks = tgt_masks.flatten(1) # n thw
+
+        ce_loss = F.binary_cross_entropy_with_logits(src_masks, tgt_masks, reduction="none")
+        ce_loss = ce_loss.mean(-1) # n
+        return ce_loss
+    
+    def dice_mask_loss(self, src_masks, has_ann, tgt_masks):
+        # n T h w, n t h w, -> n
+        src_masks = src_masks[:, has_ann].flatten(1) # n thw
+        tgt_masks = tgt_masks.flatten(1) # n thw
+
+        src_masks = src_masks.sigmoid()
+        numerator = 2 * (src_masks * tgt_masks).sum(1)
+        denominator = src_masks.sum(-1) + tgt_masks.sum(-1)
+        loss = 1 - (numerator + 1) / (denominator + 1)
+        return loss
+
+    def obj_decoder_masks_loss(self, out_mask_logits, perFrame_has_ann, tgt_masks, matching_indices, num_boxes):
+        # b nq T h w
+        # b T
+        # list[n t h w], b
+        batch_size = len(out_mask_logits)
+
+        # list[n T h w], b
+        src_masks = [t[J] for t, (J, _) in zip(out_mask_logits, matching_indices)]
+
+        # list[n t h w], b 
+        tgt_masks = [t[J] for t, (_, J) in zip(tgt_masks, matching_indices)]
+        
+
+        mask_losses = [] 
+        mask_dice_losses = [] 
+        for btc_idx in batch_size:
+            mask_ce_loss = self.binary_cross_entropy_mask_loss(src_masks[btc_idx], perFrame_has_ann[btc_idx], tgt_masks[btc_idx])
+            mask_dice_loss = self.dice_mask_loss(src_masks[btc_idx], perFrame_has_ann[btc_idx], tgt_masks[btc_idx])
+            mask_losses.append(mask_ce_loss)
+            mask_dice_losses.append(mask_dice_loss)
+
+        losses = {
+            "objdecoder_mask": torch.cat(mask_losses).sum() / num_boxes,
+            "objdecoder_dice": torch.cat(mask_dice_losses).sum() / num_boxes,
+        }
+        return losses    
 
 
 
@@ -7610,7 +7705,7 @@ def amr_v0_detOnlyObj_grounding_ptObjDet(device, configs):
 
     param_dicts = [
         {"params": [p for n, p in model.named_parameters() 
-                    if (("video_swint" not in n) and ("amrbart_wordEmbedding" not in n) and p.requires_grad)]},
+                    if (("obj_decoder" not in n) and ("amrbart_wordEmbedding" not in n) and p.requires_grad)]},
         {"params": [p for n, p in model.named_parameters() if ("obj_decoder" in n) and p.requires_grad],
             "lr": configs['optimization']['vid_backbone_lr']},
         {"params": [p for n, p in model.named_parameters() if ("amrbart_wordEmbedding" in n) and p.requires_grad],

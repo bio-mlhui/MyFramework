@@ -40,7 +40,7 @@ class NoFusion(nn.Module):
 
     def forward(self, 
                 query_feat, amr_feats, amr_pad_masks,
-                text_pad_mask=None,
+                text_pad_masks=None,
                 text_feats=None):
         return query_feat, amr_feats, text_feats
     
