@@ -2857,6 +2857,8 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
                     'choose_who': '第一个'
                     },
                 is_pretraining_seg=False,
+                multiclass_choose=False,
+                choose_threshold=None
                 ) -> None:
         super().__init__()
         self.d_model = d_model
@@ -2889,6 +2891,8 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
         torch.nn.init.zeros_(self.amrtext_wordEmbedding_proj.fc.bias)
         self.obj_decoder_mask_out_stride = 4
         self.obj_decoder_mask_threshold = 0.5
+        self.multiclass_choose = multiclass_choose
+        self.choose_threshold=choose_threshold
 
     def build_ref_decoder(self, refdecoder,):
         from .layer_graph import graphLayer_entrypoint
@@ -3138,7 +3142,7 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
 
         if not self.is_pretraining_seg:
             refseg_src = self.get_decoder_preds(model_outs)
-            loss_value_dict.update(self.ref_choose_loss(refseg_src, tgt_masks, gt_referent_idx, isvalid, matching_result))
+            loss_value_dict.update(self.ref_choose_loss(refseg_src, tgt_masks, gt_referent_idx, isvalid, matching_result, out_mask_logits, perFrame_has_ann))
 
         loss = sum((loss_value_dict[k] * self.loss_weight[k] for k in loss_value_dict.keys()))
         if not math.isfinite(loss.item()):
@@ -3151,7 +3155,41 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
         grad_total_norm = get_total_grad_norm(self.parameters(), norm_type=2)
         return loss_dict_unscaled, loss_dict_scaled, grad_total_norm 
    
-    def ref_choose_loss(self, refseg_src, tgt_masks, referent_idx, is_valid,  decoder_last_layer_matching_results):
+    def get_gt_class_prob(self, best_query_idx, obj_decoder_out, perFrame_has_ann):
+        # b
+        # b nq T h w, b T
+        # list[t h w], batch
+        batch_size, nq, *_ = obj_decoder_out.shape
+        device = obj_decoder_out.device
+        if not self.multiclass_choose:
+            gt_probs = torch.zeros([batch_size, nq]).float().to(device)
+            for btc_idx in range(batch_size):
+                best_idx = best_query_idx[btc_idx]
+                gt_probs[btc_idx][best_idx] = 1.
+            return gt_probs
+        else:
+            dice_with_best = [] # b nq
+            for btc_idx in range(batch_size):
+                best_idx = best_query_idx[btc_idx]
+                has_ann = perFrame_has_ann[btc_idx]
+                best_mask = (obj_decoder_out[btc_idx][best_idx][has_ann].sigmoid() > 0.5).flatten() # thw
+                other_mask = (obj_decoder_out[btc_idx][:, has_ann].sigmoid() > 0.5).flatten(1) # nq thw
+                pairwise_dice = self.get_dice(other_mask, best_mask) # nq
+                dice_with_best.append(pairwise_dice)
+            dice_with_best = torch.stack(dice_with_best, dim=0) # b nq
+            gt_probs = (dice_with_best >= self.choose_threshold).float()
+            gt_probs = gt_probs / gt_probs.sum(dim=-1, keepdim=True)
+            return gt_probs
+    def get_dice(self, all_mask, best_mask):
+        # nq c, c, Bool
+        all_mask = all_mask.float()
+        best_mask = best_mask.float().unsqueeze(0)
+        numerator = 2 * torch.einsum("nc,mc->nm", all_mask, best_mask) # nq m
+        # nq 1, 1 m -> nq m
+        denominator = all_mask.sum(-1)[:, None] + best_mask.sum(-1)[None, :] 
+        dice = (numerator + 1) / (denominator + 1) # nq m
+        return dice.squeeze(-1) # nq
+    def ref_choose_loss(self, refseg_src, tgt_masks, referent_idx, is_valid,  decoder_last_layer_matching_results, obj_decoder_out, perFrame_has_ann):
         """
         Args:
             refseg_src: dict{layer-1pred: {queries: bt c}}
@@ -3177,17 +3215,18 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
             match_as_gt_idx = tgt_idx[sel_idx]
             match_as_gt_indices.append(match_as_gt_idx.item())
         match_as_gt_indices = torch.tensor(match_as_gt_indices).long().to(device) # b
-        match_as_gt_indices = match_as_gt_indices[ref_is_valid]
-
+        gt_probs = self.get_gt_class_prob(match_as_gt_indices, obj_decoder_out, perFrame_has_ann) # b nq
+        gt_probs = gt_probs[ref_is_valid]
         refdecoder_choose_loss = 0.
         for layer_idx in range(-1, self.decoder_trans_nlayers):
             layer_weight = layer_weights[layer_idx] 
             if layer_weight != 0: # bt c
                 refdecoder_gscore = refseg_src[f'layer{layer_idx}_preds']['grounding_score'] # b nq
                 refdecoder_gscore = refdecoder_gscore[ref_is_valid]
-                choose_loss = F.cross_entropy(refdecoder_gscore, match_as_gt_indices, reduction='none') # b
+                choose_loss = F.cross_entropy(refdecoder_gscore, gt_probs, reduction='none') # b
                 choose_loss = choose_loss.sum() / num_boxes
                 refdecoder_choose_loss += (choose_loss * layer_weight)
+
         return {'refdecoder_choose': refdecoder_choose_loss}
 
     # task loss
@@ -7700,6 +7739,8 @@ def amr_v0_detOnlyObj_grounding_ptObjDet(device, configs):
         tasks=configs['tasks'],
         refdecoder=configs['refdecoder'],
         is_pretraining_seg=configs['is_pretraining_seg'],
+        multiclass_choose=configs['multiclass_choose'] if 'multiclass_choose' in configs else False,
+        choose_threshold=configs['choose_threshold'] if 'choose_threshold' in configs else None
     )
     model.to(device)
 
