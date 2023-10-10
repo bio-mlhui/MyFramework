@@ -232,3 +232,52 @@ class VidQuery_Text_v2(nn.Module):
 @register_fusion
 def vidquery_text_v2(configs):
     return VidQuery_Text_v2(configs)
+
+
+class perFrameVideo_Text_v1(nn.Module):
+    def __init__(self, d_model, nhead, dropout) -> None:
+        super().__init__()
+        self.cross_module = VisionLanguageFusionModule(d_model=d_model,
+                                                                nhead=nhead,
+                                                                dropout=dropout)
+        self.text1d_pos = build_position_encoding(position_embedding_name='1d')
+        # amr shortest path positional embedding
+    
+    def forward(self, video_feats, video_poses,
+                text_feats, text_pad_masks,
+                amr_feats, amr_pad_masks):
+        # dict, bt c h w
+        # text_feats: b s c
+        # amr_feats: b v+e_max c
+        BT = video_feats[0].shape[0]
+        B = len(text_feats)
+        T = BT // B
+        text_feats = repeat(text_feats, 'b s c -> (b t) s c', t=T)
+        text_pad_masks = repeat(text_pad_masks, 'b s -> (b t) s',t=T)
+        amr_feats = repeat(amr_feats, 'b s c -> (b t) s c', t=T)
+        amr_pad_masks = repeat(amr_pad_masks, 'b s -> (b t) s',t=T)
+
+        text_pos = self.text1d_pos(text_pad_masks, hidden_dim=text_feats.shape[-1]).permute(0,2,1) # b s c
+        amr_pos = torch.zeros_like(amr_feats)
+        memory = torch.cat([text_feats, amr_feats], dim=1)   
+        memory_pad_masks = torch.cat([text_pad_masks, amr_pad_masks], dim=1)
+        memory_pos = torch.cat([text_pos, amr_pos], dim=1)
+
+        for lvl, (tgt_feat, tgt_pos) in enumerate(zip(video_feats, video_poses)):
+            tgt_pos = tgt_pos.flatten(2).permute(0, 2, 1) # bt c h w -> bt c hw -> bt hw c
+            h, w = tgt_feat.shape[-2:]
+            tgt_feat = tgt_feat.flatten(2).permute(0,2,1) # bt hw c
+            tgt_feat = self.cross_module(tgt=tgt_feat.permute(1,0,2),
+                                    memory=memory.permute(1,0,2), 
+                                    memory_key_padding_mask=memory_pad_masks,
+                                    pos=memory_pos.permute(1,0,2), 
+                                    query_pos=tgt_pos.permute(1,0,2))[0]
+            video_feats[lvl] = rearrange(tgt_feat, '(h w) bt c-> bt c h w',h=h,w=w)
+
+        return video_feats
+
+@register_fusion
+def perFrameVideo_text_v1(configs):
+    return perFrameVideo_Text_v1(d_model=configs['d_model'],
+                                 nhead=configs['nhead'],
+                                 dropout=configs['dropout'])

@@ -2968,13 +2968,18 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
         # 你想visualize的东西
         check_visualize = {} 
         nf, batch_size, *_, device = *samples.tensors.shape, samples.tensors.device
+        amrs, amr_token_feats, amr_token_seg_ids, text_feats, text_pad_masks, node_alignments = self.encode_text(text_queries, auxiliary, device) 
+
         # b nq c, b t nq h w
-        obj_queries, pred_masks = self.obj_decoder(samples)
+        obj_queries, pred_masks = self.obj_decoder(samples, 
+                                                   text_feats=text_feats, 
+                                                   text_pad_masks=text_pad_masks,
+                                                   amr_feats=amr_token_feats,
+                                                   amr_pad_masks=amr_token_seg_ids==0)
         obj_queries = self.obj_query_proj(obj_queries)
         if self.is_pretraining_seg:
             return {'objdecoder_objseg': pred_masks}
         # list[Graph], b (V+E)max c, b (V+E)max 
-        amrs, amr_token_feats, amr_token_seg_ids, text_feats, text_pad_masks, node_alignments = self.encode_text(text_queries, auxiliary, device) 
 
         obj_queries, amr_token_feats, text_feats = self.fusion_module(query_feat=obj_queries, 
                                                                     text_feats=text_feats,
@@ -3283,17 +3288,17 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
         src_masks = src_masks[:, has_ann].flatten(1) # n thw
         tgt_masks = tgt_masks.flatten(1) # n thw
 
-        ce_loss = F.binary_cross_entropy_with_logits(src_masks, tgt_masks, reduction="none")
+        ce_loss = F.binary_cross_entropy_with_logits(src_masks, tgt_masks.float(), reduction="none")
         ce_loss = ce_loss.mean(-1) # n
         return ce_loss
     
     def dice_mask_loss(self, src_masks, has_ann, tgt_masks):
         # n T h w, n t h w, -> n
         src_masks = src_masks[:, has_ann].flatten(1) # n thw
-        tgt_masks = tgt_masks.flatten(1) # n thw
+        tgt_masks = tgt_masks.flatten(1).float() # n thw
 
         src_masks = src_masks.sigmoid()
-        numerator = 2 * (src_masks * tgt_masks).sum(1)
+        numerator = 2 * ((src_masks * tgt_masks).sum(1))
         denominator = src_masks.sum(-1) + tgt_masks.sum(-1)
         loss = 1 - (numerator + 1) / (denominator + 1)
         return loss
@@ -3313,7 +3318,7 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
 
         mask_losses = [] 
         mask_dice_losses = [] 
-        for btc_idx in batch_size:
+        for btc_idx in range(batch_size):
             mask_ce_loss = self.binary_cross_entropy_mask_loss(src_masks[btc_idx], perFrame_has_ann[btc_idx], tgt_masks[btc_idx])
             mask_dice_loss = self.dice_mask_loss(src_masks[btc_idx], perFrame_has_ann[btc_idx], tgt_masks[btc_idx])
             mask_losses.append(mask_ce_loss)

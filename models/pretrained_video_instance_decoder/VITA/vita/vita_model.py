@@ -459,6 +459,7 @@ class Vita(nn.Module):
 
 
 from models.pretrained_video_instance_decoder.pt_obj_decoder import register_pt_obj_decoder
+
 class Vita_2(nn.Module):
     """
     Main class for mask classification semantic segmentation architectures.
@@ -661,7 +662,12 @@ class Vita_2(nn.Module):
             "is_coco": cfg.DATASETS.TEST[0].startswith("coco"),
         }
 
-    def forward(self, batched_inputs):
+    def add_fusion_module_to_pixel_decoder(self, fusion_configs):
+        self.sem_seg_head.pixel_decoder.add_fusion_module(fusion_configs)
+
+    def forward(self, batched_inputs, 
+                text_feats, text_pad_masks,
+                amr_feats, amr_pad_masks,):
         # NT(t b c h w)
         # t b c h w -> b t c h w -> bt c h w
         T, B = batched_inputs.tensors.shape[:2]
@@ -670,10 +676,14 @@ class Vita_2(nn.Module):
         images = [im.squeeze(0) for im in images]
         images = ImageList.from_tensors(images, self.size_divisibility)
         features = self.backbone(images.tensor) # bt c h w
-
+                              
         BT = len(images)
         # ;l bt 200 c; bt c h/4 w/4
-        outputs, frame_queries, mask_features = self.sem_seg_head(features)
+        outputs, frame_queries, mask_features = self.sem_seg_head(features,
+                                                                  text_feats=text_feats, 
+                                                                text_pad_masks=text_pad_masks,
+                                                                amr_feats=amr_feats,
+                                                                amr_pad_masks=amr_pad_masks)
         frame_queries = frame_queries[[-1]] # 1 bt 200 c
 
         mask_features = self.vita_module.vita_mask_features(mask_features)
@@ -705,11 +715,13 @@ def vita(configs, pt_dir):
     add_vita_config(cfg)
     cfg.merge_from_file(configs['path'])
     cfg.freeze()
-    freeze_model = configs['freeze']
+    freeze_bb = configs['freeze_bb']
     model = Vita_2(cfg)
     checkpoint = torch.load(os.path.join(pt_dir, 'vita/vita_swin_ytvis2021.pth'))['model']
     model.load_state_dict(checkpoint)
-    if freeze_model:
-        for p in model.parameters():
+    if freeze_bb:
+        for p in model.backbone.parameters():
             p.requires_grad_(False)
+    
+    model.add_fusion_module_to_pixel_decoder(configs['fusion'])
     return model
