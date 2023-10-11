@@ -2971,11 +2971,12 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
         amrs, amr_token_feats, amr_token_seg_ids, text_feats, text_pad_masks, node_alignments = self.encode_text(text_queries, auxiliary, device) 
 
         # b nq c, b t nq h w
-        obj_queries, pred_masks = self.obj_decoder(samples, 
+        obj_decoder_output = self.obj_decoder(samples, 
                                                    text_feats=text_feats, 
                                                    text_pad_masks=text_pad_masks,
                                                    amr_feats=amr_token_feats,
                                                    amr_pad_masks=amr_token_seg_ids==0)
+        obj_queries, pred_masks = obj_decoder_output['obj_queries'], obj_decoder_output['pred_masks']
         obj_queries = self.obj_query_proj(obj_queries)
         if self.is_pretraining_seg:
             return {'objdecoder_objseg': pred_masks}
@@ -3329,6 +3330,84 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
             "objdecoder_dice": torch.cat(mask_dice_losses).sum() / num_boxes,
         }
         return losses    
+
+class AMR_v0_detOnlyObj_Grounding_ptObjDet_v2(AMR_v0_detOnlyObj_Grounding_ptObjDet):
+    def __init__(self, d_model=256, max_stride=64, pt_dir='/home/xhh/pt', obj_decoder={ 'name': None,'path': None,'freeze': True }, amrbart_wordEmbedding_freeze=True, amrtext_wordEmbedding_proj={ 'name': 'FeatureResizer','input_feat_size': 1024,'output_feat_size': 256,'dropout': 0,'do_ln': True }, fusion={ 'name': 'VisionLanguageFusionModule','d_model': 256,'nheads': 8,'dropout': 0 }, loss_weight={ 'refdecoder_mask': 5,'refdecoder_dice': 5,'refdecoder_giou': 0,'refdecoder_bbox': 0 }, tasks={ 'refdecoder_refseg': { 'layer_weights': { -1: 1,0: 1,1: 1,2: 1,3: 1,4: 1,5: 1,6: 1,7: 1,8: 1 } } }, refdecoder={ 'nlayers': 9,'amr_cross_video_layer': { 'name': 'cross_attention','amr_cross': ['只有2/3', '只有2/3', '只有2/3', '只有2/3', '只有2/3', '只有2/3', '只有2/3', '只有2/3', '只有2/3'],'d_model': 256,'nhead': 8,'dropout': 0 },'amr_self_layer': { 'name': 'graph_layer_v1','d_model': 256,'flow': 'source_to_target','aggr': 'min' },'ffn_layer': { 'name': 'ffn','d_model': 256 },'used_scales': [[1, 32], [1, 16], [1, 8]],'conved_scale': [1, 4],'choose_who': '第一个' }, is_pretraining_seg=False, multiclass_choose=False, choose_threshold=None) -> None:
+        super().__init__(d_model, max_stride, pt_dir, obj_decoder, amrbart_wordEmbedding_freeze, amrtext_wordEmbedding_proj, fusion, loss_weight, tasks, refdecoder, is_pretraining_seg, multiclass_choose, choose_threshold)
+
+    def model_outputs(self, samples : NestedTensor, text_queries, auxiliary):
+        """ text_auxiliary
+        'amrs': list[T(2 E_i)]
+        'seg_ids': b (V+E)max
+        'token_splits': list[list[int]]
+        'tokens_ids': b max
+        """
+        # 你想visualize的东西
+        check_visualize = {} 
+        nf, batch_size, *_, device = *samples.tensors.shape, samples.tensors.device
+        # list[Graph], b (V+E)max c, b (V+E)max 
+        amrs, amr_token_feats, amr_token_seg_ids, text_feats, text_pad_masks, node_alignments = self.encode_text(text_queries, auxiliary, device) 
+
+        # b nq c, list[b t c h w, 32, 16, 8], b t c h w, (b nq t h w)
+        obj_decoder_output = self.obj_decoder(samples)
+        obj_queries, multiscale_feats, mask_feats = obj_decoder_output['obj_queries'], obj_decoder_output['multiscale_feats'], obj_decoder_output['mask_features']
+        fusion_output = self.fusion_module(video_queries=obj_queries,
+                                            multiscale_feats=multiscale_feats,
+                                            mask_feats=mask_feats, 
+                                            text_feats=text_feats,
+                                            amr_feats=amr_token_feats,
+                                            amr_pad_masks = amr_token_seg_ids==0,
+                                            text_pad_masks=text_pad_masks)
+        # b nq c, b t nq h w
+        obj_queries, pred_masks = fusion_output['obj_queries'], fusion_output['pred_masks']
+        memories = obj_queries.permute(1,0,2)
+        nodes_batch_ids, edges_batch_ids,\
+            node_seg_ids, edges_seg_ids, \
+            node_feats, edge_feats, \
+            node_memories,edge_memories,\
+            edge_index,  node_subseqs, node_dsends = \
+              batching_graph(amrs, amr_token_feats, amr_token_seg_ids, memories.permute(1,0,2).clone(), None,
+                            text_feats, node_alignments) # memories是dict
+
+        decoder_layer_preds = {}
+        grounding_score = self.decoder_reason_layer(node_batch_ids=nodes_batch_ids, edge_batch_ids=edges_batch_ids, 
+                                                node_seg_ids=node_seg_ids, edge_seg_ids=edges_seg_ids,
+                                                node_feats=node_feats, edge_feats=edge_feats,
+                                                node_memories=node_memories, edge_memories=edge_memories,
+                                                edge_index=edge_index,
+                                                node_subseqs=node_subseqs,
+                                                node_dsends=node_dsends) # V nq
+        g_score_by_batch = []
+        for bch_idx in range(batch_size):
+            bch_node_score = torch.stack([grounding_score[idx] for idx, batch_id in enumerate(nodes_batch_ids) if batch_id == bch_idx], dim=0)
+            g_score_by_batch.append(bch_node_score) # vi nq
+        decoder_layer_preds[f'layer{-1}_preds'] = {'grounding_score': g_score_by_batch}
+
+        if self.decoder_trans_layers is not None:
+            for layer_idx in range(self.decoder_trans_nlayers):
+                node_feats, edge_feats = self.decoder_trans_layers[layer_idx](node_batch_ids=nodes_batch_ids, edge_batch_ids=edges_batch_ids, 
+                                                                            node_seg_ids=node_seg_ids, edge_seg_ids=edges_seg_ids,
+                                                                            node_feats=node_feats, edge_feats=edge_feats,
+                                                                            node_memories=node_memories, edge_memories=edge_memories,
+                                                                            edge_index=edge_index,
+                                                                            node_subseqs=node_subseqs) # V nq
+                grounding_score = self.decoder_reason_layer(node_batch_ids=nodes_batch_ids, edge_batch_ids=edges_batch_ids, 
+                                            node_seg_ids=node_seg_ids, edge_seg_ids=edges_seg_ids,
+                                            node_feats=node_feats, edge_feats=edge_feats,
+                                            node_memories=node_memories, edge_memories=edge_memories,
+                                            edge_index=edge_index,
+                                            node_subseqs=node_subseqs,
+                                            node_dsends=node_dsends) # V nq
+                g_score_by_batch = []
+                for bch_idx in range(bt):
+                    bch_node_score = torch.stack([grounding_score[idx] for idx, batch_id in enumerate(nodes_batch_ids) if batch_id == bch_idx], dim=0)
+                    g_score_by_batch.append(bch_node_score) # vi nq
+                decoder_layer_preds[f'layer{layer_idx}_preds'] = {'grounding_score': g_score_by_batch}
+
+        return {'refdecoder_refseg': decoder_layer_preds,
+                # TODO: 添加一些其他可以加loss, 加postprocessing的东西, 输出的接口和trainer evaluation一致;, 输出的接口和task loss一致
+                'check_visualze': check_visualize,
+                 'objdecoder_objseg': pred_masks} 
 
 
 
@@ -7761,6 +7840,40 @@ def amr_v0_detOnlyObj_grounding_ptObjDet(device, configs):
     optimizer = get_optimizer(param_dicts=param_dicts, configs=configs['optimization']['optimizer'])
 
     return model, optimizer 
+
+
+@register_model
+def amr_v0_detOnlyObj_grounding_ptObjDet_v2(device, configs):
+    model = AMR_v0_detOnlyObj_Grounding_ptObjDet_v2(
+        d_model=configs['d_model'],
+        pt_dir=configs['pt_dir'],
+        max_stride=configs['max_stride'],
+        obj_decoder=configs['obj_decoder'],
+        amrbart_wordEmbedding_freeze=configs['amrbart_wordEmbedding_freeze'],
+        amrtext_wordEmbedding_proj=configs['amrtext_wordEmbedding_proj'],
+        fusion=configs['fusion'],
+        loss_weight=configs['loss_weight'],
+        tasks=configs['tasks'],
+        refdecoder=configs['refdecoder'],
+        is_pretraining_seg=configs['is_pretraining_seg'],
+        multiclass_choose=configs['multiclass_choose'] if 'multiclass_choose' in configs else False,
+        choose_threshold=configs['choose_threshold'] if 'choose_threshold' in configs else None
+    )
+    model.to(device)
+
+
+    param_dicts = [
+        {"params": [p for n, p in model.named_parameters() 
+                    if (("obj_decoder" not in n) and ("amrbart_wordEmbedding" not in n) and p.requires_grad)]},
+        {"params": [p for n, p in model.named_parameters() if ("obj_decoder" in n) and p.requires_grad],
+            "lr": configs['optimization']['vid_backbone_lr']},
+        {"params": [p for n, p in model.named_parameters() if ("amrbart_wordEmbedding" in n) and p.requires_grad],
+            "lr": configs['optimization']['text_backbone_lr']}, 
+    ] # CHECK params dict every run
+    optimizer = get_optimizer(param_dicts=param_dicts, configs=configs['optimization']['optimizer'])
+
+    return model, optimizer 
+
 
 @register_model
 def amr_v0_detOnlyObj_grounding_weightedquery(device, configs):

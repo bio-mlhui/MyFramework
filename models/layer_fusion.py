@@ -281,3 +281,174 @@ def perFrameVideo_text_v1(configs):
     return perFrameVideo_Text_v1(d_model=configs['d_model'],
                                  nhead=configs['nhead'],
                                  dropout=configs['dropout'])
+
+class perFrameVideo_Text_nofusion(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+    
+    def forward(self, video_feats, video_poses,
+                text_feats=None, text_pad_masks=None,
+                amr_feats=None, amr_pad_masks=None):
+        return video_feats
+
+@register_fusion
+def perFrameVideo_text_nofusion(configs):
+    return perFrameVideo_Text_nofusion()
+
+class Fpn2D_multiple(nn.Module):
+    def __init__(self, dim, cascaded_scales) -> None:
+        """
+        cascaded_scales: ['1','4'],  ['1','16'], ['1','32']
+        """
+        super().__init__()
+        self.initial_adapter = nn.Sequential(
+            nn.Conv2d(dim, dim, kernel_size=1),
+            nn.GroupNorm(32, dim)
+        )
+        # from small to big
+        self.convs = nn.ModuleList()
+        self.upsamples = nn.ModuleList()
+        self.adapters = nn.ModuleList()
+        self.norms = nn.ModuleList()
+        assert len(cascaded_scales) > 1
+        for (temporal_stride, spatial_stride), (next_temporal_stride, next_spatial_stride) \
+            in zip(cascaded_scales[:-1], cascaded_scales[1:]):
+            assert temporal_stride == next_temporal_stride, 'the temporal stride must be the same for the FPN 2D'
+            scale_factor = spatial_stride//next_spatial_stride
+            assert scale_factor >= 2
+            self.adapters.append(nn.Conv2d(dim, dim, kernel_size=1))
+            self.upsamples.append(nn.Upsample(scale_factor=scale_factor, mode='bilinear'))
+            self.convs.append(nn.Conv2d(dim, dim, kernel_size=3, padding=1))
+            self.norms.append(nn.GroupNorm(32, dim))
+    
+    def forward(self, multiscales, multiscales_poses, mask_feats):
+        """ bt c h w"""
+        cascaded_feats = multiscales + [mask_feats]
+        new_fused_feats = []
+        new_fused_feats.append(self.initial_adapter(cascaded_feats[0]))
+        for idx, large_feat in enumerate(cascaded_feats[1:]): # from small map to large map 
+            small_feats = new_fused_feats[-1]
+            large_feat = self.adapters[idx](large_feat)
+            large_feat += self.upsamples[idx](small_feats) 
+            large_feat = self.convs[idx](large_feat)
+            large_feat = self.norms[idx](large_feat)
+
+            new_fused_feats.append(large_feat)
+        return new_fused_feats[:-1], new_fused_feats[-1]
+from torch_geometric.nn.inits import glorot
+class perFrameMultiscale_VideoQuery_Text_v1(nn.Module):
+    def __init__(self, 
+                 d_model,
+                 query_proj,
+                 mask_feats_proj,
+                 multiscale_proj,
+                 fusion_dot,
+                 fpn,
+                 ) -> None:
+        super().__init__()
+        # proj
+        assert query_proj.pop('name') == 'linear'
+        self.query_proj = nn.Linear(**query_proj)
+        assert mask_feats_proj.pop('name') == 'conv2d'
+        self.mask_feats_proj = nn.Conv2d(**mask_feats_proj)
+        self.multiscale_proj = nn.ModuleList()
+        for proj_config in multiscale_proj:
+            assert proj_config.pop('name') == 'conv2d'
+            self.multiscale_proj.append(nn.Sequential(nn.Conv2d(**proj_config),
+                                                        nn.GroupNorm(32, d_model)))
+        self.multiscale_2d_pos = build_position_encoding(position_embedding_name='2d')
+        # fusion dot
+        assert fusion_dot.pop('name') == 'VisionLanguageFusionModule'
+        self.cross_module = VisionLanguageFusionModule(d_model=fusion_dot['d_model'],
+                                                    nhead=fusion_dot['nhead'],
+                                                    dropout=fusion_dot['dropout'])
+        # fpn
+        self.fpn = Fpn2D_multiple(dim=fpn['d_model'],
+                                  cascaded_scales=fpn['cascaded_scales'])
+
+        self._reset_parameters()
+
+    def _reset_parameters(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+        
+    def proj_query_feats(self, multiscale_feats, mask_feats, video_queries):
+        # list[bt c h w]
+        # b t c h w
+        # b nq c
+        batch_size, nf, *_ =  mask_feats.shape
+        nq = video_queries.shape[1]
+        multiscales = [] # bt c h w
+        multiscales_poses = [] # bt c h w
+        for lvl, feat in enumerate(multiscale_feats):  
+            # bt c h w
+            src_proj_l = self.multiscale_proj[lvl](feat.clone())
+            pad_mask = torch.zeros_like(feat[:, 0]).bool() # bt h w
+            pos = self.multiscale_2d_pos(pad_mask, hidden_dim=src_proj_l.shape[1]) # bt c h w
+            multiscales.append(src_proj_l)
+            multiscales_poses.append(pos)
+        mask_feats = self.mask_feats_proj(mask_feats.flatten(0,1)) # bt c h w
+        video_queries = self.query_proj(video_queries)
+        return multiscales, multiscales_poses, mask_feats, video_queries
+    
+    def fusion_with_text(self, multiscale_feats, multiscales_poses, 
+                         video_queries, 
+                         text_feats, text_pad_masks,amr_feats, amr_pad_masks):
+        BT = multiscale_feats[0].shape[0]
+        B = len(text_feats)
+        T = BT // B
+        memory = torch.cat([amr_feats, text_feats], dim=1)
+        memory_pad_mask = torch.cat([amr_pad_masks, text_pad_masks], dim=1)
+        perFrame_memory = repeat(memory, 'b s c -> (b t) s c',t=T)
+        perFrame_memory_pad_mask = repeat(memory_pad_mask, 'b s -> (b t) s',t=T)
+        fused_multiscales = []
+        for lvl, (feat, poses) in enumerate(zip(multiscale_feats, multiscales_poses)):
+            _, _, h, w = feat.shape
+            feat = rearrange(feat, 'bt c h w -> (h w) bt c')
+            poses = rearrange(poses, 'bt c h w -> (h w) bt c')
+            feat, attn_weight = self.cross_module(tgt=feat,
+                                                    memory=perFrame_memory.permute(1,0,2), 
+                                                    memory_key_padding_mask=perFrame_memory_pad_mask,
+                                                    pos=None, query_pos=poses)
+            fused_multiscales.append(rearrange(feat, '(h w) bt c -> bt c h w',h=h,w=w))
+        
+        video_queries = self.cross_module(tgt=video_queries.permute(1,0,2),
+                                        memory=memory.permute(1,0,2), 
+                                        memory_key_padding_mask=memory_pad_mask,
+                                        pos=None, query_pos=None)[0]
+        video_queries = video_queries.permute(1,0,2)
+
+        return fused_multiscales, video_queries
+
+    def forward(self, multiscale_feats, mask_feats,
+                video_queries,
+                text_feats=None, text_pad_masks=None,
+                amr_feats=None, amr_pad_masks=None):
+        # list[bt c h w]
+        # list[b t c h w]
+        # b nq c
+        # proj 32, 16, 8, 4, query
+        B, T, *_ = mask_feats.shape
+        BT = multiscale_feats[0].shape[0]
+        assert BT == (B * T)
+        multiscale_feats, multiscales_poses, mask_feats,video_queries = self.proj_query_feats(multiscale_feats, mask_feats,video_queries)
+        # fusion dot
+        multiscale_feats, video_queries = self.fusion_with_text(multiscale_feats, multiscales_poses,
+                                                                video_queries,text_feats, text_pad_masks,amr_feats, amr_pad_masks)
+        # fpn 32, 16, 8, 4; get 4
+        multiscale_feats, mask_feats = self.fpn(multiscale_feats, multiscales_poses, mask_feats)
+        mask_feats = rearrange(mask_feats, '(b t) c h w -> b t c h w', b=B, t=T)
+        # conv query with 4, get mask
+        pred_masks = torch.einsum('btchw,bnc->btnhw',mask_feats, video_queries)
+        # output query, pred_masks
+        return {'obj_queries': video_queries, 'pred_masks': pred_masks}
+
+@register_fusion
+def perFrameMultiscale_VideoQuery_text_v1(configs):
+    return perFrameMultiscale_VideoQuery_Text_v1(d_model=configs['d_model'],
+                                                 query_proj=configs['query_proj'],
+                                                 mask_feats_proj=configs['mask_feats_proj'],
+                                                 multiscale_proj=configs['multiscale_proj'],
+                                                 fusion_dot=configs['fusion_dot'],
+                                                 fpn=configs['fpn'])

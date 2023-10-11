@@ -547,6 +547,8 @@ class Vita_2(nn.Module):
 
         # auxiliary
         self.out_dim = 256
+        self.scales = [[1, 32], [1, 16], [1, 8]]
+        self.conved_scale = [1, 4]
 
 
     @classmethod
@@ -666,8 +668,8 @@ class Vita_2(nn.Module):
         self.sem_seg_head.pixel_decoder.add_fusion_module(fusion_configs)
 
     def forward(self, batched_inputs, 
-                text_feats, text_pad_masks,
-                amr_feats, amr_pad_masks,):
+                text_feats=None, text_pad_masks=None,
+                amr_feats=None, amr_pad_masks=None,):
         # NT(t b c h w)
         # t b c h w -> b t c h w -> bt c h w
         T, B = batched_inputs.tensors.shape[:2]
@@ -678,24 +680,23 @@ class Vita_2(nn.Module):
         features = self.backbone(images.tensor) # bt c h w
                               
         BT = len(images)
-        # ;l bt 200 c; bt c h/4 w/4
-        outputs, frame_queries, mask_features = self.sem_seg_head(features,
+        # ;l bt 200 c; bt c h/4 w/4, list[bt c h w]
+        outputs, frame_queries, mask_features, multi_scale_feats = self.sem_seg_head(features,
                                                                   text_feats=text_feats, 
                                                                 text_pad_masks=text_pad_masks,
                                                                 amr_feats=amr_feats,
                                                                 amr_pad_masks=amr_pad_masks)
         frame_queries = frame_queries[[-1]] # 1 bt 200 c
 
-        mask_features = self.vita_module.vita_mask_features(mask_features)
+        mask_features = self.vita_module.vita_mask_features(mask_features) # conv2d
         mask_features = mask_features.view(B, T, *mask_features.shape[-3:]) # b t c h w
-        # l b nq c
+        # l b nq c, 200 -> 100
         vita_outputs = self.vita_module(frame_queries)
         
         # b nq t h w -> b t nq h w
         pred_masks = torch.einsum("lbqc,btchw->lbqthw", vita_outputs["pred_mask_embed"], mask_features).squeeze(0).permute(0,2,1,3,4)
         video_queries = vita_outputs['video_queries'].squeeze(0) # b nq c
-
-        return video_queries, pred_masks
+        return {'obj_queries': video_queries, 'multiscale_feats':multi_scale_feats, 'pred_masks': pred_masks, 'mask_features': mask_features}
 
 from detectron2.projects.deeplab import add_deeplab_config, build_lr_scheduler
 from detectron2.config import get_cfg
@@ -716,12 +717,15 @@ def vita(configs, pt_dir):
     cfg.merge_from_file(configs['path'])
     cfg.freeze()
     freeze_bb = configs['freeze_bb']
+    freeze_all = configs['freeze_all'] if 'freeze_all' in configs else False
     model = Vita_2(cfg)
     checkpoint = torch.load(os.path.join(pt_dir, 'vita/vita_swin_ytvis2021.pth'))['model']
     model.load_state_dict(checkpoint)
     if freeze_bb:
         for p in model.backbone.parameters():
             p.requires_grad_(False)
-    
     model.add_fusion_module_to_pixel_decoder(configs['fusion'])
+    if freeze_all:
+        for p in model.parameters():
+            p.requires_grad_(False)        
     return model
