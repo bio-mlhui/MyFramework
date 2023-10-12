@@ -3350,7 +3350,7 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet_v2(AMR_v0_detOnlyObj_Grounding_ptObjD
 
         # b nq c, list[b t c h w, 32, 16, 8], b t c h w, (b nq t h w)
         obj_decoder_output = self.obj_decoder(samples)
-        obj_queries, multiscale_feats, mask_feats = obj_decoder_output['obj_queries'], obj_decoder_output['multiscale_feats'], obj_decoder_output['mask_features']
+        obj_queries, multiscale_feats, mask_feats, pred_masks_ori = obj_decoder_output['obj_queries'], obj_decoder_output['multiscale_feats'], obj_decoder_output['mask_features'], obj_decoder_output['pred_masks']
         fusion_output = self.fusion_module(video_queries=obj_queries,
                                             multiscale_feats=multiscale_feats,
                                             mask_feats=mask_feats, 
@@ -3407,9 +3407,222 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet_v2(AMR_v0_detOnlyObj_Grounding_ptObjD
         return {'refdecoder_refseg': decoder_layer_preds,
                 # TODO: 添加一些其他可以加loss, 加postprocessing的东西, 输出的接口和trainer evaluation一致;, 输出的接口和task loss一致
                 'check_visualze': check_visualize,
+                'objdecoder_objseg_ori': pred_masks_ori,
                  'objdecoder_objseg': pred_masks} 
 
 
+class AMR_v0_detOnlyObj_Grounding_ptObjDet_v3(AMR_v0_detOnlyObj_Grounding_ptObjDet):
+    def __init__(self, d_model=256, max_stride=64, pt_dir='/home/xhh/pt', obj_decoder={ 'name': None,'path': None,'freeze': True }, amrbart_wordEmbedding_freeze=True, amrtext_wordEmbedding_proj={ 'name': 'FeatureResizer','input_feat_size': 1024,'output_feat_size': 256,'dropout': 0,'do_ln': True }, fusion={ 'name': 'VisionLanguageFusionModule','d_model': 256,'nheads': 8,'dropout': 0 }, loss_weight={ 'refdecoder_mask': 5,'refdecoder_dice': 5,'refdecoder_giou': 0,'refdecoder_bbox': 0 }, tasks={ 'refdecoder_refseg': { 'layer_weights': { -1: 1,0: 1,1: 1,2: 1,3: 1,4: 1,5: 1,6: 1,7: 1,8: 1 } } }, refdecoder={ 'nlayers': 9,'amr_cross_video_layer': { 'name': 'cross_attention','amr_cross': ['只有2/3', '只有2/3', '只有2/3', '只有2/3', '只有2/3', '只有2/3', '只有2/3', '只有2/3', '只有2/3'],'d_model': 256,'nhead': 8,'dropout': 0 },'amr_self_layer': { 'name': 'graph_layer_v1','d_model': 256,'flow': 'source_to_target','aggr': 'min' },'ffn_layer': { 'name': 'ffn','d_model': 256 },'used_scales': [[1, 32], [1, 16], [1, 8]],'conved_scale': [1, 4],'choose_who': '第一个' }, is_pretraining_seg=False, multiclass_choose=False, choose_threshold=None) -> None:
+        super().__init__(d_model, max_stride, pt_dir, obj_decoder, amrbart_wordEmbedding_freeze, amrtext_wordEmbedding_proj, fusion, loss_weight, tasks, refdecoder, is_pretraining_seg, multiclass_choose, choose_threshold)
+        assert self.is_pretraining_seg == False
+
+    def model_outputs(self, samples : NestedTensor, text_queries, auxiliary):
+        """ text_auxiliary
+        'amrs': list[T(2 E_i)]
+        'seg_ids': b (V+E)max
+        'token_splits': list[list[int]]
+        'tokens_ids': b max
+        """
+        # 你想visualize的东西
+        check_visualize = {} 
+        nf, batch_size, *_, device = *samples.tensors.shape, samples.tensors.device
+        # list[Graph], b (V+E)max c, b (V+E)max 
+        amrs, amr_token_feats, amr_token_seg_ids, text_feats, text_pad_masks, node_alignments = self.encode_text(text_queries, auxiliary, device) 
+
+        # b nq c, list[b t c h w, 32, 16, 8], b t c h w, (b nq t h w)
+        obj_decoder_output = self.obj_decoder(samples)
+        obj_queries_before_fusion, multiscale_feats, mask_feats, pred_masks_ori = obj_decoder_output['obj_queries'], obj_decoder_output['multiscale_feats'], obj_decoder_output['mask_features'], obj_decoder_output['pred_masks']
+
+        fusion_output = self.fusion_module(video_queries=obj_queries_before_fusion,
+                                            multiscale_feats=multiscale_feats,
+                                            mask_feats=mask_feats, 
+                                            text_feats=text_feats,
+                                            amr_feats=amr_token_feats,
+                                            amr_pad_masks = amr_token_seg_ids==0,
+                                            text_pad_masks=text_pad_masks)
+        # b nq c, b t nq h w
+        obj_queries, pred_masks = fusion_output['obj_queries'], fusion_output['pred_masks']
+        memories = obj_queries.permute(1,0,2)
+        nodes_batch_ids, edges_batch_ids,\
+            node_seg_ids, edges_seg_ids, \
+            node_feats, edge_feats, \
+            node_memories,edge_memories,\
+            edge_index,  node_subseqs, node_dsends = \
+              batching_graph(amrs, amr_token_feats, amr_token_seg_ids, memories.permute(1,0,2).clone(), None,
+                            text_feats, node_alignments) # memories是dict
+
+        decoder_layer_preds = {}
+        grounding_score = self.decoder_reason_layer(node_batch_ids=nodes_batch_ids, edge_batch_ids=edges_batch_ids, 
+                                                node_seg_ids=node_seg_ids, edge_seg_ids=edges_seg_ids,
+                                                node_feats=node_feats, edge_feats=edge_feats,
+                                                node_memories=node_memories, edge_memories=edge_memories,
+                                                edge_index=edge_index,
+                                                node_subseqs=node_subseqs,
+                                                node_dsends=node_dsends) # V nq
+        g_score_by_batch = []
+        for bch_idx in range(batch_size):
+            bch_node_score = torch.stack([grounding_score[idx] for idx, batch_id in enumerate(nodes_batch_ids) if batch_id == bch_idx], dim=0)
+            g_score_by_batch.append(bch_node_score) # vi nq
+        decoder_layer_preds[f'layer{-1}_preds'] = {'grounding_score': g_score_by_batch}
+
+        assert self.decoder_trans_layers is None
+
+        return {'refdecoder_refseg': decoder_layer_preds,
+                'mask_logits_before_fusion': pred_masks_ori,
+                'queries_before_fusion': obj_queries_before_fusion,
+                'mask_logits_after_fusion': pred_masks,
+                'queries_after_fusion': obj_queries,} 
+
+    def forward(self, samples : NestedTensor, text_queries, auxiliary, targets, visualize=False):
+        if not isinstance(samples, NestedTensor):
+            samples = nested_tensor_from_videos_list_with_stride(samples, max_stride=self.max_stride)
+        T, batch_size, _, H, W = samples.tensors.shape
+        perFrame_has_ann = [t['has_ann'] for t in targets] # bool, t
+        ann_number_by_batch = [f.int().sum() for f in perFrame_has_ann]
+        perFrame_has_ann = torch.stack([F.pad(t.float(), pad=(0, T-len(t))).bool() for t in perFrame_has_ann], dim=0) # b T
+        
+        # bt n H W, 
+        model_outs = self.model_outputs(samples, text_queries, auxiliary) 
+        # b nq T h w
+        mask_logits_after_fusion = model_outs['mask_logits_after_fusion'].permute(0,2,1,3,4)
+        mask_logits_before_fusion = model_outs['mask_logits_before_fusion'].permute(0,2,1,3,4)
+        queries_before_fusion = model_outs['queries_before_fusion']
+        queries_after_fusion = model_outs['queries_after_fusion']
+
+        # after-fusion query distiallation loss
+        loss_value_dict = self.fusion_distillation_loss(mask_logits_after_fusion=mask_logits_after_fusion, 
+                                                        mask_logits_before_fusion=mask_logits_before_fusion,
+                                                        query_after_fusion=queries_after_fusion,
+                                                        query_before_fusion=queries_before_fusion)
+        for idx in range(batch_size):
+            h, w = targets[idx]['masks'].shape[-2:]
+            # n t h w -> n t H W
+            targets[idx]['masks'] = F.pad(targets[idx]['masks'].float(), pad=(0, W-w, 0, H-h)).bool()
+        # list[n t h w]
+        tgt_masks = [targets[idx]['masks'] for idx in range(batch_size)]
+        for btc_idx in range(batch_size):
+            start = int(self.obj_decoder_mask_out_stride // 2)
+            im_h, im_w = tgt_masks[btc_idx].shape[-2:]
+            tgt_masks[btc_idx] = tgt_masks[btc_idx][:, :, start::self.obj_decoder_mask_out_stride, start::self.obj_decoder_mask_out_stride] 
+            assert tgt_masks[btc_idx].size(2) * self.obj_decoder_mask_out_stride == im_h
+            assert tgt_masks[btc_idx].size(3) * self.obj_decoder_mask_out_stride == im_w
+
+        gt_referent_idx = [targets[idx]['referent_idx'] for idx in range(batch_size)] # list[int], b
+        isvalid = [targets[idx]['valid'] for idx in range(batch_size)] # list[n t], b
+        _, matching_result = self.obj_decoder_objseg_loss(mask_logits_before_fusion, perFrame_has_ann, tgt_masks)
+
+        if not self.is_pretraining_seg:
+            refseg_src = self.get_decoder_preds(model_outs)
+            loss_value_dict.update(self.ref_choose_loss(refseg_src, tgt_masks, gt_referent_idx, isvalid, matching_result, mask_logits_before_fusion, perFrame_has_ann))
+
+        loss = sum((loss_value_dict[k] * self.loss_weight[k] for k in loss_value_dict.keys()))
+        if not math.isfinite(loss.item()):
+            print("Loss is {}, stopping training".format(loss.item()))
+            print(loss)
+            sys.exit(1)
+        loss.backward()
+        loss_dict_unscaled = {k: v for k, v in loss_value_dict.items()}
+        loss_dict_scaled = {f'{k}_scaled': v * self.loss_weight[k] for k, v in loss_value_dict.items()}    
+        grad_total_norm = get_total_grad_norm(self.parameters(), norm_type=2)
+        return loss_dict_unscaled, loss_dict_scaled, grad_total_norm 
+    
+    def fusion_distillation_loss(self, mask_logits_after_fusion, mask_logits_before_fusion, query_after_fusion, query_before_fusion):
+        # pixel-wise
+        # b nq t h w
+        # b nq t h w
+        pixel_loss = F.binary_cross_entropy_with_logits(mask_logits_after_fusion,
+                                                        mask_logits_before_fusion.sigmoid(), reduction='none') # b nq t h w
+        pixel_loss = pixel_loss.flatten(1).mean(-1)
+        # query pair-wise
+        # b nq c
+        # b nq c
+        pair_sim_before = F.cosine_similarity(query_before_fusion.unsqueeze(1), query_before_fusion.unsqueeze(2), dim=3) # b nq nq
+        pair_sim_after = F.cosine_similarity(query_after_fusion.unsqueeze(1), query_after_fusion.unsqueeze(2), dim=3) # b nq nq
+        query_loss =(pair_sim_before - pair_sim_after).square().flatten(1).mean(-1)
+        return {
+            'pixelwise_fusion_distill': pixel_loss.mean(),
+            'query_pairwise_fusion_distill':query_loss.mean(),
+        }
+
+    @torch.no_grad()
+    def sample(self, samples, text_queries, auxiliary, targets, visualize=False):
+        if not isinstance(samples, NestedTensor):
+            samples = nested_tensor_from_videos_list_with_stride(samples, max_stride=self.max_stride)
+        T, batch_size, _, H, W = samples.tensors.shape
+        perFrame_has_ann = [t['has_ann'] for t in targets] # bool, t
+        ann_number_by_batch = [f.int().sum() for f in perFrame_has_ann]
+        perFrame_has_ann = torch.stack([F.pad(t.float(), pad=(0, T-len(t))).bool() for t in perFrame_has_ann], dim=0) # b T
+        decoder_layer_preds = self.model_outputs(samples, text_queries, auxiliary)
+        # b nq T h w
+        out_mask_logits = decoder_layer_preds['mask_logits_before_fusion'].permute(0,2,1,3,4)
+        if self.is_pretraining_seg:
+            for idx in range(batch_size):
+                h, w = targets[idx]['masks'].shape[-2:]
+                # n t h w -> n t H W
+                targets[idx]['masks'] = F.pad(targets[idx]['masks'].float(), pad=(0, W-w, 0, H-h)).bool()
+            # list[n t h w]
+            tgt_masks = [targets[idx]['masks'] for idx in range(batch_size)]
+            for btc_idx in range(batch_size):
+                start = int(self.obj_decoder_mask_out_stride // 2)
+                im_h, im_w = tgt_masks[btc_idx].shape[-2:]
+                tgt_masks[btc_idx] = tgt_masks[btc_idx][:, :, start::self.obj_decoder_mask_out_stride, start::self.obj_decoder_mask_out_stride] 
+                assert tgt_masks[btc_idx].size(2) * self.obj_decoder_mask_out_stride == im_h
+                assert tgt_masks[btc_idx].size(3) * self.obj_decoder_mask_out_stride == im_w
+
+            gt_referent_idx = [targets[idx]['referent_idx'] for idx in range(batch_size)] # list[int], b
+            _, matching_result = self.obj_decoder_objseg_loss(out_mask_logits, perFrame_has_ann, tgt_masks)
+            # list[t h w] -> b t h w
+            out_mask_logits = torch.stack([out_mask[tgt_idx[src_idx.tolist().index(gt_ref_idx)]][has_ann]
+                                            for out_mask, gt_ref_idx, (tgt_idx, src_idx), has_ann in zip(out_mask_logits, gt_referent_idx, matching_result,
+                                                                                                         perFrame_has_ann)], dim=0)
+            out_mask_logits = out_mask_logits.flatten(0,1) # bt h w
+        else:
+            refdecoder_layer_preds = self.get_decoder_preds(decoder_layer_preds)
+            ref_last_layer_preds = refdecoder_layer_preds[f'layer{self.decoder_trans_nlayers-1}_preds']
+            ref_last_layer_gscore = ref_last_layer_preds['grounding_score']  # b nq 
+            argmax_query_idx = ref_last_layer_gscore.argmax(-1)
+            # b T h w
+            out_mask_logits = torch.stack([out_mask[max_query] for out_mask, max_query in zip(out_mask_logits, argmax_query_idx)], dim=0)
+            out_mask_logits = out_mask_logits.flatten(0,1)[perFrame_has_ann.flatten()]
+        # # # bt 1 h w
+        query_pred_masks = F.interpolate(out_mask_logits.unsqueeze(1), 
+                                         scale_factor=self.obj_decoder_mask_out_stride, mode="bilinear", align_corners=False)
+        query_pred_masks = (query_pred_masks.sigmoid() > self.obj_decoder_mask_threshold) 
+        # bt' 1
+        query_pred_is_referred_prob = torch.ones([len(query_pred_masks)]).unsqueeze(1).to(query_pred_masks.device).float()
+        
+        size_original = [] #list[h,w], bt'
+        size_after_aug = [] #list[h,w], bt'
+        
+        # 保证没有temporal增强
+        for bth_idx in range(batch_size):
+            size_original.extend([targets[bth_idx]['orig_size'][-2:].tolist()]*ann_number_by_batch[bth_idx])
+            size_after_aug.extend([targets[bth_idx]['size'][-2:].tolist()]*ann_number_by_batch[bth_idx])
+        processed_pred_masks = []
+        for f_pred_masks, orig_size, after_aug_size, in zip(query_pred_masks, size_original, size_after_aug):
+            f_mask_h, f_mask_w = after_aug_size  
+            f_pred_masks = f_pred_masks[:, :f_mask_h, :f_mask_w] 
+            if (orig_size[0] != after_aug_size[0]) or (orig_size[1] != after_aug_size[1]):
+                # n h w -> 1 n h w -> n h w
+                f_pred_masks = F.interpolate(f_pred_masks.unsqueeze(0).float(), size=orig_size, mode="nearest")[0]
+            processed_pred_masks.append(f_pred_masks) # n h w
+            
+        # list[n h w], bt -> list[n t' h w], b
+        by_batch_preds = []
+        by_batch_preds_probs = []
+        cnt = 0
+        # bt n -> list[n], bt -> list[n t'], b
+        query_pred_is_referred_prob = query_pred_is_referred_prob.split(1, dim=0)
+        query_pred_is_referred_prob = [qq.squeeze(0) for qq in query_pred_is_referred_prob]
+        for bth_idx in range(batch_size):
+            by_batch_preds.append(torch.stack(processed_pred_masks[cnt:(cnt+ann_number_by_batch[bth_idx])], dim=1))
+            by_batch_preds_probs.append(torch.stack(query_pred_is_referred_prob[cnt:(cnt+ann_number_by_batch[bth_idx])], dim=1))
+            cnt += ann_number_by_batch[bth_idx]
+        assert cnt == len(processed_pred_masks)
+        return {
+            'query_pred_masks': by_batch_preds, # [n t' h w], batch
+            'query_pred_is_referred_prob': by_batch_preds_probs, # [n t'], batch
+        }
 
 
 class AMR_v0_detOnlyObj_Groudning_multiReason(AMR_v0_detOnlyObj_Grounding):
@@ -7845,6 +8058,39 @@ def amr_v0_detOnlyObj_grounding_ptObjDet(device, configs):
 @register_model
 def amr_v0_detOnlyObj_grounding_ptObjDet_v2(device, configs):
     model = AMR_v0_detOnlyObj_Grounding_ptObjDet_v2(
+        d_model=configs['d_model'],
+        pt_dir=configs['pt_dir'],
+        max_stride=configs['max_stride'],
+        obj_decoder=configs['obj_decoder'],
+        amrbart_wordEmbedding_freeze=configs['amrbart_wordEmbedding_freeze'],
+        amrtext_wordEmbedding_proj=configs['amrtext_wordEmbedding_proj'],
+        fusion=configs['fusion'],
+        loss_weight=configs['loss_weight'],
+        tasks=configs['tasks'],
+        refdecoder=configs['refdecoder'],
+        is_pretraining_seg=configs['is_pretraining_seg'],
+        multiclass_choose=configs['multiclass_choose'] if 'multiclass_choose' in configs else False,
+        choose_threshold=configs['choose_threshold'] if 'choose_threshold' in configs else None
+    )
+    model.to(device)
+
+
+    param_dicts = [
+        {"params": [p for n, p in model.named_parameters() 
+                    if (("obj_decoder" not in n) and ("amrbart_wordEmbedding" not in n) and p.requires_grad)]},
+        {"params": [p for n, p in model.named_parameters() if ("obj_decoder" in n) and p.requires_grad],
+            "lr": configs['optimization']['vid_backbone_lr']},
+        {"params": [p for n, p in model.named_parameters() if ("amrbart_wordEmbedding" in n) and p.requires_grad],
+            "lr": configs['optimization']['text_backbone_lr']}, 
+    ] # CHECK params dict every run
+    optimizer = get_optimizer(param_dicts=param_dicts, configs=configs['optimization']['optimizer'])
+
+    return model, optimizer 
+
+
+@register_model
+def amr_v0_detOnlyObj_grounding_ptObjDet_v3(device, configs):
+    model = AMR_v0_detOnlyObj_Grounding_ptObjDet_v3(
         d_model=configs['d_model'],
         pt_dir=configs['pt_dir'],
         max_stride=configs['max_stride'],
