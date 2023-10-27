@@ -2957,7 +2957,6 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
                 refseg_src[f'layer{i}_preds']['grounding_score'] = layer_gscore
         return refseg_src  
 
-
     def model_outputs(self, samples : NestedTensor, text_queries, auxiliary):
         """ text_auxiliary
         'amrs': list[T(2 E_i)]
@@ -2970,12 +2969,12 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet(nn.Module):
         nf, batch_size, *_, device = *samples.tensors.shape, samples.tensors.device
         amrs, amr_token_feats, amr_token_seg_ids, text_feats, text_pad_masks, node_alignments = self.encode_text(text_queries, auxiliary, device) 
 
-        # b nq c, b t nq h w
         obj_decoder_output = self.obj_decoder(samples, 
-                                                   text_feats=text_feats, 
-                                                   text_pad_masks=text_pad_masks,
-                                                   amr_feats=amr_token_feats,
-                                                   amr_pad_masks=amr_token_seg_ids==0)
+                                            text_feats=text_feats, 
+                                            text_pad_masks=text_pad_masks,
+                                            amr_feats=amr_token_feats,
+                                            amr_pad_masks=amr_token_seg_ids==0)
+        # b nq c, b t nq h w
         obj_queries, pred_masks = obj_decoder_output['obj_queries'], obj_decoder_output['pred_masks']
         obj_queries = self.obj_query_proj(obj_queries)
         if self.is_pretraining_seg:
@@ -3382,28 +3381,6 @@ class AMR_v0_detOnlyObj_Grounding_ptObjDet_v2(AMR_v0_detOnlyObj_Grounding_ptObjD
             bch_node_score = torch.stack([grounding_score[idx] for idx, batch_id in enumerate(nodes_batch_ids) if batch_id == bch_idx], dim=0)
             g_score_by_batch.append(bch_node_score) # vi nq
         decoder_layer_preds[f'layer{-1}_preds'] = {'grounding_score': g_score_by_batch}
-
-        if self.decoder_trans_layers is not None:
-            for layer_idx in range(self.decoder_trans_nlayers):
-                node_feats, edge_feats = self.decoder_trans_layers[layer_idx](node_batch_ids=nodes_batch_ids, edge_batch_ids=edges_batch_ids, 
-                                                                            node_seg_ids=node_seg_ids, edge_seg_ids=edges_seg_ids,
-                                                                            node_feats=node_feats, edge_feats=edge_feats,
-                                                                            node_memories=node_memories, edge_memories=edge_memories,
-                                                                            edge_index=edge_index,
-                                                                            node_subseqs=node_subseqs) # V nq
-                grounding_score = self.decoder_reason_layer(node_batch_ids=nodes_batch_ids, edge_batch_ids=edges_batch_ids, 
-                                            node_seg_ids=node_seg_ids, edge_seg_ids=edges_seg_ids,
-                                            node_feats=node_feats, edge_feats=edge_feats,
-                                            node_memories=node_memories, edge_memories=edge_memories,
-                                            edge_index=edge_index,
-                                            node_subseqs=node_subseqs,
-                                            node_dsends=node_dsends) # V nq
-                g_score_by_batch = []
-                for bch_idx in range(bt):
-                    bch_node_score = torch.stack([grounding_score[idx] for idx, batch_id in enumerate(nodes_batch_ids) if batch_id == bch_idx], dim=0)
-                    g_score_by_batch.append(bch_node_score) # vi nq
-                decoder_layer_preds[f'layer{layer_idx}_preds'] = {'grounding_score': g_score_by_batch}
-
         return {'refdecoder_refseg': decoder_layer_preds,
                 # TODO: 添加一些其他可以加loss, 加postprocessing的东西, 输出的接口和trainer evaluation一致;, 输出的接口和task loss一致
                 'check_visualze': check_visualize,

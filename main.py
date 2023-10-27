@@ -78,8 +78,8 @@ if __name__=="__main__":
     logging.getLogger('h5py').setLevel(logging.WARNING)
     
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_dir', type=str, default='/hpc2hdd/home/testuser21/datasets')
-    parser.add_argument('--pt_dir', type=str, default='/hpc2hdd/home/testuser21/pt')
+    parser.add_argument('--data_dir', type=str, default='/hpc2hdd/home/hxu047/datasets')
+    parser.add_argument('--pt_dir', type=str, default='/hpc2hdd/home/hxu047/pt')
     
     parser.add_argument('--task', type=str,  default='rvos')  # rvos
     parser.add_argument('--group', type=str,  default='a2ds_schedule') # a2ds_schedule / yrvos_schedule / yrvos_v300s1999_schedule
