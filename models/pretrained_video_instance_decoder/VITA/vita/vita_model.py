@@ -717,7 +717,7 @@ def vita(configs, pt_dir):
     freeze_bb = configs['freeze_bb']
     freeze_all = configs['freeze_all'] if 'freeze_all' in configs else False
     model = Vita_2(cfg)
-    checkpoint = torch.load(os.path.join(pt_dir, 'vita/vita_swin_ytvis2021.pth'))['model']
+    checkpoint = torch.load(os.path.join(pt_dir, 'vita/vita_swin_ytvis2021.pth'), map_location='cpu')['model']
     model.load_state_dict(checkpoint)
     if freeze_bb:
         for p in model.backbone.parameters():

@@ -318,7 +318,12 @@ class perFrameMultiscaleFlatten_Text_v1(nn.Module):
                                                         nhead=nheads,
                                                         dropout=dropout)
         self.text1d_pos = build_position_encoding(position_embedding_name='1d')
-    
+        self._reset_parameters()
+        
+    def _reset_parameters(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
     def forward(self, flatten_multiscale, flatten_multiscale_pos,
                 text_feats=None, text_pad_masks=None,
                 amr_feats=None, amr_pad_masks=None):

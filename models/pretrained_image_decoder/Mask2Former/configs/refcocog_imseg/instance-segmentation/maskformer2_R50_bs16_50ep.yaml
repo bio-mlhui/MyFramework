@@ -15,12 +15,6 @@ MODEL:
     DEFORMABLE_TRANSFORMER_ENCODER_IN_FEATURES: ["res3", "res4", "res5"]
     COMMON_STRIDE: 4
     TRANSFORMER_ENC_LAYERS: 6
-    FUSION:
-      NAME: "perFrameVideoFlatten_text_nofusion"
-      NHEADS: 8
-      D_MODEL: 256
-      REL_SELF: 'before'
-      DROPOUT: 0.0
   MASK_FORMER:
     TRANSFORMER_DECODER_NAME: "MultiScaleMaskedTransformerDecoder_fusionText"
     TRANSFORMER_IN_FEATURE: "multi_scale_pixel_decoder"

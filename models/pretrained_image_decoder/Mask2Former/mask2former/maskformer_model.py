@@ -565,15 +565,23 @@ from detectron2.engine import default_setup
 from detectron2.config import get_cfg
 from . import add_maskformer2_config
 import os
+def merge_fusion_configs(configs, cfg):
+    cfg.MODEL.SEM_SEG_HEAD.FUSION.NAME = configs['fusion']["name"]
+    cfg.MODEL.SEM_SEG_HEAD.FUSION.NHEADS= configs['fusion']['nheads']
+    cfg.MODEL.SEM_SEG_HEAD.FUSION.D_MODEL= configs['fusion']['d_model']
+    cfg.MODEL.SEM_SEG_HEAD.FUSION.REL_SELF= configs['fusion']['rel_self']
+    cfg.MODEL.SEM_SEG_HEAD.FUSION.DROPOUT= configs['fusion']['dropout']
+
 @register_pt_obj_2d_decoder
 def mask2former(configs, pt_dir, work_dir):
     cfg = get_cfg()
     add_deeplab_config(cfg)
     add_maskformer2_config(cfg)
     cfg.merge_from_file(os.path.join(work_dir, configs['config_file']))
+    merge_fusion_configs(configs, cfg)
     cfg.freeze()
     model:torch.nn.Module = MaskFormer_fusionText(cfg)
-    checkpoint = torch.load(os.path.join(pt_dir, f'{configs["pt_file_name"]}'))['model']
+    checkpoint = torch.load(os.path.join(pt_dir, f'{configs["pt_file_name"]}'), map_location='cpu')['model']
     model.load_state_dict(checkpoint, strict=False) # since fusion modules not included
     if configs['freeze_bb']:
         for p in model.backbone.parameters():

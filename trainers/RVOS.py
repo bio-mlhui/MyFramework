@@ -15,7 +15,7 @@ from util.misc import all_gather, SmoothedValue, MetricLogger, reduce_scalar ,se
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 import torch.distributed as dist
-
+import datetime
 
 from models.video_swin import compute_mask
 from tqdm import tqdm
@@ -130,6 +130,7 @@ class Trainer:
 
         # model
         create_model = model_entrypoint(model_configs['name'])
+
         model, optimizer = create_model(device=self.device, configs=model_configs)  # optimization属于model的部分
         if self.distributed:
             model = DDP(model, device_ids=[self.device], find_unused_parameters=True)
@@ -223,7 +224,10 @@ class Trainer:
                     for gn in range(len(self.optimizer.param_groups)):
                         if len(self.optimizer.param_groups[gn]['params']) != 0:
                             metric_logger.update(**{f'lr_group{gn}':self.optimizer.param_groups[gn]["lr"]})
-                    header = f'{epoch_header} Itera[{(self.iteration):{int(math.log10(self.total_iterations))+1}d}/{self.total_iterations}]'
+
+                    eta = datetime.timedelta(seconds=(self.total_iterations - self.iteration) * iteration_time)
+
+                    header = f'Eta: {str(eta)}{epoch_header} Itera[{(self.iteration):{int(math.log10(self.total_iterations))+1}d}/{self.total_iterations}]'
                     logging.info(f'{header} {str(metric_logger)}')
                     wandb.log(metric_logger.to_dict(), step=self.iteration+self.epoch)
 

@@ -868,7 +868,11 @@ def batching_graph(amrs,
     else:
         # V nq c
         node_memories_feats = torch.stack([memories[bid] for bid in nodes_batch_ids], dim=0)
-        edge_memories_feats = torch.stack([memories[bid] for bid in edges_batch_ids], dim=0)
+        _, nq, d_model = node_memories_feats.shape
+        if len(edges_batch_ids) == 0:
+            edge_memories_feats = torch.zeros([0, nq, d_model]).to(node_memories_feats)
+        else:
+            edge_memories_feats = torch.stack([memories[bid] for bid in edges_batch_ids], dim=0)
         node_memories = {'feat': node_memories_feats, 'pos': None}
         edge_memories = {'feat': edge_memories_feats, 'pos': None}        
 
