@@ -372,10 +372,13 @@ class REFCOCO(DatasetWithAux):
         obj_masks = torch.stack(obj_masks, dim=0)
         obj_valids = obj_masks.flatten(1).any(-1) # n
         class_labels = torch.tensor([self.category_id_map[ann['category_id']]  for ann in annotations])
-        for mask in obj_masks:
-            y1, y2, x1, x2 = bounding_box_from_mask(mask.numpy())
-            box = torch.tensor([x1, y1, x2, y2]).to(torch.float)
-            obj_boxes.append(box)
+        for vli, mask in zip(obj_valids, obj_masks):
+            if vli:
+                y1, y2, x1, x2 = bounding_box_from_mask(mask.numpy())
+                box = torch.tensor([x1, y1, x2, y2]).to(torch.float)
+                obj_boxes.append(box)
+            else:
+                box = torch.tensor([0,0,0,0]).to(torch.float)
         return {
             'masks': obj_masks,
             'boxes': torch.stack(obj_boxes, dim=0),
