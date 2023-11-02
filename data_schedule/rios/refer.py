@@ -371,7 +371,6 @@ class REFCOCO(DatasetWithAux):
         assert len(obj_masks) > 0
         obj_masks = torch.stack(obj_masks, dim=0)
         obj_valids = obj_masks.flatten(1).any(-1) # n
-        assert obj_valids.all()
         class_labels = torch.tensor([self.category_id_map[ann['category_id']]  for ann in annotations])
         for mask in obj_masks:
             y1, y2, x1, x2 = bounding_box_from_mask(mask.numpy())
@@ -392,8 +391,10 @@ class REFCOCO(DatasetWithAux):
             assert len(sentences) > 0 # 保证这个图像至少有一个有refcoco text annotation
             sentences = [refcoco_normalize_text(sent['sent'], self.set_name, sent['sent_id']) for sent in sentences]
             ann_id = text['ann_id']
-            assert ann_id not in ann_to_texts # 保证这个图像的refs是针对不同的obj
-            ann_to_texts[ann_id] = sentences
+            if ann_id in ann_to_texts:
+                ann_to_texts[ann_id] += sentences
+            else:
+                ann_to_texts[ann_id] = sentences
         assert len(set(list(ann_to_texts.keys())) - set(list(all_ann_ids))) == 0  
         # !TODO: assert len(set(list(all_ann_ids)) - set(list(ann_to_texts.keys()))) == 0 # 有的annotation没有text
         # TODO: refcoco并没有为coco图像的每个obj ann提供text ann

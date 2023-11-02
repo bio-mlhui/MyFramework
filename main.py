@@ -89,7 +89,7 @@ if __name__=="__main__":
     
     parser.add_argument('--mode', type=str) # train_resume / train_attmpt / evaluate_ckpt / visualzie_ckpt
     parser.add_argument('--trainer_ckpt', type=str, default='')
-    parser.add_argument('--seed', type=str, default=2023)
+    parser.add_argument('--seed', type=int, default=2023)
     parser.add_argument('--wandb_mode', type=str, default='offline')
     args = parser.parse_args()
 

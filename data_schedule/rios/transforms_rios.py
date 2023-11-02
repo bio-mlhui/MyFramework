@@ -9,7 +9,7 @@ import torch
 import torchvision.transforms as T
 import torchvision.transforms.functional as F
 from numpy import random as rand
-
+import copy
 from util.misc import interpolate
 import numpy as np
 from PIL import Image
@@ -31,7 +31,15 @@ def hflip(image, texts, target):
 
     w, h = image.size
     
-    texts =[q.replace('left', '@').replace('right', 'left').replace('@', 'right') for q in texts]
+    # 比如有的句子就有@
+    old_texts = copy.deepcopy(texts)
+    texts = []
+    for q in old_texts:
+        if ('left' in q) or ('right' in q):
+            texts.append(q.replace('left', '@').replace('right', 'left').replace('@', 'right'))
+        else:
+            texts.append(q)
+
     if 'boxes' in target:
         # n (x1 y1 x2 y2)
         boxes = target["boxes"]
