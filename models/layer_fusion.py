@@ -33,7 +33,7 @@ class VisionLanguageFusionModule(nn.Module):
         tgt = tgt * tgt2
         return tgt, attn_weights
 
-  
+# video query + text  
 class NoFusion(nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -47,6 +47,7 @@ class NoFusion(nn.Module):
 @register_fusion
 def no_fusion(configs):
     return NoFusion()
+
 
 # b nq c, b s c, 只转换query
 class VidQuery_Text_v1(nn.Module):
@@ -233,7 +234,7 @@ class VidQuery_Text_v2(nn.Module):
 def vidquery_text_v2(configs):
     return VidQuery_Text_v2(configs)
 
-
+# multiscale + text
 class perFrameVideo_Text_v1(nn.Module):
     def __init__(self, d_model, nhead, dropout) -> None:
         super().__init__()
@@ -295,6 +296,126 @@ class perFrameVideo_Text_nofusion(nn.Module):
 def perFrameVideo_text_nofusion(configs):
     return perFrameVideo_Text_nofusion()
 
+
+class perFrameMultiscaleFlatten_Text_nofusion(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+    
+    def forward(self, flatten_multiscale, flatten_multiscale_pos,
+                text_feats=None, text_pad_masks=None,
+                amr_feats=None, amr_pad_masks=None):
+        return flatten_multiscale
+
+@register_fusion
+def perFrameVideoFlatten_text_nofusion(configs):
+    return perFrameMultiscaleFlatten_Text_nofusion()
+
+# dot_cross
+class perFrameMultiscaleFlatten_Text_v1(nn.Module):
+    def __init__(self, d_model, nheads, dropout) -> None:
+        super().__init__()
+        self.cross_module = VisionLanguageFusionModule(d_model=d_model,
+                                                        nhead=nheads,
+                                                        dropout=dropout)
+        self.text1d_pos = build_position_encoding(position_embedding_name='1d')
+    
+    def forward(self, flatten_multiscale, flatten_multiscale_pos,
+                text_feats=None, text_pad_masks=None,
+                amr_feats=None, amr_pad_masks=None):
+        assert (amr_feats is not None) and (amr_pad_masks is not None)
+        # b s c
+        output = flatten_multiscale
+        memory = amr_feats.clone() # b v+e_max c
+        memory_key_padding_mask = amr_pad_masks # b v+e_max
+        memory_pos = torch.zeros_like(amr_feats) 
+
+        if text_feats is not None:
+            assert text_pad_masks is not None
+            text_pos = self.text1d_pos(text_pad_masks, hidden_dim=text_feats.shape[-1]).permute(0, 2, 1) # b s c
+            memory = torch.cat([memory, text_feats], dim=1)
+            memory_key_padding_mask = torch.cat([memory_key_padding_mask, text_pad_masks], dim=1)
+            memory_pos = torch.cat([memory_pos,text_pos], dim=1)
+
+        output = self.cross_module(tgt=output.permute(1,0,2),
+                                    memory=memory.permute(1,0,2), 
+                                    memory_key_padding_mask=memory_key_padding_mask,
+                                    pos=memory_pos.permute(1,0,2), 
+                                    query_pos=flatten_multiscale_pos.permute(1,0,2))[0]
+        return output.permute(1,0,2)
+
+@register_fusion
+def perFrameVideoFlatten_text_v1(configs):
+    return perFrameMultiscaleFlatten_Text_v1(d_model=configs['d_model'],
+                                             nheads=configs['nheads'],
+                                             dropout=configs['dropout'])
+
+# perframe query + text
+class perFrameQuery_Text_nofusion(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+    
+    def forward(self, frame_query, 
+                text_feats=None, text_pad_masks=None,
+                amr_feats=None, amr_pad_masks=None):
+        return frame_query
+
+@register_fusion
+def perFrameQuery_text_nofusion_(configs):
+    return perFrameQuery_Text_nofusion()
+
+# dot_cross
+class perFrameQuery_Text_v1(nn.Module):
+    def __init__(self, d_model, nheads, dropout) -> None:
+        super().__init__()
+        self.cross_module = VisionLanguageFusionModule(d_model=d_model,
+                                                        nhead=nheads,
+                                                        dropout=dropout)
+        self.text1d_pos = build_position_encoding(position_embedding_name='1d')
+    
+    def forward(self, frame_query,
+                text_feats=None, text_pad_masks=None,
+                amr_feats=None, amr_pad_masks=None):
+        assert (amr_feats is not None) and (amr_pad_masks is not None)
+        T, Nq, batch_size, _ = frame_query.shape
+        # t nq b c
+        output = frame_query.flatten(0,1)
+        memory = amr_feats.clone() # b v+e_max c
+        memory_key_padding_mask = amr_pad_masks # b v+e_max
+        memory_pos = torch.zeros_like(amr_feats) 
+
+        if text_feats is not None:
+            assert text_pad_masks is not None
+            text_pos = self.text1d_pos(text_pad_masks, hidden_dim=text_feats.shape[-1]).permute(0, 2, 1) # b s c
+            memory = torch.cat([memory, text_feats], dim=1)
+            memory_key_padding_mask = torch.cat([memory_key_padding_mask, text_pad_masks], dim=1)
+            memory_pos = torch.cat([memory_pos,text_pos], dim=1)
+
+        output = self.cross_module(tgt=output,
+                                    memory=memory.permute(1,0,2), 
+                                    memory_key_padding_mask=memory_key_padding_mask,
+                                    pos=memory_pos.permute(1,0,2), 
+                                    query_pos=None)[0]
+        output = rearrange(output, '(t nq) b c -> t nq b c',t=T, nq=Nq)
+        return output
+
+@register_fusion
+def perFrameQuery_text_v1(configs):
+    return perFrameQuery_Text_v1(d_model=configs['d_model'],
+                                nheads=configs['nheads'],
+                                dropout=configs['dropout'])
+
+
+
+
+
+
+
+
+
+
+
+
+# mutlscale + video query
 class Fpn2D_multiple(nn.Module):
     def __init__(self, dim, cascaded_scales) -> None:
         """

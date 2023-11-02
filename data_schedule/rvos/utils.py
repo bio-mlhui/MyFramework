@@ -14,6 +14,7 @@ def generate_windows_of_video(all_frames,
     if window_size is None:
         assert window_step == None
         sampled_windows = [all_frames]
+        return sampled_windows
     else:
         if force_not_interleave:
             assert window_step >= window_size

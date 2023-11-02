@@ -35,7 +35,8 @@ def run(process_id, trainer_configs, trainer_mode, trainer_name, gpu_ids):
         elif trainer_mode == 'evaluate_dir':
             set_logging_file(trainer_configs['out_dir'], 'stdout_eval.txt')
     from trainers import task_entrypoint
-    create_trainer = task_entrypoint(trainer_name)
+    # 所有任务都用相同的rvos trainer
+    create_trainer = task_entrypoint('rvos')
     trainer = create_trainer(configs=trainer_configs, 
                             process_id=process_id, 
                             device_id=gpu_ids[process_id], 
@@ -80,6 +81,7 @@ if __name__=="__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_dir', type=str, default='/hpc2hdd/home/hxu047/datasets')
     parser.add_argument('--pt_dir', type=str, default='/hpc2hdd/home/hxu047/pt')
+    parser.add_argument('--work_dir', type=str, default='/hpc2hdd/home/hxu047/workspace/rvos_encoder')
     
     parser.add_argument('--task', type=str,  default='rvos')  # rvos
     parser.add_argument('--group', type=str,  default='a2ds_schedule') # a2ds_schedule / yrvos_schedule / yrvos_v300s1999_schedule
@@ -88,6 +90,7 @@ if __name__=="__main__":
     parser.add_argument('--mode', type=str) # train_resume / train_attmpt / evaluate_ckpt / visualzie_ckpt
     parser.add_argument('--trainer_ckpt', type=str, default='')
     parser.add_argument('--seed', type=str, default=2023)
+    parser.add_argument('--wandb_mode', type=str, default='offline')
     args = parser.parse_args()
 
     if args.schedule_model_configs == 'model51':
@@ -103,6 +106,7 @@ if __name__=="__main__":
     configs['data']['data_dir'] = args.data_dir
     configs['data']['pt_tokenizer_dir'] = args.pt_dir
     configs['model']['pt_dir'] = args.pt_dir
+    configs['model']['work_dir'] = args.work_dir
     configs['seed'] = args.seed
     if args.mode == 'train_resume':
         assert args.trainer_ckpt != '' and os.path.exists(args.trainer_ckpt) and os.path.exists(configs['out_dir'])
@@ -111,7 +115,7 @@ if __name__=="__main__":
             'group': args.group,
             'name': args.schedule_model_configs,
             'id': f'{args.task}_{args.group}_{args.schedule_model_configs}_inferbug2',
-            'mode': 'online',
+            'mode': args.wandb_mode,
             'resume': 'must',
             'configs': copy.deepcopy(configs)
         }
@@ -132,21 +136,25 @@ if __name__=="__main__":
             'group': args.group,
             'name': args.schedule_model_configs,
             'id': f'{args.task}_{args.group}_{args.schedule_model_configs}_inferbug2',
-            'mode': 'online',
+            'mode': args.wandb_mode,
             'resume': None,
             'configs': copy.deepcopy(configs)
         }
         configs['trainer_ckpt'] = args.trainer_ckpt
         
     elif args.mode == 'evaluate_ckpt':
-        assert args.trainer_ckpt != '' and os.path.exists(args.trainer_ckpt) and os.path.exists(configs['out_dir'])
+        if args.trainer_ckpt == '':
+            logging.info('你在评估一个没有trainer ckpt指定的 完全初始化的模型')
+            print('你在评估一个没有trainer ckpt指定的 完全初始化的模型')
+        else:
+            assert args.trainer_ckpt != '' and os.path.exists(args.trainer_ckpt) and os.path.exists(configs['out_dir'])
         configs['wandb'] = {
             'project': args.task,
             'group': args.group,
             'name': args.schedule_model_configs,
             'id': f'{args.task}_{args.group}_{args.schedule_model_configs}_inferbug2',
-            'mode': 'online',
-            'resume': 'must',
+            'mode': args.wandb_mode,
+            'resume': None,
             'configs': copy.deepcopy(configs)
         }
         configs['trainer_ckpt'] = args.trainer_ckpt
@@ -158,7 +166,7 @@ if __name__=="__main__":
             'group': args.group,
             'name': args.schedule_model_configs,
             'id': f'{args.task}_{args.group}_{args.schedule_model_configs}_inferbug2',
-            'mode': 'online',
+            'mode': args.wandb_mode,
             'resume': None,
             'configs': copy.deepcopy(configs)
         }   

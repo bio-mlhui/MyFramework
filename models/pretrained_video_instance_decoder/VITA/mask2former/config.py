@@ -103,6 +103,13 @@ def add_maskformer2_config(cfg):
     cfg.MODEL.SEM_SEG_HEAD.DEFORMABLE_TRANSFORMER_ENCODER_N_POINTS = 4
     cfg.MODEL.SEM_SEG_HEAD.DEFORMABLE_TRANSFORMER_ENCODER_N_HEADS = 8
 
+    cfg.MODEL.SEM_SEG_HEAD.FUSION = CN()
+    cfg.MODEL.SEM_SEG_HEAD.FUSION.NAME = 'no_fusion'
+    cfg.MODEL.SEM_SEG_HEAD.FUSION.NHEADS = 8
+    cfg.MODEL.SEM_SEG_HEAD.FUSION.D_MODEL = 256
+    cfg.MODEL.SEM_SEG_HEAD.FUSION.REL_SELF = 'after'
+    cfg.MODEL.SEM_SEG_HEAD.FUSION.DROPOUT = 0.0
+
     # point loss configs
     # Number of points sampled during training for a mask point head.
     cfg.MODEL.MASK_FORMER.TRAIN_NUM_POINTS = 112 * 112

@@ -549,7 +549,8 @@ class Vita_2(nn.Module):
         self.out_dim = 256
         self.scales = [[1, 32], [1, 16], [1, 8]]
         self.conved_scale = [1, 4]
-
+        self.mask_out_stride = 4
+        self.mask_threshold = 0.5
 
     @classmethod
     def from_config(cls, cfg):
@@ -664,9 +665,6 @@ class Vita_2(nn.Module):
             "is_coco": cfg.DATASETS.TEST[0].startswith("coco"),
         }
 
-    def add_fusion_module_to_pixel_decoder(self, fusion_configs):
-        self.sem_seg_head.pixel_decoder.add_fusion_module(fusion_configs)
-
     def forward(self, batched_inputs, 
                 text_feats=None, text_pad_masks=None,
                 amr_feats=None, amr_pad_masks=None,):
@@ -724,7 +722,6 @@ def vita(configs, pt_dir):
     if freeze_bb:
         for p in model.backbone.parameters():
             p.requires_grad_(False)
-    model.add_fusion_module_to_pixel_decoder(configs['fusion'])
     if freeze_all:
         for p in model.parameters():
             p.requires_grad_(False)        

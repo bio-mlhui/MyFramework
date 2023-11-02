@@ -152,7 +152,7 @@ def resize(video, texts, target, size, max_size=None):
     size = get_size(video[0].size, size, max_size)
     rescaled_video = [F.resize(frame, size) for frame in video]
     
-    ratios = tuple(float(s) / float(s_orig) for s, s_orig in zip(rescaled_video[0].size, rescaled_video[0].size))
+    ratios = tuple(float(s) / float(s_orig) for s, s_orig in zip(rescaled_video[0].size, video[0].size))
     ratio_width, ratio_height = ratios
     
     h, w = size

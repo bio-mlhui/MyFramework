@@ -271,7 +271,7 @@ def generate_train_validate_samples(root, generate_params):
     params_by_vid = [(root, video_id, 'train', text_annotations_groupby_video.get_group(video_id).to_dict('records'), generate_params) for video_id in train_video_ids]
     n_jobs = min(multiprocessing.cpu_count(), 12)
     train_samples = Parallel(n_jobs)(delayed(generate_samples_of_one_video)(*p) for p in tqdm(params_by_vid))
-    train_samples = [s for l in train_samples for s in l] 
+    train_samples = [s for l in train_samples for s in l] # 3016个视频, 5357个 train sample
     if generate_params['name'] == '61m61m':
         assert len(train_samples) == 15741
 
@@ -281,9 +281,9 @@ def generate_train_validate_samples(root, generate_params):
     params_by_vid = [(root, video_id, 'validate', text_annotations_groupby_video.get_group(video_id).to_dict('records'), generate_params) for video_id in validate_video_ids]
     n_jobs = min(multiprocessing.cpu_count(), 12)
     validate_samples = Parallel(n_jobs)(delayed(generate_samples_of_one_video)(*p) for p in tqdm(params_by_vid))
-    validate_samples = [s for l in validate_samples for s in l] 
+    validate_samples = [s for l in validate_samples for s in l]  # 1295个 test sample
     
-    # 15741, 3800
+    # 15741, 3800; 5357, 1295
     with open(os.path.join(root, f'{generate_params["name"]}_TrainValidate_samples.json'), 'w') as f:
         json.dump({'train': train_samples, 'validate':validate_samples}, f)
 

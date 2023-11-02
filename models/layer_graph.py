@@ -880,7 +880,9 @@ def batching_graph(amrs,
 
     node_dsends = [] # list[si c], V
     icgd = list(zip(edge_index[0, :].tolist(), edge_index[1, :].tolist()))
-    nx_graph = nx.DiGraph(icgd)
+    nx_graph = nx.DiGraph()
+    nx_graph.add_nodes_from(list(range(len(nodes_batch_ids))))
+    nx_graph.add_edges_from(icgd)
     for node_id in range(len(nodes_batch_ids)):
         # s c, list[int]
         dsends = list(nx.descendants(nx_graph, node_id))

@@ -224,6 +224,7 @@ class VITA(nn.Module):
         mask_dim: int,
         sim_use_clip: list,
         use_sim: bool,
+        fusion_configs: dict,
     ):
         """
         NOTE: this interface is experimental.
@@ -258,9 +259,17 @@ class VITA(nn.Module):
         self.aux_loss = aux_loss
 
         self.enc_layers = enc_layers
+        assert enc_layers > 0
         if enc_layers > 0:
             self.enc_self_attn = nn.ModuleList()
             self.enc_ffn = nn.ModuleList()
+            from models.layer_fusion import fusion_entrypoint
+            from models.transformer import _get_clones
+            create_fusion = fusion_entrypoint(fusion_configs['name'])
+            fusion_module = create_fusion(fusion_configs)
+            self.enc_cross_attn = _get_clones(fusion_module, self.enc_layers)
+            self.fusion_rel_self = fusion_configs['rel_self']
+
             for _ in range(self.enc_layers):
                 self.enc_self_attn.append(
                     SelfAttentionLayer(
@@ -366,18 +375,16 @@ class VITA(nn.Module):
         ret["mask_dim"] = cfg.MODEL.SEM_SEG_HEAD.MASK_DIM
         ret["sim_use_clip"] = cfg.MODEL.VITA.SIM_USE_CLIP
         ret["use_sim"] = cfg.MODEL.VITA.SIM_WEIGHT > 0.0
-
+        fusion_configs = dict(cfg.MODEL.VITA.FUSION)
+        lowercase_configs = {}
+        for key, value in fusion_configs.items():
+            lowercase_configs[str.lower(key)] = value
+        ret['fusion_configs'] = lowercase_configs
         return ret
 
-    def forward(self, frame_query):
-        """
-        L: Number of Layers.
-        B: Batch size.
-        T: Temporal window size. Number of frames per video.
-        C: Channel size.
-        fQ: Number of frame-wise queries from IFC.
-        cQ: Number of clip-wise queries to decode Q.
-        """
+    def forward(self, frame_query,
+                text_feats=None, text_pad_masks=None,
+                amr_feats=None, amr_pad_masks=None,): # l, bt, nqf, c
         if not self.training:
             frame_query = frame_query[[-1]]
 
@@ -385,20 +392,22 @@ class VITA(nn.Module):
         B = BT // self.num_frames if self.training else 1
         T = self.num_frames if self.training else BT // B
 
-        frame_query = frame_query.reshape(L*B, T, fQ, C)
-        frame_query = frame_query.permute(1, 2, 0, 3).contiguous()
-        frame_query = self.input_proj_dec(frame_query) # T, fQ, LB, C
+        frame_query = frame_query.reshape(L*B, T, fQ, C) # b t nqf c
+        frame_query = frame_query.permute(1, 2, 0, 3).contiguous() # t nqf b c
+        frame_query = self.input_proj_dec(frame_query)
 
         if self.window_size > 0:
-            pad = int(ceil(T / self.window_size)) * self.window_size - T
+            pad = int(ceil(T / self.window_size)) * self.window_size - T # 让window能
             _T = pad + T
-            frame_query = F.pad(frame_query, (0,0,0,0,0,0,0,pad))   # _T, fQ, LB, C
-            enc_mask = frame_query.new_ones(L*B, _T).bool()         # LB, _T
+            frame_query = F.pad(frame_query, (0,0,0,0,0,0,0,pad))  # t_pad
+            enc_mask = frame_query.new_ones(L*B, _T).bool()        # b t_pad
             enc_mask[:, :T] = False
         else:
             enc_mask = None
 
-        frame_query = self.encode_frame_query(frame_query, enc_mask)
+        frame_query = self.encode_frame_query(frame_query, enc_mask,
+                                              text_feats=text_feats, text_pad_masks=text_pad_masks,
+                                            amr_feats=amr_feats, amr_pad_masks=amr_pad_masks,)
         frame_query = frame_query[:T].flatten(0,1)              # TfQ, LB, C
 
         if self.use_sim:
@@ -468,60 +477,69 @@ class VITA(nn.Module):
         return [{"pred_logits": a, "pred_mask_embed": b, "pred_cq_embed": c, "pred_fq_embed": outputs_fq_embed}
                 for a, b, c in zip(outputs_cls[:-1], outputs_mask_embed[:-1], outputs_cq_embed[:-1])]
 
-    def encode_frame_query(self, frame_query, attn_mask):
+    def encode_frame_query(self, frame_query, attn_mask,
+                           text_feats=None, text_pad_masks=None,
+                           amr_feats=None, amr_pad_masks=None,):
         """
-        input shape (frame_query)   : T, fQ, LB, C
-        output shape (frame_query)  : T, fQ, LB, C
+        t_pad nqf b c   ;   b t_pad
+        b s c, b s
         """
-
-        # Not using window-based attention if self.window_size == 0.
         if self.window_size == 0:
-            return_shape = frame_query.shape        # T, fQ, LB, C
-            frame_query = frame_query.flatten(0, 1) # TfQ, LB, C
-
+            return_shape = frame_query.shape 
+            frame_query = frame_query.flatten(0, 1)
             for i in range(self.enc_layers):
-                frame_query = self.enc_self_attn[i](frame_query)
+                frame_query = self.enc_cross_attn[layer_idx](frame_query=frame_query,
+                                text_feats=text_feats, text_pad_masks=text_pad_masks,
+                            amr_feats=amr_feats, amr_pad_masks=amr_pad_masks,)
+                frame_query = self.enc_self_attn[i](frame_query) # t nqf b c
                 frame_query = self.enc_ffn[i](frame_query)
-
             frame_query = frame_query.view(return_shape)
             return frame_query
-        # Using window-based attention if self.window_size > 0.
         else:
             T, fQ, LB, C = frame_query.shape
             W = self.window_size
             Nw = T // W
-            half_W = int(ceil(W / 2))
+            half_W = int(ceil(W / 2))  # 滑动一半
 
+            # b t -> b*N t' nq
             window_mask = attn_mask.view(LB*Nw, W)[..., None].repeat(1, 1, fQ).flatten(1)
-
+            # b t -> b N t' t'
             _attn_mask  = torch.roll(attn_mask, half_W, 1)
             _attn_mask  = _attn_mask.view(LB, Nw, W)[..., None].repeat(1, 1, 1, W)    # LB, Nw, W, W
             _attn_mask[:,  0] = _attn_mask[:,  0] | _attn_mask[:,  0].transpose(-2, -1)
-            _attn_mask[:, -1] = _attn_mask[:, -1] | _attn_mask[:, -1].transpose(-2, -1)
+            _attn_mask[:, -1] = _attn_mask[:, -1] | _attn_mask[:, -1].transpose(-2, -1) # Padding size肯定小于window size
             _attn_mask[:, 0, :half_W, half_W:] = True
             _attn_mask[:, 0, half_W:, :half_W] = True
             _attn_mask  = _attn_mask.view(LB*Nw, 1, W, 1, W, 1).repeat(1, self.num_heads, 1, fQ, 1, fQ).view(LB*Nw*self.num_heads, W*fQ, W*fQ)
             shift_window_mask = _attn_mask.float() * -1000
 
             for layer_idx in range(self.enc_layers):
-                if self.training or layer_idx % 2 == 0:
-                    frame_query = self._window_attn(frame_query, window_mask, layer_idx)
+                # cross
+                # fusion with text: t nqf b c -> tnqf b c, s b c
+                frame_query = self.enc_cross_attn[layer_idx](frame_query=frame_query,
+                                                             text_feats=text_feats, text_pad_masks=text_pad_masks,
+                                                            amr_feats=amr_feats, amr_pad_masks=amr_pad_masks,)
+                # self
+                if layer_idx % 2 == 0:
+                    frame_query = self._window_attn(frame_query, window_mask, layer_idx,)
                 else:
-                    frame_query = self._shift_window_attn(frame_query, shift_window_mask, layer_idx)
+                    frame_query = self._shift_window_attn(frame_query, shift_window_mask, layer_idx,)
+                # ffn
+                frame_query = self.enc_ffn[layer_idx](frame_query)
             return frame_query
 
     def _window_attn(self, frame_query, attn_mask, layer_idx):
+        # t nq b c
         T, fQ, LB, C = frame_query.shape
-        # LBN, WTfQ = attn_mask.shape
-
+        # bN t'
         W = self.window_size
         Nw = T // W
 
+        # t nq b c -> N t' nq b c -> t' nq b N c -> t'nq bN c
         frame_query = frame_query.view(Nw, W, fQ, LB, C)
         frame_query = frame_query.permute(1,2,3,0,4).reshape(W*fQ, LB*Nw, C)
 
         frame_query = self.enc_self_attn[layer_idx](frame_query, tgt_key_padding_mask=attn_mask)
-        frame_query = self.enc_ffn[layer_idx](frame_query)
         frame_query = frame_query.reshape(W, fQ, LB, Nw, C).permute(3,0,1,2,4).reshape(T, fQ, LB, C)
 
         return frame_query
@@ -539,7 +557,6 @@ class VITA(nn.Module):
         frame_query = frame_query.permute(1,2,3,0,4).reshape(W*fQ, LB*Nw, C)
 
         frame_query = self.enc_self_attn[layer_idx](frame_query, tgt_mask=attn_mask)
-        frame_query = self.enc_ffn[layer_idx](frame_query)
         frame_query = frame_query.reshape(W, fQ, LB, Nw, C).permute(3,0,1,2,4).reshape(T, fQ, LB, C)
 
         frame_query = torch.roll(frame_query, -half_W, 0)

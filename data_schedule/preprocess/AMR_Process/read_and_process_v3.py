@@ -164,8 +164,11 @@ def dfs_linearize(graph, use_pointer_tokens):
     # key: dict['ali':list[int], 'is_coreference':0/1]
     
     for piece in linearized.split():
-        if '(' in piece or ')' in piece or '/' in piece:
-            assert len(piece) == 1
+        if '(' in piece or ')' in piece or '/' in piece: # 有可能是1/2
+            if piece == '"1/2"':
+                pass
+            else:
+                assert len(piece) == 1
         
     linearized_nodes = linearized.split()
     cum_sum = {}
