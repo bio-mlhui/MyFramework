@@ -124,13 +124,12 @@ if __name__=="__main__":
     elif args.mode == 'train_attmpt': # 重写
         if 'stand' not in args.schedule_model_configs:
             # checkpoint文件可能和out_dir不在同一个目录
-            # if os.path.exists(configs['out_dir']):
-            #     answer = input(f'相同的实验存在 {configs["out_dir"]} 重写吗? \n' )
-            #     if answer == 'y':
-            #         pass
-            #     else:
-            #         exit()
-            pass
+            if os.path.exists(configs['out_dir']):
+                answer = input(f'相同的实验存在 {configs["out_dir"]} 重写吗? \n' )
+                if answer == 'y':
+                    pass
+                else:
+                    exit()
             
         configs['wandb'] = {
             'project': args.task,

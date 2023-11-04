@@ -2071,6 +2071,164 @@ def spatial_grounding(configs):
                         random_drop=configs['random_drop'] if 'random_drop' in configs else False,
                         drop_p=configs['drop_p'] if 'drop_p' in configs else None)
 
+class Spatial_Grounding_head2(Spatial_Grounding):
+    def __init__(self, d_model, nheads, flow='source_to_target', self_score='dot', score_aggr='sum', random_drop=False, drop_p=None):
+        super().__init__(d_model, nheads, flow, self_score, score_aggr, random_drop, drop_p)
+    
+    def reason(self, node_batch_ids=None, edge_batch_ids=None, 
+                node_seg_ids=None, edge_seg_ids=None,
+                node_feats=None, edge_feats=None,
+                edge_memories=None, node_memories=None,
+                edge_index=None,
+                node_subseqs=None,
+                node_dsends=None):
+        """不对node/edge的feature进行转换
+        Args:
+            node_batch_ids: V
+            edge_batch_ids: E
+
+            node_seg_ids: V
+            edge_seg_ids: E
+            node_feats: V c
+            edge_feats: E c
+            edge_memories: V nq c
+            node_memories: V nq c
+            edge_index: 2 E
+
+            node_subseqs: list[s c], V
+        """
+        device = edge_feats.device
+        # V nq c, V nq, bool, True for pad
+        node_query_feats, node_query_pos, node_query_pads = node_memories['feat'], node_memories['pos'], node_memories['pad']
+        node_query_feats = self.with_pos_embed(node_query_feats, node_query_pos) # V nq c
+        num_nodes, nq, _ = node_query_feats.shape
+        node_query_feats = rearrange(node_query_feats, 'V nq (h c) -> V h nq c',h=self.nheads)
+        node_query_pads = repeat(node_query_pads, 'V nq -> V h nq',h=self.nheads)
+        if self.self_score == 'dot':
+            node_feats = rearrange(node_feats, 'V (h c) -> V h c',h=self.nheads)
+            # intialize score V h_nq
+            # S(xi, v) = S_s(xi, y_s^v)
+            # V h nq c @ 1 h c c -> V h nq c
+            # V h nq c * V h 1 c -> V h nq c
+            ref_score = (node_query_feats @ self.ref_2) * (node_feats.unsqueeze(-2))
+            ref_score = ref_score / ref_score.norm(dim=-1, keepdim=True)
+            # V h nq c @ 1 h c 1 -> V h nq 1
+            scores = ref_score @ self.ref_1
+            # V h nq
+            scores : torch.Tensor = scores.squeeze(-1)
+        else:
+            raise ValueError()
+        scores.masked_fill_(node_query_pads, torch.finfo(scores.dtype).min)
+        scores = scores.flatten(1) 
+        dgl_graph = dgl.graph((edge_index[0, :], edge_index[1, :]))
+        try:
+            traversal_order = dgl.topological_nodes_generator(dgl_graph)
+        except:
+            exit()
+        # 比如有的图它就没有traversal order
+        for idx, frontier_nodes in enumerate(traversal_order):
+            src, tgt, order_eid =  dgl_graph.in_edges(frontier_nodes.to(device), form='all')
+            if idx == 0:
+                assert len(src) == 0 and len(tgt) == 0 and len(order_eid) == 0
+            else:
+                # V h_nq
+                scores = self.propagate(edge_index[:, order_eid], 
+                                        size=None,
+                                        x=scores, # V h_nq
+                                        edge_attr=edge_feats[order_eid, :], # E hc
+                                        node_nq=node_query_feats.flatten(1), # V h_nq_c
+                                        node_nq_pad=node_query_pads.flatten(1) # V h_nq
+                                        ) # arguments
+        scores = rearrange(scores, 'V (h nq) -> V h nq',h=self.nheads)
+        return scores.mean(dim=1) # V nq
+    
+    def message(self, edge_attr, x_j, node_nq_j, node_nq_i, node_nq_pad_j, node_nq_pad_i) -> Tensor:
+        """
+        Args:
+            edge_attr: E hc
+            x_j: E h_nq
+            node_nq_j/i: E nqc
+            yp_i: E c
+        """
+        edge_attr = rearrange(edge_attr, 'E (h c) -> E h c', h=self.nheads)
+        x_j : torch.Tensor = rearrange(x_j, 'E (h nq) -> E h nq', h=self.nheads)
+        nq = x_j.shape[-1]
+        node_nq_i = rearrange(node_nq_i, 'E (h nq c) -> E h nq c',nq=nq,h=self.nheads)
+        node_nq_j = rearrange(node_nq_j, 'E (h nq c) -> E h nq c',nq=nq,h=self.nheads)
+        node_nq_pad_j = rearrange(node_nq_pad_j, 'E (h nq) -> E h nq',nq=nq,h=self.nheads )
+        node_nq_pad_i = rearrange(node_nq_pad_i, 'E (h nq) -> E h nq',nq=nq,h=self.nheads )
+
+        soft_attn_j = x_j.softmax(-1)
+        assert (soft_attn_j * (node_nq_pad_j.float())).sum() == 0 # 保证pad的部分的加和是0
+        # E h 1 nq @ E h nq c -> E h 1 c
+        context_feat_j = (soft_attn_j.unsqueeze(2)) @ node_nq_j
+        context_feat_j = context_feat_j.repeat(1,1, nq,1) # E h nq c
+        cat_feat = torch.cat([context_feat_j, node_nq_i], dim=-1) # E h nq 2c
+
+        # E h nq 2c @ 1 h 2c c -> E h nq c
+        # E h nq c * E h 1 c -> E h nq c
+        context_score = (cat_feat @ self.context_2) * (edge_attr.unsqueeze(-2))
+        context_score = context_score / context_score.norm(dim=-1, keepdim=True)
+        # E h nq c @ 1 h c 1 -> E h nq 1 -> E h nq
+        context_score : torch.Tensor = (context_score @ self.context_1).squeeze(-1)
+        context_score.masked_fill_(node_nq_pad_i, torch.finfo(context_score.dtype).min)
+        return context_score.flatten(1)
+    
+    def aggregate(self, 
+                  inputs, # E h_nq
+                  x, # V h_nq
+                  index, # E, int 每个信息指向哪个节点
+                  dim_size=None):
+        x = rearrange(x, 'V (h nq) -> V h nq',h=self.nheads)
+        inputs = rearrange(inputs, 'E (h nq) -> E h nq',h=self.nheads)
+        out = [] # V  h nq
+        for tgt_node_idx in range(dim_size):
+            # 如果没有节点连向x_i, 那么message就是x_i本身
+            if tgt_node_idx not in index:
+                out.append(x[tgt_node_idx])
+            else:
+                self_score = x[tgt_node_idx]
+                # Msg+1 h nq
+                msgs = torch.stack([inputs[idx] for idx in range(len(index)) if index[idx] == tgt_node_idx], dim=0)
+                node_aggr_scores = torch.cat([msgs, self_score.unsqueeze(0)], dim=0)
+                if (self.training) and (self.random_drop):
+                    num_msgs = len(node_aggr_scores)
+                    save_prob = (1 - self.drop_p) * torch.ones(num_msgs)
+                    save_mask = torch.bernoulli(save_prob).bool().to(node_aggr_scores.device)
+                    if save_mask.any():
+                        dropped_scores = node_aggr_scores[save_mask]
+                        out.append(self.aggr_multiple(dropped_scores))
+                    else:
+                        out.append(torch.zeros_like(node_aggr_scores[0])) # h nq
+                else:
+                    out.append(self.aggr_multiple(node_aggr_scores))
+
+        return torch.stack(out, dim=0).flatten(1)
+    
+    def aggr_multiple(self, msgs):
+        # msg h nq
+        if self.score_aggr == 'sum':
+            return msgs.sum(dim=0)
+        elif self.score_aggr == 'min':
+            num_msgs, head, nq = msgs.shape
+            msgs = msgs.flatten(1) # msg nq
+            intersect_msgs, _ = msgs.min(dim=0)
+            intersect_msgs = rearrange(intersect_msgs, '(h nq) -> h nq',h=head, nq=nq)
+            return intersect_msgs
+        else:
+            raise ValueError()
+
+
+@register_graphLayer
+def spatial_grounding_head2(configs):
+    return Spatial_Grounding_head2(d_model=configs['d_model'],
+                        flow=configs['flow'],
+                        self_score=configs['self_score'] if 'self_score' in configs else 'dot',
+                        score_aggr=configs['score_aggr'] if 'score_aggr' in configs else 'sum',
+                        nheads=configs['nheads'],
+                        random_drop=configs['random_drop'] if 'random_drop' in configs else False,
+                        drop_p=configs['drop_p'] if 'drop_p' in configs else None)
+
 
 class Temporal_Grounding(geo_nn.MessagePassing):
     def __init__(self, 
