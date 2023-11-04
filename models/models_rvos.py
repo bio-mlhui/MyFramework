@@ -4308,13 +4308,7 @@ class AMR_Grounding_2DObj_withPad(AMR_Grounding_2DObj):
         for layer_idx, (obj_queries, layer_pred_mask) in enumerate(zip(obj_queries_by_layer, pred_masks_by_layer)):
             if self.reason_2d_layer_if_reason[layer_idx]:
                 obj_queries = self.reason_2d_obj_query_proj(obj_queries) # b nq c
-                if self.training:
-                    obj_queries_pad_mask = torch.ones_like(obj_queries[:, :, 0]).bool() # b nq
-                    matching_indices = self.objdecoder_matching(layer_pred_mask, targets)
-                    for btc_idx, (src_idx, tgt_idx) in enumerate(matching_indices):
-                        obj_queries_pad_mask[btc_idx][src_idx] = False
-                else:
-                    obj_queries_pad_mask = torch.zeros_like(obj_queries[:, :, 0]).bool() # b nq
+                obj_queries_pad_mask = torch.zeros_like(obj_queries[:, :, 0]).bool() # b nq
 
                 # list[vi nq] # 每个batch的每个amr node觉得的分数
                 grounding_score = self.reason_module_2d(obj_queries=obj_queries.clone(),
@@ -4331,12 +4325,7 @@ class AMR_Grounding_2DObj_withPad(AMR_Grounding_2DObj):
                 else:
                     raise ValueError()
                 assert ((obj_queries_pad_mask.float()) * (torch.stack(grounding_score, dim=0).softmax(-1))).sum() == 0
-                if self.training:
-                    grounding_score = [lg[J] for (J, _), lg in zip(matching_indices, grounding_score)] # list[ni]
-                    grounding_score_by_layer.append(grounding_score)
-                else:
-                    grounding_score_by_layer.append(torch.stack(grounding_score, dim=0))
-
+                grounding_score_by_layer.append(torch.stack(grounding_score, dim=0))
             else:
                 grounding_score_by_layer.append(None)
 
@@ -4344,21 +4333,18 @@ class AMR_Grounding_2DObj_withPad(AMR_Grounding_2DObj):
                                 'reason_2d': grounding_score_by_layer} ,} # list[b nq h w], num_layers
 
     def ref_choose_2d_loss(self, layer_gscore_output, matching_indices,  targets):
-        # list[ni], batch
+        # b nq
         is_valid = targets['isvalid'] # list[ni], batch
         referent_idx = targets['gt_referent_idx'] # list[int], batch
         ref_is_valid = torch.tensor([isva[ridx].any() for isva, ridx in zip(is_valid, referent_idx)]).bool() # b
         assert ref_is_valid.any()
-        num_refs = (ref_is_valid.int().sum())
-        match_as_gt_indices = [] # list[int], b
-        for ref_idx, (tgt_idx, src_idx) in zip(referent_idx,  matching_indices): # b
-            sel_idx = src_idx.tolist().index(ref_idx)
-            match_as_gt_indices.append(sel_idx)
-        match_as_gt_indices = torch.tensor(match_as_gt_indices).long().to(self.device) # b
         choose_loss_by_batch = []
-        for ref_valid, gt_indice, pred_gscore in zip(ref_is_valid, match_as_gt_indices, layer_gscore_output):
-            if ref_valid:
-                choose_loss_by_batch.append(F.cross_entropy(pred_gscore, gt_indice)) # C, int
+        for ref_val, ref_idx, (src_idx, tgt_idx), g_score in zip(ref_is_valid, referent_idx, matching_indices, layer_gscore_output):
+            if ref_val:
+                # nq -> ni
+                pred = g_score[src_idx]
+                sel_idx = tgt_idx.tolist().index(ref_idx)
+                choose_loss_by_batch.append(F.cross_entropy(pred, sel_idx))
         return {'objdecoder_reason': torch.tensor(choose_loss_by_batch).mean()}
 
 
