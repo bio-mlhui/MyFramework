@@ -4343,7 +4343,7 @@ class AMR_Grounding_2DObj_withPad(AMR_Grounding_2DObj):
             if ref_val:
                 # nq -> ni
                 pred = g_score[src_idx]
-                sel_idx = tgt_idx.tolist().index(ref_idx)
+                sel_idx = torch.tensor(tgt_idx.tolist().index(ref_idx)).to(self.device)
                 choose_loss_by_batch.append(F.cross_entropy(pred, sel_idx))
         return {'objdecoder_reason': torch.tensor(choose_loss_by_batch).mean()}
 
