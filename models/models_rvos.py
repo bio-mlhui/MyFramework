@@ -4923,7 +4923,6 @@ class AMR_Grounding_3DObj(nn.Module):
         loss = 1 - (numerator + 1) / (denominator + 1)
         return loss
 
-
 class AMR_v0_detOnlyObj_Groudning_multiReason(AMR_v0_detOnlyObj_Grounding):
     def __init__(self, 
                 d_model=256,
