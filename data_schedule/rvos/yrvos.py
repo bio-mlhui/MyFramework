@@ -36,8 +36,6 @@ from data_schedule.rvos.metric_utils import get_AP_PAT_IOU_PerFrame
 
 __all__ = ['yrvos_schedule', 'yrvos_v300s1999_schedule']
 
-all_categories = {'truck': 1, 'leopard': 2, 'knife': 3, 'sedan': 4, 'parrot': 5, 'snail': 6, 'snowboard': 7, 'sign': 8, 'rabbit': 9, 'bus': 10, 'crocodile': 11, 'penguin': 12, 'skateboard': 13, 'eagle': 14, 'dolphin': 15, 'lion': 16, 'others': 17, 'surfboard': 18, 'earless_seal': 19, 'cow': 20, 'hat': 21, 'lizard': 22, 'duck': 23, 'dog': 24, 'hedgehog': 25, 'zebra': 26, 'bird': 27, 'turtle': 28, 'hand': 29, 'elephant': 30, 'motorbike': 31, 'bike': 32, 'bear': 33, 'tiger': 34, 'ape': 35, 'fish': 36, 'deer': 37, 'frisbee': 38, 'snake': 39, 'horse': 40, 'bucket': 41, 'train': 42, 'owl': 43, 'parachute': 44, 'monkey': 45, 'airplane': 46, 'person': 47, 'paddle': 48, 'plant': 49, 'mouse': 50, 'camel': 51, 'shark': 52, 'raccoon': 53, 'squirrel': 54, 'giraffe': 55, 'boat': 56, 'sheep': 57, 'giant_panda': 58, 'whale': 59, 'tennis_racket': 60, 'toilet': 61, 'umbrella': 62, 'frog': 63, 'cat': 64, 'fox': 65}
-
 def show_dataset_information_and_validate(root):
     
     information = {'num_frame_range': None,
@@ -256,18 +254,22 @@ def generate_train_validate_test_samples(root, generate_params, validate_sample_
     
     with open(os.path.join(root, 'meta_expressions', 'train', 'meta_expressions.json'), 'r') as f:
         train_video_annotations = json.load(f)['videos']           
-    all_train_video_ids = np.array([key for key in train_video_annotations.keys()])
+    all_train_video_ids = np.array([key for key in train_video_annotations.keys()]) # 3471
     
-    # 分开一点成validate set
-    np.random.seed(validate_sample_seed)
-    g = torch.Generator()
-    g.manual_seed(validate_sample_seed)
-    sampled_validate_idxs = torch.randperm(len(all_train_video_ids), generator=g)[:validate_sample_number]
-    train_idxs = np.setdiff1d(np.arange(len(all_train_video_ids)), sampled_validate_idxs.numpy())
-    train_video_ids = all_train_video_ids[train_idxs]
-    validate_video_ids = all_train_video_ids[sampled_validate_idxs]
+    if validate_sample_number != 0:
+        # 分开一点成validate set
+        np.random.seed(validate_sample_seed)
+        g = torch.Generator()
+        g.manual_seed(validate_sample_seed)
+        sampled_validate_idxs = torch.randperm(len(all_train_video_ids), generator=g)[:validate_sample_number]
+        train_idxs = np.setdiff1d(np.arange(len(all_train_video_ids)), sampled_validate_idxs.numpy())
+        train_video_ids = all_train_video_ids[train_idxs]
+        validate_video_ids = all_train_video_ids[sampled_validate_idxs]
+    else:
+        train_video_ids = all_train_video_ids
+        validate_video_ids = []
     
-    # 生成
+    # 生成validate set的coco annotation file
     if validate_sample_number != 0:
         images_id_set = set()
         perframeperExp_coco_evaluation = []
@@ -311,19 +313,23 @@ def generate_train_validate_test_samples(root, generate_params, validate_sample_
             json.dump(dataset_dict, f)
     else:
         print('不用生成validate set的coco文件, 因为没有validate set')
-    
-    
     with open(os.path.join(root, 'meta_expressions', 'valid', 'meta_expressions.json'), 'r') as f:
         test_video_annotations = json.load(f)['videos']    
     with open(os.path.join(root, 'meta_expressions', 'test', 'meta_expressions.json'), 'r') as f:
-        test2_video_annotations = json.load(f)['videos']        
-    test_video_ids = set(list(test_video_annotations.keys())) - set(list(test2_video_annotations.keys()))
-    
+        test2_video_annotations = json.load(f)['videos'] 
+    assert len(test_video_annotations.keys()) == 507
+    assert len(test2_video_annotations.keys()) == 305
+    assert len(set(list(test2_video_annotations.keys())) - set(list(test_video_annotations.keys()))) == 0
+    test_video_ids = list(set(list(test_video_annotations.keys())) - set(list(test2_video_annotations.keys())))
+    # Furthermore, for the competition the subset's original validation set, which consists of 507 videos, was split into
+    # two competition 'validation' & 'test' subsets, consisting of 202 and 305 videos respectively. Evaluation can
+    # currently only be done on the competition 'validation' subset using the competition's server, as
+    # annotations were publicly released only for the 'train' subset of the competition.
     # train/test的meta file中object frames是
     # all the frame indices after its first occurrence, for every object in every video.
     # 并且 Please note that small objects (smaller than 100 pixels in 256p resolution) are ignored in meta file
     # 会有60000多个
-        
+    assert len(test_video_ids) == 202
     # train set的samples      
     params_by_vid = [(root, train_video_annotations[video_id], video_id, 'train', generate_params) for video_id in train_video_ids]
     n_jobs = min(multiprocessing.cpu_count(), 12)
@@ -331,47 +337,46 @@ def generate_train_validate_test_samples(root, generate_params, validate_sample_
     train_samples = [s for l in train_samples for s in l]   
     
     print(f'there are {len(train_samples)} training samples')
-    
 
-    # validate set的samples
-    params_by_vid = [(root, train_video_annotations[video_id], video_id, 'validate', generate_params) for video_id in validate_video_ids]
-    n_jobs = min(multiprocessing.cpu_count(), 12)
-    validate_samples = Parallel(n_jobs)(delayed(generate_samples_of_one_video)(*p) for p in tqdm(params_by_vid))
-    validate_samples = [s for l in validate_samples for s in l]   
-    print(f'there are {len(validate_samples)} validate samples')
-        
     # test set的samples
     params_by_vid = [(root, test_video_annotations[video_id], video_id, 'test', generate_params) for video_id in test_video_ids]
     n_jobs = min(multiprocessing.cpu_count(), 12)
     test_samples = Parallel(n_jobs)(delayed(generate_samples_of_one_video)(*p) for p in tqdm(params_by_vid))
     test_samples = [s for l in test_samples for s in l]   
-    print(f'there are {len(test_samples)} test samples')        
+    print(f'there are {len(test_samples)} test samples')   
 
-    with open(os.path.join(root, f'pWpE_{generate_params["name"]}_TrainValidateTest.json'), 'w') as f:
+    if validate_sample_number != 0:
+        # validate set的samples
+        params_by_vid = [(root, train_video_annotations[video_id], video_id, 'validate', generate_params) for video_id in validate_video_ids]
+        n_jobs = min(multiprocessing.cpu_count(), 12)
+        validate_samples = Parallel(n_jobs)(delayed(generate_samples_of_one_video)(*p) for p in tqdm(params_by_vid))
+        validate_samples = [s for l in validate_samples for s in l]   
+        print(f'there are {len(validate_samples)} validate samples')
+    else:
+        validate_samples = []
+
+    with open(os.path.join(root, f'{generate_params["name"]}_TrainValidateTest.json'), 'w') as f:
         json.dump({'train': train_samples, 'validate': validate_samples, 'test': test_samples}, f)
     
-def generate_samples_of_one_video(root, video_annotations, generate_params, 
-                                    video_id, split, 
-                                    train_window_size,
-                                    train_window_step,
-                                    validate_window_size,
-                                    test_window_size,):
+def generate_samples_of_one_video(root, video_annotations, video_id, split, generate_params):
     samples = []
-    video_expressions = video_annotations['expressions']
+    video_expressions = video_annotations['expressions'] # exp_id:{exp, obj_id} / exp_id:{exp}
     all_frames = sorted(video_annotations['frames'])
     if split == 'train':
         train_window_size = generate_params['train_window_size']
         train_window_step = generate_params['train_window_step']
         sampled_windows = generate_windows_of_video(all_frames, window_size=train_window_size,window_step=train_window_step,
                                                     force_all_used=True)
-        # # pad window size
-        # last_window_len = len(sampled_windows[-1])
-        # if last_window_len < train_window_size:
-        #     if len(all_frames) > train_window_size:
-        #         sampled_windows[-1] = all_frames[-train_window_size:]
-        #     else:
-        #         delta = train_window_size - last_window_len
-        #         sampled_windows[-1] = sampled_windows[-1] + [all_frames[-1]] * delta   
+        # pad window size
+        last_window_len = len(sampled_windows[-1])
+        if last_window_len < train_window_size:
+            if len(all_frames) > train_window_size:
+                sampled_windows[-1] = all_frames[-train_window_size:]
+            else:
+                delta = train_window_size - last_window_len
+                sampled_windows[-1] = sampled_windows[-1] + [all_frames[-1]] * delta
+        for wd in sampled_windows:
+            assert len(wd) == train_window_size   
                             
         for window in sampled_windows:
             # 这个window中出现的所有objects
@@ -549,67 +554,107 @@ def yrvos_v300s1999_schedule(configs, is_distributed, process_id, num_processes)
             validate_loader, partial(validate, pFpE_coco_file=pFpE_validate_coco_file),\
             test_loader, test
 
-
-
+import logging
 @register_data_schedule
 def yrvos_schedule(configs, is_distributed, process_id, num_processes):
-    generate_traintest_params: dict = configs['generate_traintest_params']
-    amr_are_used: bool = configs['amr_are_used']
-    text_aux_version: int = configs['text_aux_version']
-    train_augmentation: dict = configs['train_augmentation']
-    test_augmentation: dict = configs['test_augmentation']
-    training_seed: int  = configs['training_seed']
-    root = configs['root']
+    all_categories = {'truck': 1, 'leopard': 2, 'knife': 3, 'sedan': 4, 'parrot': 5, 'snail': 6, 'snowboard': 7, 'sign': 8, 'rabbit': 9, 'bus': 10, 'crocodile': 11, 'penguin': 12, 'skateboard': 13, 'eagle': 14, 'dolphin': 15, 'lion': 16, 'others': 17, 'surfboard': 18, 'earless_seal': 19, 'cow': 20, 'hat': 21, 'lizard': 22, 'duck': 23, 'dog': 24, 'hedgehog': 25, 'zebra': 26, 'bird': 27, 'turtle': 28, 'hand': 29, 'elephant': 30, 'motorbike': 31, 'bike': 32, 'bear': 33, 'tiger': 34, 'ape': 35, 'fish': 36, 'deer': 37, 'frisbee': 38, 'snake': 39, 'horse': 40, 'bucket': 41, 'train': 42, 'owl': 43, 'parachute': 44, 'monkey': 45, 'airplane': 46, 'person': 47, 'paddle': 48, 'plant': 49, 'mouse': 50, 'camel': 51, 'shark': 52, 'raccoon': 53, 'squirrel': 54, 'giraffe': 55, 'boat': 56, 'sheep': 57, 'giant_panda': 58, 'whale': 59, 'tennis_racket': 60, 'toilet': 61, 'umbrella': 62, 'frog': 63, 'cat': 64, 'fox': 65}
+    category_name_to_id = {}
+    cnt = 0
+    for key in all_categories.keys():
+        category_name_to_id[key] = cnt
+        cnt += 1
+
+    root = configs['data_dir']
+    root = os.path.join(root, 'youtube_rvos')
+    pt_tokenizer_dir=configs['pt_tokenizer_dir']
     num_workers= configs['num_workers']
-    train_batch_size= configs['train_batch_size']
     test_batch_size= configs['test_batch_size']
     
-    if amr_are_used:
-        assert train_augmentation['name'] in ['fixsize', 'justnormalize', 'resize']
-        assert test_augmentation['name'] in ['justnormalize', 'fixsize', 'resize']
+    # 训练样本的生成, 测试样本的生成
+    generate_traintest_params: dict = configs['generate_traintest_params']
+    # 训练时额外的数据 
+    amr_are_used: bool = configs['amr_are_used']
+    text_aux_version: int = configs['text_aux_version']
+    video_aux_version: int = configs['video_aux_version']
+    # 训练数据增强, 测试数据增强
+    train_augmentation: dict = configs['train_augmentation']
+    test_augmentation: dict = configs['test_augmentation']
+    # 训练时的SGD的loading
+    training_seed: int  = configs['training_seed']
+    train_batch_size= configs['train_batch_size']
     
-    root = configs['root']
-    traintest_samples_file = os.path.join(root, f'{generate_traintest_params["name"]}_TrainTest_samples.json')
+    assert len(glob(os.path.join(root, f'train/JPEGImages', '*'))) == 3471 
+    assert len(glob(os.path.join(root, f'valid/JPEGImages', '*'))) == 202 
+    assert len(glob(os.path.join(root, f'test/JPEGImages', '*'))) == 305
+    assert len(glob(os.path.join(root, f'train/Annotations', '*'))) == 3471
+
+    if amr_are_used:
+        amr_legi_augs = ['fixsize', 'justnormalize', 'resize', 'hflip_fixsize', 'hflip_ResizeSmaller', "resizeSmaller"]
+        assert train_augmentation['name'] in amr_legi_augs
+        assert test_augmentation['name'] in amr_legi_augs
+    
+    traintest_samples_file = os.path.join(root, f'{generate_traintest_params["name"]}_TrainValidateTest.json')
     if not os.path.exists(traintest_samples_file):
         if process_id == 0:
-            generate_train_validate_test_samples(root, generate_traintest_params, 
-                                                 validate_sample_number=0, validate_sample_seed=None)
+            generate_train_validate_test_samples(root, generate_traintest_params, validate_sample_number=0, validate_sample_seed=None)
         if is_distributed:
             dist.barrier()
     with open(traintest_samples_file, 'r') as f:
         samples = json.load(f)
         train_samples = samples['train']
         test_samples = samples['test']
+    logging.info(f'there are {len(train_samples)} training samples')
+    print(f'there are {len(train_samples)} training samples')
+    logging.info(f'there are {len(test_samples)} test samples')
+    print(f'there are {len(test_samples)} test samples')
+    if text_aux_version != 0:
+        with open(os.path.join(root, 'meta_expressions', f'text_to_aux.json'), 'r') as f:
+            text_aux_by_auxid = json.load(f)
+    else:
+        text_aux_by_auxid = None
 
-    with open(os.path.join(root, 'meta_expression', 'train', 'meta_expressions.json'), 'r') as f:
-        trainvalidate_textann_by_videoid = json.load(f)["videos"]
-        
-    with open(os.path.join(root, 'meta_expression', 'valid', 'meta_expressions.json'), 'r') as f:
-        test_textann_by_videoid = json.load(f)["videos"]
-                
-    with open(os.path.join(root, 'train', 'meta.json'), 'r') as f:
-        trainvalidate_objann_by_videoid = json.load(f)["videos"]
-        
+    if video_aux_version != 0:
+        with open(os.path.join(root, f'video_to_aux.json'), 'r') as f:
+            video_aux_by_auxid = json.load(f)
+    else:
+        video_aux_by_auxid = None          
+
+    with open(os.path.join(root, 'train', f'meta.json'), 'r') as f:
+        train_video_to_objs = json.load(f)['videos']
+    with open(os.path.join(root, 'meta_expressions', 'train', f'meta_expressions.json'), 'r') as f:
+        train_video_to_texts = json.load(f)['videos']   
 
     create_train_aug = video_aug_entrypoints(train_augmentation['name'])
     train_aug = create_train_aug(train_augmentation)       
-    train_dataset = YRVOS_Dataset(root=root, 
-                                       split='train',
-                                       samples=train_samples,
-                                       augmentation=train_aug,
-                                       text_annotations_by_videoid=trainvalidate_textann_by_videoid,
-                                       text_aux_version = text_aux_version,
-                                       obj_annotations_groupby_videoid=trainvalidate_objann_by_videoid,)
+    train_dataset = YRVOS_Dataset(root=root,
+                                 pt_tokenizer_dir=pt_tokenizer_dir,
+                                 split='train',
+                                samples = train_samples,
+                                augmentation=train_aug,
+                                video_to_texts=train_video_to_texts,
+                                video_to_objects=train_video_to_objs,
+                                catname_to_id=category_name_to_id,
+
+                                text_aux_by_auxid=text_aux_by_auxid,
+                                text_aux_version=text_aux_version,
+                                video_aux_version=video_aux_version,
+                                video_aux_by_auxid=video_aux_by_auxid)
     
     test_aug = video_aug_entrypoints(test_augmentation['name'])
     test_aug = create_train_aug(test_augmentation) 
-    test_dataset = YRVOS_Dataset(root=root, 
-                                       split='test',
-                                       samples=test_samples,
-                                       augmentation=test_aug,
-                                       text_annotations_by_videoid=test_textann_by_videoid,
-                                       text_aux_version = text_aux_version,
-                                       obj_annotations_groupby_videoid=None)
+    test_dataset = YRVOS_Dataset(root=root,
+                                 pt_tokenizer_dir=pt_tokenizer_dir,
+                                 split='test',
+                                samples = test_samples,
+                                augmentation=test_aug,
+                                video_to_texts=None,
+                                video_to_objects=None,
+                                catname_to_id=category_name_to_id,
+                                
+                                text_aux_by_auxid=text_aux_by_auxid,
+                                text_aux_version=text_aux_version,
+                                video_aux_version=video_aux_version,
+                                video_aux_by_auxid=video_aux_by_auxid) 
 
     sampler_train = TrainRandomSampler_ByEpoch_Distributed(train_dataset,
                                     num_replicas=num_processes,
@@ -640,10 +685,18 @@ def yrvos_schedule(configs, is_distributed, process_id, num_processes):
     MetadataCatalog.get('youtube_rvos').thing_classes = ['r', 'nr']
     MetadataCatalog.get('youtube_rvos').thing_colors = [(255., 140., 0.), (0., 255., 0.)]
     
-    return train_loader, sampler_train, \
-            None, None,\
-            test_loader, test
+    return train_loader, sampler_train, None, None, test_loader, partial(test),
 
+def yrvos_normalize_text(text_query):
+    if text_query == 'cannot describe too little':
+        text_query = 'an airplane not moving'
+    elif text_query == 'a red clothe':
+        text_query = 'a red cloth'
+    normalized_text_query = text_query.replace('right most', 'rightmost')
+    normalized_text_query = normalized_text_query.replace('left most', 'leftmost')
+    normalized_text_query = normalized_text_query.replace('front most', 'frontmost')
+    text_1 = " ".join(normalized_text_query.lower().split())
+    return text_1
 
 
 # 训练集是perWindow_perExp, 即(clip, text)
@@ -655,47 +708,57 @@ class YRVOS_Dataset(DatasetWithAux):
                  split,
                  samples,
                  augmentation,
+                 video_to_texts,
+                 video_to_objects,
+                catname_to_id,
                  text_aux_version,
-                 text_aux_by_auxid,
-                 text_annotations_by_videoid,
-                 
+                 text_aux_by_auxid,                
                  video_aux_version,
                  video_aux_by_auxid,
-                 obj_annotations_by_videoid,
+                 pt_tokenizer_dir,
                  ) -> None:
         super().__init__(text_aux_version=text_aux_version,
                          text_aux_by_auxid=text_aux_by_auxid,
                          video_aux_version=video_aux_version,
-                         video_aux_by_auxid=video_aux_by_auxid
+                         video_aux_by_auxid=video_aux_by_auxid,
+                         pt_tokenizer_dir=pt_tokenizer_dir,
                          )
         self.root = root
         self.split = split
+        self.catname_to_id = catname_to_id
         self.samples = samples
-        self.text_annotations_by_videoid = text_annotations_by_videoid
-        
-        assert len(glob(os.path.join(self.root, f'train/JPEGImages', '*'))) == 3471 
-        assert len(glob(os.path.join(self.root, f'valid/JPEGImages', '*'))) == 507 
-        assert len(glob(os.path.join(self.root, f'test/JPEGImages', '*'))) == 202
-        assert len(glob(os.path.join(self.root, f'train/Annotations', '*'))) == 3471
-        
-        if self.split == 'train' or self.split == 'validate':
-            self.obj_annotations_by_videoid = obj_annotations_by_videoid
+        self.video_to_texts = video_to_texts
+        self.video_to_objects = video_to_objects
+        self.augmentation = augmentation 
+        if self.split == 'test':
+            self.video_root = os.path.join(self.root, f'valid/JPEGImages')
+        elif self.split in ['train', 'validate']:
+            self.video_root = os.path.join(self.root, f'train/JPEGImages')
         else:
-            self.vframes_root = os.path.join(self.root, 'valid/JPEGImages')
-        self.object_classes = all_categories
-        self.augmentation = augmentation
+            raise ValueError()
+        self.mask_ann_root = os.path.join(self.root, f'{self.split}/Annotations')
+        collator_kwargs = {}
+        if text_aux_version == 1 or text_aux_version == 2 or text_aux_version == 3 or text_aux_version == 4:
+            collator_kwargs['tokenizer'] = self.tokenizer
+
+        self.collator = Collator(split=split,
+                                 text_aux_version=text_aux_version,
+                                 video_aux_version=video_aux_version,
+                                 **collator_kwargs)
 
     def __getitem__(self, sample_idx):
         if self.split == 'train' or self.split == 'validate':
-            video_id, window_frames, exp_id = self.samples[sample_idx]            
-            all_exps_dict = self.text_annotations_groupby_video[video_id]["expressions"]
-            all_objs_dict = self.obj_annotations_groupby_video[video_id]["objects"]
-            text_query = all_exps_dict[exp_id]['exp']
-            vframes = [Image.open(os.path.join(self.vframes_root, video_id, f'{f}.jpg')) for f in window_frames]
+            video_id, window_frames, exp_id = self.samples[sample_idx]['video_id'], self.samples[sample_idx]['window'], self.samples[sample_idx]['exp_id']
 
+            all_exps_dict = self.video_to_texts[video_id]['expressions'] # exp_id : {exp, obj_id}
+            all_objs_dict = self.video_to_objects[video_id]['objects'] # obj_id : {category:name, frames,}
+            text_query = all_exps_dict[exp_id]['exp']
+            text_query = yrvos_normalize_text(text_query)
+
+            vframes = [Image.open(os.path.join(self.video_root, video_id, f'{f}.jpg')) for f in window_frames]
+            width, height = vframes[0].size
             # t h w
-            all_objects_masks = torch.stack([torch.from_numpy(np.array(Image.open(os.path.join(self.maskann_root, video_id, f'{f}.png')))) for f in window_frames],
-                                dim=0) #
+            all_objects_masks = torch.stack([torch.from_numpy(np.array(Image.open(os.path.join(self.mask_ann_root, video_id, f'{f}.png')))) for f in window_frames], dim=0) #
             appear_obj_ids = set(all_objects_masks.unique().tolist())
             if 0 in appear_obj_ids:
                 appear_obj_ids = list(appear_obj_ids - set([0]))
@@ -705,8 +768,8 @@ class YRVOS_Dataset(DatasetWithAux):
             masks_by_object = [] 
             obj_classes_by_object = []
             for obj_id in appear_obj_ids:
-                masks_by_object.append((all_objects_masks == obj_id)) # t h w
-                obj_classes_by_object.append(all_categories[all_objs_dict[str(obj_id)]["category"]])
+                masks_by_object.append(all_objects_masks == obj_id) # t h w
+                obj_classes_by_object.append(self.catname_to_id[all_objs_dict[str(obj_id)]["category"]])
                 obj_exps = [value['exp'] for key, value in all_exps_dict.items() if int(value['obj_id']) == obj_id]
                 if len(obj_exps) == 0:
                     print('there are some objects that in the video has no expressions')
@@ -714,56 +777,48 @@ class YRVOS_Dataset(DatasetWithAux):
             masks = torch.stack(masks_by_object, dim=0) # n t h w, bool
             class_labels = torch.tensor(obj_classes_by_object).long() # n
             referent_idx = appear_obj_ids.index(int(all_exps_dict[exp_id]['obj_id'])) # 在1, 2, 3, 5中的下标
-            
+      
             num_obj, nf, *_= masks.shape
             boxes = []
-            valids = []
-            for object_mask in masks.flatten(0, 1).long():
-                if (object_mask > 0).any():
+            valids = masks.flatten(2).any(-1) # n t
+            for object_mask in masks.flatten(0, 1):
+                if object_mask.any():
                     y1, y2, x1, x2 = bounding_box_from_mask(object_mask.numpy())
                     box = torch.tensor([x1, y1, x2, y2]).to(torch.float)
-                    valids.append(1)
                     boxes.append(box)
                 else:
                     box = torch.tensor([0,0,0,0]).to(torch.float)
-                    valids.append(0)
                     boxes.append(box)
             boxes = torch.stack(boxes, dim=0) 
             boxes = rearrange(boxes, '(n t) c -> n t c', n=num_obj, t=nf)
-            valids = torch.tensor(valids).long()   
-            valids = rearrange(valids, '(n t) -> n t',vn=num_obj, t=nf)
                             
             targets = {
-                # frame-level
+                'has_ann': torch.ones(len(vframes)).bool(), # t
                 'masks': masks, # n t h w (bool)
                 'boxes': boxes, # n t 4, xyxy, float
-                'valid': valids, # n t, 0/1
-                # video-level
+                'valid': valids.int(), # n t, 
                 'class_labels': class_labels, # n
                 'referent_idx': referent_idx, 
                 'orig_size': masks.shape[-2:],  
                 'size': masks.shape[-2:],
-                'inputvideo_whichframe_hasann': torch.tensor([True]*len(vframes)) # T
+                'orig_size': torch.tensor([len(vframes), height, width]), # T h w
+                'size': torch.tensor([len(vframes),  height, width]), # T h w
             }
-            appear_texts = [text_query]
             
-            num_annotated_exps_by_object = []
-            for foo in annotated_exps_by_object:
-                appear_texts.extend(foo)
-                num_annotated_exps_by_object.append(len(foo))
-                
-            vframes, appear_texts, targets = self.augmentation(vframes, appear_texts, targets)
-            text_query = appear_texts[0]
-            
-            appear_texts = appear_texts[1:]
-            cnt = 0
+            flatten_texts = [text_query]
+            for att in annotated_exps_by_object:
+                flatten_texts.extend(att)
+            vframes, flatten_texts, targets = self.augmentation(vframes, flatten_texts, targets)
+            text_query = flatten_texts[0]
+            cnt = 1
             for idx in range(len(annotated_exps_by_object)):
-                this_object_num_exps = num_annotated_exps_by_object[idx]
-                annotated_exps_by_object[idx] = appear_texts[cnt:(cnt+this_object_num_exps)]
-                cnt += this_object_num_exps
-            assert cnt == sum(num_annotated_exps_by_object)
+                num_texts = len(annotated_exps_by_object[idx])
+                annotated_exps_by_object[idx] = flatten_texts[cnt:(cnt+num_texts)]
+                cnt += num_texts
+            assert cnt == sum([len(ttt) for ttt in annotated_exps_by_object])
                 
-            return vframes, text_query, self.get_aux(sample_idx), targets
+            return vframes, text_query,\
+                  self.get_aux(sample_idx, annotated_exps_by_object, video_auxid=None, text_auxid=text_query), targets
             
         elif self.split == 'test': 
             video_id, window_frames, exp_id = self.samples[sample_idx]            
@@ -803,7 +858,7 @@ class Collator(CollatorWithAux):
                  video_aux_version,
                  **kwargs
                  ) -> None:
-        super.__init__(text_aux_version=text_aux_version,
+        super().__init__(text_aux_version=text_aux_version,
                        video_aux_version=video_aux_version,
                        **kwargs)
         self.split = split

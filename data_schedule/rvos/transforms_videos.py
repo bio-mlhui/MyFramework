@@ -16,6 +16,8 @@ from PIL import Image
 import cv2
 from einops import rearrange, reduce, repeat
 from util.box_ops import box_xyxy_to_cxcywh
+import copy
+
 class Check(object):
     def __init__(self,):
         pass
@@ -93,8 +95,15 @@ def hflip(video, texts, target):
     flipped_video = [F.hflip(frame) for frame in video]
 
     w, h = video[0].size
-    
-    texts =[q.replace('left', '@').replace('right', 'left').replace('@', 'right') for q in texts]
+
+    # 比如有的句子就有@
+    old_texts = copy.deepcopy(texts)
+    texts = []
+    for q in old_texts:
+        if ('left' in q) or ('right' in q):
+            texts.append(q.replace('left', '@').replace('right', 'left').replace('@', 'right'))
+        else:
+            texts.append(q)
     if 'boxes' in target:
         # n t (x1 y1 x2 y2)
         boxes = target["boxes"]
@@ -258,8 +267,6 @@ class RandomResize(object):
         """
         size = random.choice(self.sizes)
         return resize(video, texts, target, size, self.max_size)
-
-
 
 
 class RandomSelect(object):

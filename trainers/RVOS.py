@@ -239,12 +239,13 @@ class Trainer:
                     gc.collect()
                     torch.cuda.empty_cache()
                 # self.scheduler.step()
-          
-            try:
-                self.evaluate_ckpt()
-            except:
-                print('error happens in model sampling')
-                self.save_ckpt(None) # 先存下来
+                
+            self.evaluate_ckpt()
+            # try:
+            #     self.evaluate_ckpt()
+            # except:
+            #     print('error happens in model sampling')
+            #     self.save_ckpt(None) # 先存下来
             if self.distributed:
                 dist.barrier() 
                 

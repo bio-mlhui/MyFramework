@@ -90,7 +90,7 @@ if __name__=="__main__":
     parser.add_argument('--mode', type=str) # train_resume / train_attmpt / evaluate_ckpt / visualzie_ckpt
     parser.add_argument('--trainer_ckpt', type=str, default='')
     parser.add_argument('--seed', type=int, default=2023)
-    parser.add_argument('--wandb_mode', type=str, default='offline')
+    parser.add_argument('--wandb_mode', type=str, default='online')
     args = parser.parse_args()
 
     if args.schedule_model_configs == 'model51':
@@ -124,12 +124,13 @@ if __name__=="__main__":
     elif args.mode == 'train_attmpt': # 重写
         if 'stand' not in args.schedule_model_configs:
             # checkpoint文件可能和out_dir不在同一个目录
-            if os.path.exists(configs['out_dir']):
-                answer = input(f'相同的实验存在 {configs["out_dir"]} 重写吗? \n' )
-                if answer == 'y':
-                    pass
-                else:
-                    exit()
+            # if os.path.exists(configs['out_dir']):
+            #     answer = input(f'相同的实验存在 {configs["out_dir"]} 重写吗? \n' )
+            #     if answer == 'y':
+            #         pass
+            #     else:
+            #         exit()
+            pass
             
         configs['wandb'] = {
             'project': args.task,

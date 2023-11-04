@@ -520,10 +520,14 @@ class VITA(nn.Module):
                                                              text_feats=text_feats, text_pad_masks=text_pad_masks,
                                                             amr_feats=amr_feats, amr_pad_masks=amr_pad_masks,)
                 # self
-                if layer_idx % 2 == 0:
+                num_input_frames = T
+                if num_input_frames <= self.window_size:
                     frame_query = self._window_attn(frame_query, window_mask, layer_idx,)
                 else:
-                    frame_query = self._shift_window_attn(frame_query, shift_window_mask, layer_idx,)
+                    if layer_idx % 2 == 0:
+                        frame_query = self._window_attn(frame_query, window_mask, layer_idx,)
+                    else:
+                        frame_query = self._shift_window_attn(frame_query, shift_window_mask, layer_idx,)
                 # ffn
                 frame_query = self.enc_ffn[layer_idx](frame_query)
             return frame_query

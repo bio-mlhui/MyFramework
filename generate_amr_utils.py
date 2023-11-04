@@ -25,33 +25,7 @@ def get_first_noun(ann, sent:str):
             assert token['word'] == words[id]
             return id, words[id]
 import copy        
-def get_root(ann, sent:str):
-    words = sent.split()
-    tokens = ann['tokens'] # list[dict]
-    depparse = ann['basicDependencies']
-    depparse = {f"{dep['dependent']-1} {dep['governor']-1}": dep['dep'] for dep in depparse}
-    is_compound = False
-    for id, token in enumerate(tokens):
-        if token['pos'] in pos_targets:
-            assert token['word'] == words[id]
-            if token['word'] == 'being' and ((id-1) >= 0) and (words[id-1] == 'human'):
-                is_compound = True
-                return id, 'being', is_compound, depparse
-            
-            # 第一个名词和之后的某个单词组成compound关系
-            out_idx = id
-            for dep_key, dep_val in depparse.items():
-                dependent, governer = dep_key.split(' ')
-                if dep_val == 'compound' and (int(dependent) == out_idx):
-                    out_idx = int(governer)
-                    is_compound = True
-                    break
-                
-            # while ((cnt+1) < len(words)) and (f"{cnt} {cnt+1}" in depparse) and depparse[f"{cnt} {cnt+1}"] == 'compound':
-            #     is_compound = True
-            #     cnt += 1
-                
-            return out_idx, words[out_idx], is_compound, depparse
+
 from collections import defaultdict
 #endregion
 
@@ -120,147 +94,370 @@ def a2ds_perWindow_perExp(root):
     with open(os.path.join(root, 'text_to_aux.json'), 'w') as f:
         json.dump(new_text_to_amr_aux, f)            
 
+
 def yrvos_normalize_text(text_query):
-    if new_text_query == 'cannot describe too little':
-        new_text_query = 'an airplane not moving'
-    elif new_text_query == 'a red clothe':
-        new_text_query = 'a red cloth'
+    if text_query == 'cannot describe too little':
+        text_query = 'an airplane not moving'
+    elif text_query == 'a red clothe':
+        text_query = 'a red cloth'
     normalized_text_query = text_query.replace('right most', 'rightmost')
     normalized_text_query = normalized_text_query.replace('left most', 'leftmost')
     normalized_text_query = normalized_text_query.replace('front most', 'frontmost')
-    # first one
     text_1 = " ".join(normalized_text_query.lower().split())
     return text_1
 
-def yrvos_perWindow_perExp(root):         
+def yrvos_parseAMR(root):         
     # pasing
     parser = AMRParser.from_pretrained('AMR3-structbart-L')
+    text_to_parsedAMR = defaultdict(dict)
+    failed_ones = []
     for use in ['test', 'train', 'valid']:
-        sentence_annotation_file = os.path.join(root, 'meta_expressions', use, 'meta_expressions.json')
-        with open(sentence_annotation_file, 'r') as f:
-            json_file = json.load(f)
-            
-        new_json_file = json_file['videos']
-        for video_id, vid_ann in json_file['videos'].items():
-            for text_query_id, exp_dict in vid_ann['expressions'].items():
-                new_text_query = copy.deepcopy(exp_dict['exp'])
-                normalized_text_query = yrvos_normalize_text()
-                tokens, _ = parser.tokenize(normalized_text_query)
-                amr_string = parser.parse_sentence(tokens)[0]
-                amr_string = f'# ::snt {text_query}\n' + amr_string
-                new_json_file[video_id]['expressions'][text_query_id]['initial_parsed_amr'] = amr_string 
-                
-        with open(os.path.join(root, 'meta_expressions', use, 'meta_expressinos_parsedAmr.json'), 'w') as f:
-            json.dumps({'videos': new_json_file}, f)
-
-    pos_tagger = CoreNLPClient(annotators=['tokenize','pos','parse'], 
-                                    timeout=30000, output_format='json', 
-                                    memory='6G',
-                                    be_quiet=True,endpoint='http://localhost:65222') 
-    
-    for use in ['test', 'train', 'valid']:
-        assert os.path.exists(os.path.join(sentence_annotation_directory, use, 'meta_expressinos_only_parsed.json'))
-        with open(os.path.join(sentence_annotation_directory, use, 'meta_expressinos_only_parsed.json'), 'r') as f:
-            json_file = json.load(f)
-            
-        new_json_file = json_file['videos']
-        for video_id, vid_ann in json_file['videos'].items():
+        with open(os.path.join(root, use, 'meta_expressions.json'), 'r') as f:
+            json_file = json.load(f)['videos']
+        for video_id, vid_ann in tqdm(json_file.items()):
             for text_query_id, exp_dict in vid_ann['expressions'].items():
                 text_query = exp_dict['exp']
-                initial_parsed_amr = exp_dict['amr_penman']
-                
-                if text_query == 'cannot describe too little':
-                    parser = AMRParser.from_pretrained('AMR3-structbart-L')
-                    text_query = 'an airplane not moving'
-                    tokens, _ = parser.tokenize(text_query)
-                    initial_parsed_amr = parser.parse_sentence(tokens)[0]
-                    initial_parsed_amr = f'# ::snt {text_query}\n' + initial_parsed_amr
-                if text_query == 'a red clothe':
-                    # parser = AMRParser.from_pretrained('AMR3-structbart-L')
-                    text_query = 'a red cloth'
-                    tokens, _ = parser.tokenize(text_query)
-                    initial_parsed_amr = parser.parse_sentence(tokens)[0]
-                    initial_parsed_amr = f'# ::snt {text_query}\n' + initial_parsed_amr
-                    
-                amr_graph = penman.decode(initial_parsed_amr, model=penman_amr_model)
-                # tagging
-                amr_toks = amr_graph.metadata['tok']
-                pos_ann = pos_tagger.annotate(amr_toks)['sentences'][0]
-                
-                # change top according to the top
-                root_idx, root, is_compound, depparse_result = get_root(pos_ann, amr_toks)
-                amr_graph.metadata = {}
-                alignments = surface.alignments(amr_graph)
-                concept_keys = list(alignments.keys())
-                concept_start_alignments = []
-                
-                for idx, ali in enumerate(list(alignments.values())):
-                    if ali.indices[0] == root_idx:
-                        concept_start_alignments.append(idx)
-                        
-                if len(concept_start_alignments) == 0:                        
-                    for idx, key in enumerate(concept_keys):  # 一个句子中出现了两个light, 但是amr parser只识别了后一个light, 并且pos tagger认为第一个是top
-                        if key[-1].startswith(root):
-                            concept_start_alignments.append(idx)
-                    if len(concept_start_alignments) == 0:
-                        # a motor bike driven -> motorcycle 本来是bike, 被abstract成motorcycle
-                        if is_compound:
-                            root_idx -= 1
-                            root = amr_toks.split(' ')[root_idx]
-                            for idx, ali in enumerate(list(alignments.values())):
-                                if ali.indices[0] == root_idx:
-                                    concept_start_alignments.append(idx)
-                            assert len(concept_start_alignments) > 0
-                        elif root == 'being': # a black being 
-                            root = 'thing'
-                            for idx, key in enumerate(concept_keys):  # 一个句子中出现了两个light, 但是amr parser只识别了后一个light, 并且pos tagger认为第一个是top
-                                if key[-1].startswith(root):
-                                    concept_start_alignments.append(idx)
-                        else:
-                            # a pair of hands, nmod
-                            for dep_key, dep_val in depparse_result.items():
-                                dependent, governer = dep_key.split(' ')
-                                if (int(governer) == root_idx) and (dep_val == 'nmod'):
-                                    root_idx = int(dependent)
-                                    root = amr_toks.split(' ')[int(dependent)]
-                                    for idx, ali in enumerate(list(alignments.values())):
-                                        if ali.indices[0] == root_idx:
-                                            concept_start_alignments.append(idx)
-                                    break
-                    else:
-                        assert len(concept_start_alignments) > 0
-                        if len(concept_start_alignments) != 1:
-                            pass
-                # 一个word可能对应很多个concept assert len(concept_start_alignments) == 1
-                concept_start_alignments = concept_start_alignments[0]
-                top_variable, _, top_concept = concept_keys[concept_start_alignments]
-                # 改变top
-                amr_tree_string_change_top = penman.encode(amr_graph,
-                                                top=top_variable,
-                                                model=penman_amr_model)
-                
-                # linearize
-                amr_tree_string_linearized, pointer_variable_mapping, instances_index, edge_index, attributes_index, nx_graph   \
-                        = dfs_linearized_penmen(amr_tree_string_change_top,use_pointer_tokens=True,)
-                
-                new_json_file[video_id]['expressions'][text_query_id].pop('amr_penman')
-                new_json_file[video_id]['expressions'][text_query_id]['initial_parsed_amr'] = initial_parsed_amr
-                new_json_file[video_id]['expressions'][text_query_id]['amr_tree_string'] = amr_tree_string_change_top
-                new_json_file[video_id]['expressions'][text_query_id]['first_noun'] = top_concept
-                new_json_file[video_id]['expressions'][text_query_id]['amr_tree_string_linearization_dict'] = {
-                    'amr_tree_string_linearized': amr_tree_string_linearized,
-                    'var_pointer_map': pointer_variable_mapping,
-                    'instance_linearized_ali':instances_index,
-                    'edge_linearized_ali':edge_index,
-                    'attribute_linearized_ali':attributes_index
-                }     
-        with open(os.path.join(sentence_annotation_directory, use, f'meta_expressions_changeTop.json'), 'w') as f:
-            json.dump({'videos': new_json_file}, f)
+                try:
+                    text_query = yrvos_normalize_text(text_query)
+                    all_auged_texts = [text_query]
+                    if ('left' in text_query) or ('right' in text_query):
+                        text_2 = text_query.replace('left', '@').replace('right', 'left').replace('@', 'right')
+                        all_auged_texts.append(text_2)         
+                    for auged_text in all_auged_texts:
+                        if auged_text in text_to_parsedAMR:
+                            continue
+                        tokens, _ = parser.tokenize(auged_text)
+                        amr_string = parser.parse_sentence(tokens)[0]
+                        text_to_parsedAMR[auged_text]['initial_parsed_amr'] = amr_string 
+                except:
+                    failed_ones.append((video_id, text_query_id, text_query))
+        
+    with open(os.path.join(root, 'text_to_parsedAMR.json'), 'w') as f:
+        json.dump({'data': text_to_parsedAMR, 'failed': failed_ones}, f) # 17432个不一样的句子
 
-    return
-     
-def refcocog_normalize_text(text_query):
-    # 非法输入
+def yrvos_handle_failed(root):
+    with open(os.path.join(root, 'text_to_parsedAMR.json'), 'r') as f:
+        data = json.load(f)
+        text_to_parsedAMR = data['data']
+        failed_ones = data['failed']
+
+    if len(failed_ones) != 0:
+        parser = AMRParser.from_pretrained('AMR3-structbart-L')
+        for video_id, text_query_id, text_query in failed_ones:
+            text_query = yrvos_normalize_text(text_query)
+            # change the text
+            all_auged_texts = [text_query]
+            if ('left' in text_query) or ('right' in text_query):
+                text_2 = text_query.replace('left', '@').replace('right', 'left').replace('@', 'right')
+                all_auged_texts.append(text_2)         
+            for auged_text in all_auged_texts:
+                if auged_text in text_to_parsedAMR:
+                    continue
+                tokens, _ = parser.tokenize(auged_text)
+                amr_string = parser.parse_sentence(tokens)[0]
+                text_to_parsedAMR[auged_text]['initial_parsed_amr'] = amr_string 
+
+    with open(os.path.join(root, 'text_to_parsedAMR.json'), 'w') as f:
+        json.dump(text_to_parsedAMR, f)    
+
+def LCSubStr(X, Y, m, n):
+ 
+    # Create a table to store lengths of
+    # longest common suffixes of substrings.
+    # Note that LCSuff[i][j] contains the
+    # length of longest common suffix of
+    # X[0...i-1] and Y[0...j-1]. The first
+    # row and first column entries have no
+    # logical meaning, they are used only
+    # for simplicity of the program.
+ 
+    # LCSuff is the table with zero
+    # value initially in each cell
+    LCSuff = [[0 for k in range(n+1)] for l in range(m+1)]
+ 
+    # To store the length of
+    # longest common substring
+    result = 0
+ 
+    # Following steps to build
+    # LCSuff[m+1][n+1] in bottom up fashion
+    for i in range(m + 1):
+        for j in range(n + 1):
+            if (i == 0 or j == 0):
+                LCSuff[i][j] = 0
+            elif (X[i-1] == Y[j-1]):
+                LCSuff[i][j] = LCSuff[i-1][j-1] + 1
+                result = max(result, LCSuff[i][j])
+            else:
+                LCSuff[i][j] = 0
+    return result
+
+def get_most_similar(concepts, lemma):
+    max_length = -100
+    max_con = None
+    for concept in concepts:
+        concept_lemma = concept[2]
+        lcs = LCSubStr(concept_lemma, lemma, len(concept_lemma), len(lemma))
+        if lcs > max_length:
+            max_con = concept
+            max_length = lcs
+    assert max_con is not None
+    return max_con
+
+def yrvos_changeTop(root):
+    condition_counts = {1:0, 2:0, 3:0, 4:0}
+    pos_tagger = CoreNLPClient(annotators=['tokenize','pos','parse'], 
+                                timeout=30000, output_format='json', 
+                                memory='6G',
+                                be_quiet=True,endpoint='http://localhost:65222')
+    
+    with open(os.path.join(root, 'text_to_parsedAMR.json'), 'r') as f:
+        text_to_parsedAMR = json.load(f) 
+    text_to_aux = copy.deepcopy(text_to_parsedAMR)   
+
+    for text, parsedAMr in tqdm(text_to_parsedAMR.items()):
+        initial_parsed_amr = parsedAMr['initial_parsed_amr']
+        amr_graph = penman.decode(initial_parsed_amr, model=penman_amr_model)
+        amr_toks = amr_graph.metadata['tok']
+        amr_graph.metadata = {}
+        alignments = surface.alignments(amr_graph) # (val, _, concept): Alignment(1,)
+        concept_to_tok = {key:amr_toks.split()[value.indices[0]] for key, value in alignments.items()}
+        concept_aligns = {key:value.indices[0] for key, value in alignments.items()}
+        min_ali_concept = None
+        min_ali = 10000
+        for key, value in concept_aligns.items():
+            if value < min_ali:
+                min_ali_concept = key
+                min_ali = value
+        assert min_ali_concept is not None
+        
+        # 找第一个名词
+        pos_ann = pos_tagger.annotate(amr_toks)['sentences'][0]
+        pos_first_noun_idx = None
+        tokens = pos_ann['tokens'] # list[dict]
+        depparse = pos_ann['basicDependencies']
+        depparse = {f"{dep['dependent']-1} {dep['governor']-1}": dep['dep'] for dep in depparse}
+        for idx, token in enumerate(tokens):
+            if token['pos'] in pos_targets:
+                pos_first_noun_idx = idx
+                if token['word'] == 'being' and ((idx-1) >= 0) and (tokens[idx-1]['word'] == 'human'):
+                    pos_first_noun_idx = idx - 1
+                for dep_key, dep_val in depparse.items():
+                    dependent, governer = dep_key.split(' ')
+                    if dep_val == 'compound' and (int(dependent) == idx): # 第一个名词是compound, 并且是dependent
+                        pos_first_noun_idx = int(governer)
+                        break
+                break
+        if pos_first_noun_idx is None:
+            condition_counts[1] += 1
+            top_variable, _, top_concept = min_ali_concept
+        else:
+            amr_first_noun_idx = transform_pos_to_amr(pos_first_noun_idx, amr_toks.split(), tokens)
+            # 找amr token 对应的concept
+            parsed_concepts = [key for key, value in concept_aligns.items() if value == amr_first_noun_idx]
+            if len(parsed_concepts) == 1:
+                condition_counts[4] += 1
+                top_variable, _, top_concept = parsed_concepts[0]
+            elif len(parsed_concepts) > 1:
+                condition_counts[3] += 1
+                top_variable, _, top_concept = get_most_similar(parsed_concepts, amr_toks.split()[amr_first_noun_idx])
+            else:
+                condition_counts[2] += 1
+                first_noun = amr_toks.split()[amr_first_noun_idx]
+                candiate_concepts = []
+                for key in concept_aligns.keys():  # 一个句子中出现了两个light, 但是amr parser只识别了后一个light, 并且pos tagger认为第一个是top
+                    if key[-1].startswith(first_noun):
+                        candiate_concepts.append(key)
+                if len(candiate_concepts) == 0:
+                    # alignment最小的concept
+                    top_variable, _, top_concept = min_ali_concept
+                else:
+                    top_variable, top_concept = None, None
+                    foo_min_ali = 1000
+                    for candi_con in candiate_concepts:
+                        candi_ali = concept_aligns[candi_con]
+                        if candi_ali < foo_min_ali:
+                            top_variable, _, top_concept = candi_con
+                            foo_min_ali = candi_ali
+                    assert top_variable is not None
+    
+        amr_tree_string_change_top = penman.encode(amr_graph, top=top_variable, model=penman_amr_model)
+        text_to_aux[text]['toknized_string'] = amr_toks
+        text_to_aux[text]['amr_tree_string'] = amr_tree_string_change_top
+        text_to_aux[text]['first_noun'] = top_concept
+        text_to_aux[text]['inference_graph'] = nx.node_link_data(dfs_linearized_penmen_v4(amr_tree_string_change_top, use_pointer_tokens=True,))
+        # {1: 0, 2: 27, 3: 1539, 4: 15866}
+    with open(os.path.join(root, 'text_to_aux.json'), 'w') as f:
+        json.dump(text_to_aux, f)
+
+
+def mevis_normalize_text(text_query):
+    normalized_text_query = text_query.replace('right most', 'rightmost')
+    normalized_text_query = normalized_text_query.replace('left most', 'leftmost')
+    normalized_text_query = normalized_text_query.replace('front most', 'frontmost')
+    text_1 = " ".join(normalized_text_query.lower().split())
+    return text_1
+
+def mevis_parseAMR(root):         
+    # pasing
+    parser = AMRParser.from_pretrained('AMR3-structbart-L')
+    text_to_parsedAMR = defaultdict(dict)
+    failed_ones = []
+    for use in ['valid_u', 'train', 'valid']:
+        with open(os.path.join(root, use, 'meta_expressions.json'), 'r') as f:
+            json_file = json.load(f)['videos']
+        for video_id, vid_ann in tqdm(json_file.items()):
+            for text_query_id, exp_dict in vid_ann['expressions'].items():
+                text_query = exp_dict['exp']
+                try:
+                    text_query = mevis_normalize_text(text_query)
+                    all_auged_texts = [text_query]
+                    if ('left' in text_query) or ('right' in text_query):
+                        text_2 = text_query.replace('left', '@').replace('right', 'left').replace('@', 'right')
+                        all_auged_texts.append(text_2)         
+                    for auged_text in all_auged_texts:
+                        if auged_text in text_to_parsedAMR:
+                            continue
+                        tokens, _ = parser.tokenize(auged_text)
+                        amr_string = parser.parse_sentence(tokens)[0]
+                        text_to_parsedAMR[auged_text]['initial_parsed_amr'] = amr_string 
+                except:
+                    failed_ones.append((video_id, text_query_id, text_query))
+        
+    with open(os.path.join(root, 'text_to_parsedAMR.json'), 'w') as f:
+        json.dump({'data': text_to_parsedAMR, 'failed': failed_ones}, f)
+
+def mevis_handle_failed(root):
+    with open(os.path.join(root, 'text_to_parsedAMR.json'), 'r') as f:
+        data = json.load(f)
+        text_to_parsedAMR = data['data']
+        failed_ones = data['failed']
+
+    if len(failed_ones) != 0:
+        parser = AMRParser.from_pretrained('AMR3-structbart-L')
+        for video_id, text_query_id, text_query in failed_ones:
+            text_query = yrvos_normalize_text(text_query)
+            # change the text
+            all_auged_texts = [text_query]
+            if ('left' in text_query) or ('right' in text_query):
+                text_2 = text_query.replace('left', '@').replace('right', 'left').replace('@', 'right')
+                all_auged_texts.append(text_2)         
+            for auged_text in all_auged_texts:
+                if auged_text in text_to_parsedAMR:
+                    continue
+                tokens, _ = parser.tokenize(auged_text)
+                amr_string = parser.parse_sentence(tokens)[0]
+                text_to_parsedAMR[auged_text]['initial_parsed_amr'] = amr_string 
+
+    with open(os.path.join(root, 'text_to_parsedAMR.json'), 'w') as f:
+        json.dump(text_to_parsedAMR, f)    
+
+def mevis_changeTop(root):
+    condition_counts = {1:0, 2:0, 3:0, 4:0}
+    pos_tagger = CoreNLPClient(annotators=['tokenize','pos','parse'], 
+                                timeout=30000, output_format='json', 
+                                memory='6G',
+                                be_quiet=True,endpoint='http://localhost:65232')
+    
+    with open(os.path.join(root, 'text_to_parsedAMR.json'), 'r') as f:
+        text_to_parsedAMR = json.load(f)  # 28617
+    text_to_aux = copy.deepcopy(text_to_parsedAMR)   
+
+    for text, parsedAMr in tqdm(text_to_parsedAMR.items()):
+        initial_parsed_amr = parsedAMr['initial_parsed_amr']
+        amr_graph = penman.decode(initial_parsed_amr, model=penman_amr_model)
+        amr_toks = amr_graph.metadata['tok']
+        amr_graph.metadata = {}
+        alignments = surface.alignments(amr_graph) # (val, _, concept): Alignment(1,)
+        concept_to_tok = {key:amr_toks.split()[value.indices[0]] for key, value in alignments.items()}
+        concept_aligns = {key:value.indices[0] for key, value in alignments.items()}
+        min_ali_concept = None
+        min_ali = 10000
+        for key, value in concept_aligns.items():
+            if value < min_ali:
+                min_ali_concept = key
+                min_ali = value
+        assert min_ali_concept is not None
+        
+        # 找第一个名词
+        pos_ann = pos_tagger.annotate(amr_toks)['sentences'][0]
+        pos_first_noun_idx = None
+        tokens = pos_ann['tokens'] # list[dict]
+        depparse = pos_ann['basicDependencies']
+        depparse = {f"{dep['dependent']-1} {dep['governor']-1}": dep['dep'] for dep in depparse}
+        for idx, token in enumerate(tokens):
+            if token['pos'] in pos_targets:
+                pos_first_noun_idx = idx
+                if token['word'] == 'being' and ((idx-1) >= 0) and (tokens[idx-1]['word'] == 'human'):
+                    pos_first_noun_idx = idx - 1
+                for dep_key, dep_val in depparse.items():
+                    dependent, governer = dep_key.split(' ')
+                    if dep_val == 'compound' and (int(dependent) == idx): # 第一个名词是compound, 并且是dependent
+                        pos_first_noun_idx = int(governer)
+                        break
+                break
+        if pos_first_noun_idx is None:
+            condition_counts[1] += 1
+            top_variable, _, top_concept = min_ali_concept
+        else:
+            amr_first_noun_idx = transform_pos_to_amr(pos_first_noun_idx, amr_toks.split(), tokens)
+            # 找amr token 对应的concept
+            parsed_concepts = [key for key, value in concept_aligns.items() if value == amr_first_noun_idx]
+            if len(parsed_concepts) == 1:
+                condition_counts[4] += 1
+                top_variable, _, top_concept = parsed_concepts[0]
+            elif len(parsed_concepts) > 1:
+                condition_counts[3] += 1
+                top_variable, _, top_concept = get_most_similar(parsed_concepts, amr_toks.split()[amr_first_noun_idx])
+            else:
+                condition_counts[2] += 1
+                first_noun = amr_toks.split()[amr_first_noun_idx]
+                candiate_concepts = []
+                for key in concept_aligns.keys():  # 一个句子中出现了两个light, 但是amr parser只识别了后一个light, 并且pos tagger认为第一个是top
+                    if key[-1].startswith(first_noun):
+                        candiate_concepts.append(key)
+                if len(candiate_concepts) == 0:
+                    # alignment最小的concept
+                    top_variable, _, top_concept = min_ali_concept
+                else:
+                    top_variable, top_concept = None, None
+                    foo_min_ali = 1000
+                    for candi_con in candiate_concepts:
+                        candi_ali = concept_aligns[candi_con]
+                        if candi_ali < foo_min_ali:
+                            top_variable, _, top_concept = candi_con
+                            foo_min_ali = candi_ali
+                    assert top_variable is not None
+        print(text)
+        print(top_concept)
+        amr_tree_string_change_top = penman.encode(amr_graph, top=top_variable, model=penman_amr_model)
+        text_to_aux[text]['toknized_string'] = amr_toks
+        text_to_aux[text]['amr_tree_string'] = amr_tree_string_change_top
+        text_to_aux[text]['first_noun'] = top_concept
+        text_to_aux[text]['inference_graph'] = nx.node_link_data(dfs_linearized_penmen_v4(amr_tree_string_change_top, use_pointer_tokens=True,))
+
+    with open(os.path.join(root, 'text_to_aux.json'), 'w') as f:
+        json.dump(text_to_aux, f) # {1: 401, 2: 116, 3: 1692, 4: 26408}
+
+
+
+def refcocog_normalize_text_v2(text_query,name, sent_id):
+    if name == 'refcoco':
+        if sent_id == '':
+            pass
+    if name == 'refcoco+':
+        if sent_id == '126910':
+            assert text_query == 'sis'
+            text_query = 'sister'
+            pass
+    if name == 'refcocog':
+        if sent_id == '29232':
+            assert text_query == '{}'
+            text_query = 'man wearing black pants'
+        if sent_id == '268':
+            assert text_query == '{}'
+            text_query = 'woman surfing above the water'
+
     normalized_text_query = text_query.replace('right most', 'rightmost')
     normalized_text_query = normalized_text_query.replace('left most', 'leftmost')
     normalized_text_query = normalized_text_query.replace('front most', 'frontmost')
@@ -289,7 +486,7 @@ def refcoco_parseAMR(root, name):
                 text_2 = text_query.replace('left', '@').replace('right', 'left').replace('@', 'right')
                 all_auged_texts.append(text_2)
             for auged_text in all_auged_texts:
-                auged_text = refcocog_normalize_text(auged_text)
+                auged_text = refcocog_normalize_text_v2(auged_text)
                 if auged_text not in text_to_parsedAMR:
                     tokens, _ = parser.tokenize(auged_text)
                     initial_parsed_amr = parser.parse_sentence(tokens)[0]
@@ -300,30 +497,6 @@ def refcoco_parseAMR(root, name):
     with open(text_to_parsedAMR_file, 'w') as f:
         json.dump({'text_to_parsedAMR': text_to_parsedAMR, 
                    'failed_sent_ids': failed_sent_ids}, f)
-
-def refcocog_normalize_text_v2(text_query,name, sent_id):
-    if name == 'refcoco':
-        if sent_id == '':
-            pass
-    if name == 'refcoco+':
-        if sent_id == '126910':
-            assert text_query == 'sis'
-            text_query = 'sister'
-            pass
-    if name == 'refcocog':
-        if sent_id == '29232':
-            assert text_query == '{}'
-            text_query = 'man wearing black pants'
-        if sent_id == '268':
-            assert text_query == '{}'
-            text_query = 'woman surfing above the water'
-
-    normalized_text_query = text_query.replace('right most', 'rightmost')
-    normalized_text_query = normalized_text_query.replace('left most', 'leftmost')
-    normalized_text_query = normalized_text_query.replace('front most', 'frontmost')
-    # first one
-    text_1 = " ".join(normalized_text_query.lower().split())
-    return text_1
 
 def refcoco_handle_failed_ids(root, name):
     assert name != 'refcoco'
@@ -360,6 +533,23 @@ def refcoco_handle_failed_ids(root, name):
                 failed_sent_ids.remove(sent_id) 
     with open(text_to_parseAMRaux_file, 'w') as f:
         json.dump(text_to_parseAMRaux, f)              
+
+
+def transform_pos_to_amr(first_idx_pos, amr_toks, foo_pos_toks):
+    pos_toks = [foo_pos_toks[foo_i]['word'] for foo_i in range(len(foo_pos_toks))]
+    if (first_idx_pos < len(amr_toks)) and (amr_toks[first_idx_pos] == pos_toks[first_idx_pos]):
+        return first_idx_pos
+    else:
+        before_sum = sum([len(pos_toks[foo_i]) for foo_i in range(first_idx_pos)])
+        cnt = 0
+        for idx, atok in enumerate(amr_toks):
+            if cnt >= before_sum:
+                return idx
+            else:
+                cnt += len(atok)
+        if cnt > before_sum:
+            return len(amr_toks) - 1
+        raise ValueError()
 
 from data_schedule.preprocess.AMR_Process.read_and_process_v4 import dfs_linearized_penmen as dfs_linearized_penmen_v4
 def refcoco_changeTop(root, name, nlp_endpoint):
@@ -434,21 +624,7 @@ def refcoco_changeTop(root, name, nlp_endpoint):
                 # pos中的first_noun_idx到amr tok的first_noun_idx
                 if first_noun_idx is not None:
                     # 找到这个名词对应的concepts集合
-                    def transform_pos_to_amr(first_idx_pos, amr_toks, foo_pos_toks):
-                        pos_toks = [foo_pos_toks[foo_i]['word'] for foo_i in range(len(foo_pos_toks))]
-                        if (first_idx_pos < len(amr_tokens)) and (amr_toks[first_idx_pos] == pos_toks[first_idx_pos]):
-                            return first_idx_pos
-                        else:
-                            before_sum = sum([len(pos_toks[foo_i]) for foo_i in range(first_idx_pos)])
-                            cnt = 0
-                            for idx, atok in enumerate(amr_tokens):
-                                if cnt >= before_sum:
-                                    return idx
-                                else:
-                                    cnt += len(atok)
-                            if cnt > before_sum:
-                                return len(amr_tokens) - 1
-                            raise ValueError()
+
                     first_noun_idx = transform_pos_to_amr(first_noun_idx, amr_tokens, pos_tokenized_tokens)
                     first_noun_concepts = [key for key,val in concept_aligns.items() if val == first_noun_idx]
                     if len(first_noun_concepts) == 1:
@@ -486,22 +662,31 @@ def refcoco_changeTop(root, name, nlp_endpoint):
 
 import argparse
 if __name__ == '__main__':
-    # a2ds_perWindow_perExp(root='/home/xuhuihui/datasets/a2d_sentences')
-    # yrvos_perWindow_perExp(root='/hpc2hdd/home/testuser21/datasets/youtube_rvos', do_parse=True)
     parser = argparse.ArgumentParser()
     parser.add_argument('--name', type=str,)
     parser.add_argument('--endpoint', type=str,)
-    parser.add_argument('--task_name', type=str,default='parseAMR')
+    parser.add_argument('--task_name', type=str)
     args = parser.parse_args()
     if args.task_name == 'parseAMR':
-        refcoco_parseAMR(root='/home/xuhuihui/datasets', name=args.name)
+        if args.name == 'yrvos':
+            yrvos_parseAMR('/home/xuhuihui/datasets/youtube_rvos/meta_expressions')
+        elif args.name == 'mevis':
+            mevis_parseAMR('/home/xuhuihui/datasets/mevis')
+        elif 'refcoco' in args.name:
+            refcoco_parseAMR(root='/home/xuhuihui/datasets', name=args.name)
     elif args.task_name == 'changeTop':
-        refcoco_changeTop(root='/home/xuhuihui/datasets', name=args.name, nlp_endpoint=args.endpoint)
+        if args.name == 'yrvos':
+            yrvos_changeTop('/home/xuhuihui/datasets/youtube_rvos/meta_expressions')
+        elif 'refcoco' in args.name:
+            refcoco_changeTop(root='/home/xuhuihui/datasets', name=args.name, nlp_endpoint=args.endpoint)
+        elif args.name == 'mevis':
+            mevis_changeTop('/home/xuhuihui/datasets/mevis')
+
     elif args.task_name == 'handle_fail':
-        refcoco_handle_failed_ids(root='/home/xuhuihui/datasets', name=args.name)
+        if args.name == 'yrvos':
+            yrvos_handle_failed('/home/xuhuihui/datasets/youtube_rvos/meta_expressions')
+        elif args.name == 'mevis':
+            mevis_handle_failed('/home/xuhuihui/datasets/mevis')
+        elif 'refcoco' in args.name:
+            refcoco_handle_failed_ids(root='/home/xuhuihui/datasets', name=args.name)
 
-    # name = 'refcocog' # 
-    # refcoco_parseAMR(root='/home/xuhuihui/datasets', name=name)
-
-    # name = 'refcoco+' # 
-    # refcoco_parseAMR(root='/home/xuhuihui/datasets', name=name)

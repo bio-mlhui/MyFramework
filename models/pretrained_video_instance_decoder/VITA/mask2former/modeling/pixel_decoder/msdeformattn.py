@@ -369,10 +369,13 @@ class MSDeformAttnTransformerEncoder_fusionText(nn.Module):
         from models.layer_fusion import fusion_entrypoint
         create_fusion = fusion_entrypoint(fusion_configs['name'])
         fusion_module = create_fusion(fusion_configs)
-        self.fusion_modules = _get_clones(fusion_module, num_layers)
-
-        fusion_rel_self = fusion_configs['rel_self']
-        self.fusion_rel_self = fusion_rel_self
+        self.fusion_rel_self = fusion_configs['rel_self']
+        if self.fusion_rel_self == 'first':
+            self.fusion_modules = fusion_module
+        elif self.fusion_rel_self in ['before', 'after']:
+            self.fusion_modules = _get_clones(fusion_module, num_layers)
+        else:
+            raise ValueError()
 
     @staticmethod
     def get_reference_points(spatial_shapes, valid_ratios, device):
@@ -389,29 +392,68 @@ class MSDeformAttnTransformerEncoder_fusionText(nn.Module):
         reference_points = reference_points[:, :, None] * valid_ratios[:, None]
         return reference_points
 
-    def forward(self, src, spatial_shapes, level_start_index, valid_ratios, pos=None, padding_mask=None,
+    def forward_first(self, src, spatial_shapes, level_start_index, valid_ratios, pos=None, padding_mask=None,
                 text_feats=None, text_pad_masks=None,
                 amr_feats=None, amr_pad_masks=None):
         output = src
         reference_points = self.get_reference_points(spatial_shapes, valid_ratios, device=src.device)
-        for _, (layer, fusion_module) in enumerate(zip(self.layers, self.fusion_modules)):
-            if self.fusion_rel_self == 'before':
-                if text_feats is not None:
-                    output = fusion_module(flatten_multiscale=output, 
-                                            flatten_multiscale_pos=pos,
-                                            text_feats=text_feats, text_pad_masks=text_pad_masks,
-                                            amr_feats=amr_feats, amr_pad_masks=amr_pad_masks)
-                output = layer(output, pos, reference_points, spatial_shapes, level_start_index, padding_mask)
-            elif self.fusion_rel_self == 'after':
-                output = layer(output, pos, reference_points, spatial_shapes, level_start_index, padding_mask)                
-                if text_feats is not None:
-                   output = fusion_module(flatten_multiscale=output, 
-                                            flatten_multiscale_pos=pos,
-                                            text_feats=text_feats, text_pad_masks=text_pad_masks,
-                                            amr_feats=amr_feats, amr_pad_masks=amr_pad_masks)
-            else:
-                raise ValueError()
+        if text_feats is not None:
+            output = self.fusion_modules(flatten_multiscale=output,  # b s c
+                                    flatten_multiscale_pos=pos, # b s c
+                                    text_feats=text_feats, text_pad_masks=text_pad_masks,
+                                    amr_feats=amr_feats, amr_pad_masks=amr_pad_masks)   
+        for _, layer in enumerate(self.layers):
+            output = layer(output, pos, reference_points, spatial_shapes, level_start_index, padding_mask)
         return output
+    
+    def forward_before(self, src, spatial_shapes, level_start_index, valid_ratios, pos=None, padding_mask=None,
+                text_feats=None, text_pad_masks=None,
+                amr_feats=None, amr_pad_masks=None):
+        output = src
+        reference_points = self.get_reference_points(spatial_shapes, valid_ratios, device=src.device)           
+        for _, (layer, fusion_module) in enumerate(zip(self.layers, self.fusion_modules)):
+            if text_feats is not None:
+                output = fusion_module(flatten_multiscale=output,  # b s c
+                                        flatten_multiscale_pos=pos, # b s c
+                                        text_feats=text_feats, text_pad_masks=text_pad_masks,
+                                        amr_feats=amr_feats, amr_pad_masks=amr_pad_masks)
+            output = layer(output, pos, reference_points, spatial_shapes, level_start_index, padding_mask)
+        return output
+    
+
+    def forward_after(self, src, spatial_shapes, level_start_index, valid_ratios, pos=None, padding_mask=None,
+                text_feats=None, text_pad_masks=None,
+                amr_feats=None, amr_pad_masks=None):
+        output = src
+        reference_points = self.get_reference_points(spatial_shapes, valid_ratios, device=src.device)           
+        for _, (layer, fusion_module) in enumerate(zip(self.layers, self.fusion_modules)):
+            output = layer(output, pos, reference_points, spatial_shapes, level_start_index, padding_mask)
+            if text_feats is not None:
+                output = fusion_module(flatten_multiscale=output,  # b s c
+                                        flatten_multiscale_pos=pos, # b s c
+                                        text_feats=text_feats, text_pad_masks=text_pad_masks,
+                                        amr_feats=amr_feats, amr_pad_masks=amr_pad_masks)
+        return output
+    
+
+    def forward(self, src, spatial_shapes, level_start_index, valid_ratios, pos=None, padding_mask=None,
+                text_feats=None, text_pad_masks=None,
+                amr_feats=None, amr_pad_masks=None):
+
+        if self.fusion_rel_self == 'first':
+            return self.forward_first(src, spatial_shapes, level_start_index, valid_ratios, pos=pos, padding_mask=padding_mask,
+                            text_feats=text_feats, text_pad_masks=text_pad_masks,
+                            amr_feats=amr_feats, amr_pad_masks=amr_pad_masks)            
+        if self.fusion_rel_self == 'before':
+            return self.forward_before(src, spatial_shapes, level_start_index, valid_ratios, pos=pos, padding_mask=padding_mask,
+                            text_feats=text_feats, text_pad_masks=text_pad_masks,
+                            amr_feats=amr_feats, amr_pad_masks=amr_pad_masks)   
+        elif self.fusion_rel_self == 'after':
+            return self.forward_after(src, spatial_shapes, level_start_index, valid_ratios, pos=pos, padding_mask=padding_mask,
+                            text_feats=text_feats, text_pad_masks=text_pad_masks,
+                            amr_feats=amr_feats, amr_pad_masks=amr_pad_masks) 
+        else:
+            raise ValueError()
 
 # MSDeformAttn Transformer encoder in deformable detr
 class MSDeformAttnTransformerEncoderOnly_fusionText(nn.Module):

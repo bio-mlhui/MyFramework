@@ -458,7 +458,7 @@ class Vita(nn.Module):
 
 
 
-from models.pretrained_video_instance_decoder.pt_obj_decoder import register_pt_obj_decoder
+from models.pretrained_video_instance_decoder.pt_obj_decoder import register_pt_3d_obj_decoder
 
 class Vita_2(nn.Module):
     """
@@ -492,6 +492,9 @@ class Vita_2(nn.Module):
         test_run_chunk_size: int,
         test_interpolate_chunk_size: int,
         is_coco: bool,
+        mask_out_stride,
+        mask_threshold,
+        num_layers,
     ):
         """
         Args:
@@ -549,8 +552,9 @@ class Vita_2(nn.Module):
         self.out_dim = 256
         self.scales = [[1, 32], [1, 16], [1, 8]]
         self.conved_scale = [1, 4]
-        self.mask_out_stride = 4
-        self.mask_threshold = 0.5
+        self.mask_out_stride = mask_out_stride
+        self.mask_threshold = mask_threshold
+        self.num_layers = num_layers
 
     @classmethod
     def from_config(cls, cfg):
@@ -663,6 +667,10 @@ class Vita_2(nn.Module):
             "test_run_chunk_size": cfg.MODEL.VITA.TEST_RUN_CHUNK_SIZE,
             "test_interpolate_chunk_size": cfg.MODEL.VITA.TEST_INTERPOLATE_CHUNK_SIZE,
             "is_coco": cfg.DATASETS.TEST[0].startswith("coco"),
+
+            "mask_out_stride": cfg.MODEL.SEM_SEG_HEAD.COMMON_STRIDE,
+            "mask_threshold": 0.5,
+            'num_layers': cfg.MODEL.VITA.DEC_LAYERS 
         }
 
     def forward(self, batched_inputs, 
@@ -684,17 +692,20 @@ class Vita_2(nn.Module):
                                                                 text_pad_masks=text_pad_masks,
                                                                 amr_feats=amr_feats,
                                                                 amr_pad_masks=amr_pad_masks)
-        frame_queries = frame_queries[[-1]] # 1 bt 200 c
-
+        
         mask_features = self.vita_module.vita_mask_features(mask_features) # conv2d
         mask_features = mask_features.view(B, T, *mask_features.shape[-3:]) # b t c h w
         # l b nq c, 200 -> 100
         vita_outputs = self.vita_module(frame_queries)
-        
-        # b nq t h w -> b t nq h w
-        pred_masks = torch.einsum("lbqc,btchw->lbqthw", vita_outputs["pred_mask_embed"], mask_features).squeeze(0).permute(0,2,1,3,4)
-        video_queries = vita_outputs['video_queries'].squeeze(0) # b nq c
-        return {'obj_queries': video_queries, 'multiscale_feats':multi_scale_feats, 'pred_masks': pred_masks, 'mask_features': mask_features}
+
+        # b nq t h w -> l b t nq h w
+        pred_masks = torch.einsum("lbqc,btchw->lbqthw", vita_outputs["pred_mask_embed"], mask_features).permute(0,2,1,3,4)
+        return {'video_queries': vita_outputs['video_queries'], # l b nq c ,
+                'frame_queries':frame_queries, 
+                'cross_attn_weights':vita_outputs['cross_attn_weights'],
+                'multiscale_feats':multi_scale_feats, 
+                'pred_masks': pred_masks,
+                'mask_features': mask_features}
 
 from detectron2.projects.deeplab import add_deeplab_config, build_lr_scheduler
 from detectron2.config import get_cfg
@@ -704,25 +715,42 @@ from detectron2.engine import default_setup
 
 import yaml
 import os
-@register_pt_obj_decoder
-def vita(configs, pt_dir):
-    from detectron2.config import CfgNode
+def merge_fusion_temporal_configs(cfg, configs):
+    # seg_head的fusion
+    cfg.MODEL.SEM_SEG_HEAD.FUSION.NAME = configs['mask2former_fusion']["name"]
+    cfg.MODEL.SEM_SEG_HEAD.FUSION.NHEADS= configs['mask2former_fusion']['nheads']
+    cfg.MODEL.SEM_SEG_HEAD.FUSION.D_MODEL= configs['mask2former_fusion']['d_model']
+    cfg.MODEL.SEM_SEG_HEAD.FUSION.REL_SELF= configs['mask2former_fusion']['rel_self']
+    cfg.MODEL.SEM_SEG_HEAD.FUSION.DROPOUT= configs['mask2former_fusion']['dropout']
+    # vita的fusion
+    cfg.MODEL.VITA.FUSION.NAME = configs['vita_fusion']["name"]
+    cfg.MODEL.VITA.FUSION.NHEADS= configs['vita_fusion']['nheads']
+    cfg.MODEL.VITA.FUSION.D_MODEL= configs['vita_fusion']['d_model']
+    cfg.MODEL.VITA.FUSION.REL_SELF= configs['vita_fusion']['rel_self']
+    cfg.MODEL.VITA.FUSION.DROPOUT= configs['vita_fusion']['dropout']
+    # vita的temporal window
+    # 输入的帧的数量
+    cfg.INPUT.SAMPLING_FRAME_NUM = configs['train_window_size']
+    # vita的window size
+    cfg.MODEL.VITA.ENC_WINDOW_SIZE = configs['enc_window_size']
+
+@register_pt_3d_obj_decoder
+def vita(configs, pt_dir, work_dir):
     cfg = get_cfg()
     # for poly lr schedule
     add_deeplab_config(cfg)
     add_maskformer2_config(cfg)
     add_vita_config(cfg)
-    cfg.merge_from_file(configs['path'])
+    cfg.merge_from_file(os.path.join(work_dir, configs['config_file']))
+    merge_fusion_temporal_configs(cfg, configs)
     cfg.freeze()
-    freeze_bb = configs['freeze_bb']
-    freeze_all = configs['freeze_all'] if 'freeze_all' in configs else False
     model = Vita_2(cfg)
-    checkpoint = torch.load(os.path.join(pt_dir, 'vita/vita_swin_ytvis2021.pth'), map_location='cpu')['model']
-    model.load_state_dict(checkpoint)
-    if freeze_bb:
+    checkpoint = torch.load(os.path.join(pt_dir, f'{configs["pt_file_name"]}'), map_location='cpu')['model']
+    model.load_state_dict(checkpoint, strict=False) # since fusion modules not included
+    if configs['freeze_bb']:
         for p in model.backbone.parameters():
             p.requires_grad_(False)
-    if freeze_all:
+    if configs['freeze_all']:
         for p in model.parameters():
             p.requires_grad_(False)        
     return model
