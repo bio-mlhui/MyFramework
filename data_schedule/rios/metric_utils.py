@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-def get_AP_PAT_IOU_PerFrame(coco_evaluate_file, coco_predictions):
+def get_AP_PAT_IOU_PerFrame(coco_evaluate_file, coco_predictions, not_compute_pat=False):
     coco_gt = COCO(coco_evaluate_file)
     coco_pred = coco_gt.loadRes(coco_predictions)
     coco_eval = COCOeval(coco_gt, coco_pred, iouType='segm')
@@ -18,9 +18,10 @@ def get_AP_PAT_IOU_PerFrame(coco_evaluate_file, coco_predictions):
     ap_metrics = coco_eval.stats[:6]
     metrics = {l: m for l, m in zip(ap_labels, ap_metrics)}
 
-    precision_at_k, overall_iou, mean_iou = calculate_precision_at_k_and_iou_metrics(coco_gt, coco_pred)
-    metrics.update({f'P@{k}': m for k, m in zip([0.5, 0.6, 0.7, 0.8, 0.9], precision_at_k)})
-    metrics.update({'overall_iou': overall_iou, 'mean_iou': mean_iou})
+    if not not_compute_pat:
+        precision_at_k, overall_iou, mean_iou = calculate_precision_at_k_and_iou_metrics(coco_gt, coco_pred)
+        metrics.update({f'P@{k}': m for k, m in zip([0.5, 0.6, 0.7, 0.8, 0.9], precision_at_k)})
+        metrics.update({'overall_iou': overall_iou, 'mean_iou': mean_iou})
     
     return metrics
     

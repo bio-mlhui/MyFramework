@@ -117,7 +117,7 @@ def validate(loader, model, device, is_distributed, is_main_process, output_dir,
             coco_preds = [p for p_list in coco_preds for p in p_list]
 
         if is_main_process:
-            ret_metrics = get_AP_PAT_IOU_PerFrame(coco_eval_file, coco_preds)
+            ret_metrics = get_AP_PAT_IOU_PerFrame(coco_eval_file, coco_preds, not_compute_pat=('not compute_pat' in validate_metrics))
             add_set_name_metrics = {f'{set_name}_{key}':val for key, val in ret_metrics.items()}
             eval_metrics.update(add_set_name_metrics)
         else:
