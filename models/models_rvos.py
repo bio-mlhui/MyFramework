@@ -4597,54 +4597,15 @@ class AMR_Grounding_3DObj(nn.Module):
                         bch_node_score = torch.stack([grounding_score[idx] for idx, batch_id in enumerate(nodes_batch_ids) if batch_id == bch_idx], dim=0)
                         g_score_by_batch.append(bch_node_score) # vi nq
 
-                    if self.reason_2d_choose == '第一个':
+                    if self.reason_3d_choose == '第一个':
                         grounding_score = torch.stack([lg[0] for lg in g_score_by_batch], dim=0)
                     else:
                         raise ValueError()
                     grounding_score_by_layer.append(grounding_score)
                 else:
                     grounding_score_by_layer.append(None)
-            return {'objdecoder': {'pred_masks': pred_masks_by_layer, # b nq h w
+            return {'tmpdecoder': {'pred_masks': pred_masks_by_layer, # b nq h w
                                    'reason_2d': grounding_score_by_layer} ,} # list[b nq h w], num_layers
-
-        else:
-            perFrame_queries = obj_queries_by_layer[-1] # b t nq c
-            temporal_decoder_output = self.temporal_decoder(perFrame_queries, 
-                                                           multiscale_feats,
-                                                            text_feats=text_feats, 
-                                                            text_pad_masks=text_pad_masks,
-                                                            amr_feats=amr_token_feats,
-                                                            amr_pad_masks=amr_token_seg_ids==0)
-            # list[b nq c], list[b t nq h w], list[b nq t c]
-            vid_queries, pred_masks_by_layer, max_queries = temporal_decoder_output['obj_queries'], temporal_decoder_output['pred_masks'],\
-                                                            temporal_decoder_output['max_queries']
-            memories = torch.cat([vid_queries.unsqueeze(2), max_queries], dim=2) # b nq (1+t) c
-            memories = self.reason_3d_obj_query_proj(memories).flatten(2) # b nq (1+t)*c
-            nodes_batch_ids, edges_batch_ids,\
-                node_seg_ids, edges_seg_ids, \
-                node_feats, edge_feats, \
-                node_memories,edge_memories,\
-                edge_index,  node_subseqs, node_dsends = \
-                batching_graph(amrs, amr_token_feats, amr_token_seg_ids, memories.permute(1,0,2).clone(), None,
-                                text_feats, node_alignments) # memories是dict
-            grounding_score = self.reason_module_3d(node_batch_ids=nodes_batch_ids, edge_batch_ids=edges_batch_ids, 
-                                                    node_seg_ids=node_seg_ids, edge_seg_ids=edges_seg_ids,
-                                                    node_feats=node_feats, edge_feats=edge_feats,
-                                                    node_memories=node_memories, edge_memories=edge_memories,
-                                                    edge_index=edge_index,
-                                                    node_subseqs=node_subseqs,
-                                                    node_dsends=node_dsends) # V nq
-            g_score_by_batch = []
-            for bch_idx in range(batch_size):
-                bch_node_score = torch.stack([grounding_score[idx] for idx, batch_id in enumerate(nodes_batch_ids) if batch_id == bch_idx], dim=0)
-                g_score_by_batch.append(bch_node_score) # vi nq
-
-            if self.reason_3d_choose == '第一个':
-                grounding_score = torch.stack([lg[0] for lg in g_score_by_batch], dim=0)
-            else:
-                raise ValueError()
-            return {'reason_3d': grounding_score,
-                    'temporal_decoder_objseg': pred_masks_by_layer} 
 
     def rvos_targets_handler(self, targets, pad_H, pad_W):
         batch_size = len(targets)

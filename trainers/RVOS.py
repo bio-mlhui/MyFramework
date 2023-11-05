@@ -57,6 +57,18 @@ def get_inverse_sqrt_schedule_with_warmup(
         return max(0.0, (num_warmup_steps / current_step)**0.5)
 
     return LambdaLR(optimizer, lr_lambda, last_epoch)
+
+def get_polynomial(
+    optimizer: Optimizer, last_epoch: int = -1,
+    initial_learning_rate : float=8e-5, end_learning_rate: float=1.5e-5, decay_steps=25, power=1.0
+):
+    def decayed_learning_rate(step):
+        step = min(step, decay_steps)
+        return ((initial_learning_rate - end_learning_rate) *
+                (1 - step / decay_steps) ^ (power)
+                ) + end_learning_rate
+
+    return LambdaLR(optimizer, decayed_learning_rate, last_epoch)
     
 def get_scheduler(optimizer, configs):
     name = configs['name']
@@ -77,6 +89,12 @@ def get_scheduler(optimizer, configs):
                                                      num_warmup_steps=configs['num_warmup_steps'],
                                                      num_training_steps=configs['num_training_steps'],
                                                      last_epoch=-1)
+    elif name == 'polymonial':
+        return get_polynomial(optimizer=optimizer,
+                              initial_learning_rate=configs['initial_learning_rate'],
+                               end_learning_rate=configs['end_learning_rate'],
+                                decay_steps=configs['decay_steps'],
+                                 power=configs['power'] )
 
 
     else:
