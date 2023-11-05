@@ -9089,7 +9089,15 @@ def amr_grounding_2dobj(device, configs):
                                                                         power=sch_conf['power']),
                                                       last_epoch=-1,)
         return model, optimizer, scheduler, sch_conf['unit']
-    
+
+    elif sch_conf['name'] == 'polynomial':
+        scheduler = torch.optim.lr_scheduler.PolynomialLR(optimizer, 
+                                                        total_iters=sch_conf['total_iters'],
+                                                        power=sch_conf['power'],
+                                                        last_epoch=-1,
+                                                        verbose=True)
+        return model, optimizer, scheduler, sch_conf['unit']
+
     elif sch_conf['name'] == 'multistep_lr':
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
                                                         milestones=sch_conf['milestones'],
