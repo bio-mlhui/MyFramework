@@ -498,25 +498,26 @@ class Collator(CollatorWithAux):
             'auxiliary': self.batching_aux(auxiliary)
         }
 
-        if 'amrs' in batch_data['auxiliary']:
-            amrs = batch_data['auxiliary']['amrs']
-            num_edges = [am.num_edges for am in amrs]
-            while sum(num_edges) == 0:
-                new_sample_idxs = torch.randperm(200)[:batch_size]
-                # change this batch by calling data_ins
-                new_batch = [self.data_ins.__getitem__(idx) for idx in new_sample_idxs]
-                samples, text_query, auxiliary, meta_or_target = list(zip(*new_batch))
-                samples = list(samples)
-                text_query = list(text_query)
-                auxiliary = list(auxiliary)
-                meta_or_target = list(meta_or_target)
-                batch_data = {
-                    'samples': samples,
-                    'text_query': text_query,
-                    'auxiliary': self.batching_aux(auxiliary)
-                }
+        if self.split == 'train':
+            if 'amrs' in batch_data['auxiliary']:
                 amrs = batch_data['auxiliary']['amrs']
                 num_edges = [am.num_edges for am in amrs]
+                while sum(num_edges) == 0:
+                    new_sample_idxs = torch.randperm(200)[:batch_size]
+                    # change this batch by calling data_ins
+                    new_batch = [self.data_ins.__getitem__(idx) for idx in new_sample_idxs]
+                    samples, text_query, auxiliary, meta_or_target = list(zip(*new_batch))
+                    samples = list(samples)
+                    text_query = list(text_query)
+                    auxiliary = list(auxiliary)
+                    meta_or_target = list(meta_or_target)
+                    batch_data = {
+                        'samples': samples,
+                        'text_query': text_query,
+                        'auxiliary': self.batching_aux(auxiliary)
+                    }
+                    amrs = batch_data['auxiliary']['amrs']
+                    num_edges = [am.num_edges for am in amrs]
 
         if self.split == 'test':
             batch_data['meta'] = meta_or_target
