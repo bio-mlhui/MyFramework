@@ -4333,7 +4333,7 @@ class AMR_Grounding_2DObj_withPad(AMR_Grounding_2DObj):
                                 'reason_2d': grounding_score_by_layer} ,} # list[b nq h w], num_layers
 
     def ref_choose_2d_loss(self, layer_gscore_output, matching_indices,  targets):
-        version = 'v3'
+        version = 'v4'
         if version == 'v2':
             # b nq
             is_valid = targets['isvalid'] # list[ni], batch
@@ -4361,6 +4361,19 @@ class AMR_Grounding_2DObj_withPad(AMR_Grounding_2DObj):
                 match_as_gt_indices.append(match_as_gt_idx.item())
             match_as_gt_indices = torch.tensor(match_as_gt_indices).long().to(layer_gscore_output.device) # b
             choose_loss = F.cross_entropy(layer_gscore_output[ref_is_valid], match_as_gt_indices[ref_is_valid], reduction='none') # b
+            return {'objdecoder_reason': choose_loss.sum() / num_refs}
+        elif version == 'v4':
+            # b nq
+            is_valid = targets['isvalid'] # list[ni], batch
+            referent_idx = targets['gt_referent_idx'] # list[int], batch
+            ref_is_valid = torch.tensor([isva[ridx].any() for isva, ridx in zip(is_valid, referent_idx)]).bool() # b
+            num_refs = (ref_is_valid.int().sum())
+            gt_probabilities = torch.zeors_like(layer_gscore_output) # b nq
+            for btc_idx, (ref_idx, (tgt_idx, src_idx)) in enumerate(zip(referent_idx,  matching_indices)): # b
+                sel_idx = src_idx.tolist().index(ref_idx)
+                match_as_gt_idx = tgt_idx[sel_idx]
+                gt_probabilities[btc_idx[match_as_gt_idx]] = 1.
+            choose_loss = F.binary_cross_entropy_with_logits(layer_gscore_output[ref_is_valid], gt_probabilities[ref_is_valid], reduction='none') # b
             return {'objdecoder_reason': choose_loss.sum() / num_refs}
 
 class AMR_Grounding_3DObj(nn.Module):
