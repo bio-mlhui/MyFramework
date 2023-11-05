@@ -4372,7 +4372,7 @@ class AMR_Grounding_2DObj_withPad(AMR_Grounding_2DObj):
             for btc_idx, (ref_idx, (tgt_idx, src_idx)) in enumerate(zip(referent_idx,  matching_indices)): # b
                 sel_idx = src_idx.tolist().index(ref_idx)
                 match_as_gt_idx = tgt_idx[sel_idx]
-                gt_probabilities[btc_idx[match_as_gt_idx]] = 1.
+                gt_probabilities[btc_idx][match_as_gt_idx] = 1.
             choose_loss = F.binary_cross_entropy_with_logits(layer_gscore_output[ref_is_valid], gt_probabilities[ref_is_valid], reduction='none') # b
             return {'objdecoder_reason': choose_loss.sum() / num_refs}
 
