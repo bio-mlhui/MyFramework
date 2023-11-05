@@ -9086,7 +9086,8 @@ def amr_grounding_2dobj(device, configs):
                                                                         initial_learning_rate=sch_conf['initial_learning_rate'],
                                                                         end_learning_rate=sch_conf['end_learning_rate'],
                                                                         decay_steps=sch_conf['decay_steps'],
-                                                                        power=sch_conf['power']),
+                                                                        power=sch_conf['power'],
+                                                                        verbose=True),
                                                       last_epoch=-1,)
         return model, optimizer, scheduler, sch_conf['unit']
 
