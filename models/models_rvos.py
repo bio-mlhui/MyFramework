@@ -4393,9 +4393,8 @@ class AMR_Grounding_2DObj_withPad(AMR_Grounding_2DObj):
                 weights[btc_idx][match_as_gt_idx] = 1.
             # b nq
             choose_loss = F.binary_cross_entropy_with_logits(layer_gscore_output[ref_is_valid], gt_probabilities[ref_is_valid], 
-                                                             weight=weights,
-                                                             reduction='none') # b
-            return {'objdecoder_reason': choose_loss.sum() / num_refs}
+                                                             weight=weights,) # b nq
+            return {'objdecoder_reason': choose_loss}
 
 class AMR_Grounding_3DObj(nn.Module):
     def __init__(self, 
