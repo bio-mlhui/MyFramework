@@ -359,6 +359,7 @@ class REFCOCO(DatasetWithAux):
         if text_aux_version == 1 or text_aux_version == 2 or text_aux_version == 3 or text_aux_version == 4:
             collator_kwargs['tokenizer'] = self.tokenizer
         self.collator = Collator(split=split,
+                                 data_ins=self,
                                  text_aux_version=text_aux_version,
                                  image_aux_version=image_aux_version,
                                  **collator_kwargs)
@@ -471,6 +472,7 @@ class REFCOCO(DatasetWithAux):
 
 class Collator(CollatorWithAux):
     def __init__(self, split, 
+                 data_ins,
                  text_aux_version,
                  image_aux_version,
                  **kwargs
@@ -479,23 +481,49 @@ class Collator(CollatorWithAux):
                        video_aux_version=image_aux_version,
                        **kwargs)
         self.split = split
+        self.data_ins = data_ins
+
     def __call__(self, batch):
         samples, text_query, auxiliary, meta_or_target = list(zip(*batch))
         samples = list(samples)
         text_query = list(text_query)
         auxiliary = list(auxiliary)
         meta_or_target = list(meta_or_target)
+
+        batch_size = len(samples)
         
         batch_data = {
             'samples': samples,
-            'text_query': list(text_query),
+            'text_query': text_query,
             'auxiliary': self.batching_aux(auxiliary)
         }
+
+        if 'amrs' in batch_data['auxiliary']:
+            amrs = batch_data['auxiliary']['amrs']
+            num_edges = [am.num_edges for am in amrs]
+            while sum(num_edges) == 0:
+                new_sample_idxs = torch.randperm(200)[:batch_size]
+                # change this batch by calling data_ins
+                new_batch = [self.data_ins.__getitem__(idx) for idx in new_sample_idxs]
+                samples, text_query, auxiliary, meta_or_target = list(zip(*new_batch))
+                samples = list(samples)
+                text_query = list(text_query)
+                auxiliary = list(auxiliary)
+                meta_or_target = list(meta_or_target)
+                batch_data = {
+                    'samples': samples,
+                    'text_query': text_query,
+                    'auxiliary': self.batching_aux(auxiliary)
+                }
+                amrs = batch_data['auxiliary']['amrs']
+                num_edges = [am.num_edges for am in amrs]
+
         if self.split == 'test':
             batch_data['meta'] = meta_or_target
         elif self.split == 'train' or self.split == 'validate':
             batch_data['targets'] = meta_or_target
-    
+
+
         return batch_data
 
 

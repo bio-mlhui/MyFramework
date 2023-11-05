@@ -3691,7 +3691,7 @@ class AMR_Grounding_2DObj(nn.Module):
         return self.pixel_mean.device
     
     def encode_text(self, text_queries, text_auxiliary, device):
-        version = 'v2'
+        version = 'v1'
         if version == 'v1':
             amrs = text_auxiliary['amrs'] # list[Graph]
             batch_size = len(amrs)

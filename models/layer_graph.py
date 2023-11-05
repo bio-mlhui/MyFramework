@@ -1661,6 +1661,7 @@ class Grounding_v1_multihead_v2(geo_nn.MessagePassing):
             # V h_nq
             scores = torch.zeros([num_nodes, self.nheads * nq]).float().to(device)
 
+        # 如果整个batch都没有edge                                                                             
         dgl_graph = dgl.graph((edge_index[0, :], edge_index[1, :]))
         try:
             traversal_order = dgl.topological_nodes_generator(dgl_graph)
