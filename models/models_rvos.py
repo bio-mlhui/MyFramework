@@ -9087,8 +9087,9 @@ def amr_grounding_2dobj(device, configs):
                                                                         end_learning_rate=sch_conf['end_learning_rate'],
                                                                         decay_steps=sch_conf['decay_steps'],
                                                                         power=sch_conf['power'],
-                                                                        verbose=True),
-                                                      last_epoch=-1,)
+                                                                        ),
+                                                      last_epoch=-1,
+                                                      verbose=True)
         return model, optimizer, scheduler, sch_conf['unit']
 
     elif sch_conf['name'] == 'polynomial':
