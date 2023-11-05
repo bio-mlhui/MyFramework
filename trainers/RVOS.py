@@ -26,82 +26,6 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.optim.optimizer import Optimizer
 
 
-def get_inverse_sqrt_schedule_with_warmup(
-    optimizer: Optimizer, num_warmup_steps: int, num_training_steps: int, last_epoch: int = -1
-):
-    """
-    Create a schedule with a learning rate that decreases following the values of the cosine function between the
-    initial lr set in the optimizer to 0, after a warmup period during which it increases linearly between 0 and the
-    initial lr set in the optimizer.
-
-    Args:
-        optimizer (:class:`~torch.optim.Optimizer`):
-            The optimizer for which to schedule the learning rate.
-        num_warmup_steps (:obj:`int`):
-            The number of steps for the warmup phase.
-        num_training_steps (:obj:`int`):
-            The total number of training steps.
-        num_cycles (:obj:`float`, `optional`, defaults to 0.5):
-            The number of waves in the cosine schedule (the defaults is to just decrease from the max value to 0
-            following a half-cosine).
-        last_epoch (:obj:`int`, `optional`, defaults to -1):
-            The index of the last epoch when resuming training.
-
-    Return:
-        :obj:`torch.optim.lr_scheduler.LambdaLR` with the appropriate schedule.
-    """
-
-    def lr_lambda(current_step):
-        if current_step < num_warmup_steps:
-            return float(current_step) / float(max(1, num_warmup_steps))
-        return max(0.0, (num_warmup_steps / current_step)**0.5)
-
-    return LambdaLR(optimizer, lr_lambda, last_epoch)
-
-def get_polynomial(
-    optimizer: Optimizer, last_epoch: int = -1,
-    initial_learning_rate : float=8e-5, end_learning_rate: float=1.5e-5, decay_steps=25, power=1.0
-):
-    def decayed_learning_rate(step):
-        step = min(step, decay_steps)
-        return ((initial_learning_rate - end_learning_rate) *
-                (1 - step / decay_steps) ^ (power)
-                ) + end_learning_rate
-
-    return LambdaLR(optimizer, decayed_learning_rate, last_epoch)
-    
-def get_scheduler(optimizer, configs):
-    name = configs['name']
-    if 'unit' not in configs:
-        unit = 'epoch'
-    else:
-        unit = configs['unit'] # epoch/step
-         
-    if name == 'MultiStepLR':
-        print('假设你没用scheduler')
-        return None, None
-    
-    elif name == 'multistep_lr':
-        milestones = configs['milestones']
-        gamma = configs['gamma']
-        return torch.optim.lr_scheduler.MultiStepLR(optimizer,
-                                                    milestones=milestones,
-                                                    gamma=gamma,
-                                                    verbose=True), unit
-    elif name == 'inverse_sqrt':
-        return get_inverse_sqrt_schedule_with_warmup(optimizer,
-                                                     num_warmup_steps=configs['num_warmup_steps'],
-                                                     num_training_steps=configs['num_training_steps'],
-                                                     last_epoch=-1), unit
-    elif name == 'polymonial':
-        return get_polynomial(optimizer=optimizer,
-                              initial_learning_rate=configs['initial_learning_rate'],
-                               end_learning_rate=configs['end_learning_rate'],
-                                decay_steps=configs['decay_steps'],
-                                 power=configs['power'] ), unit
-    else:
-        raise NotImplementedError
-
 def init_process_group_and_set_device(world_size, process_id, device_id):
     """
     This function needs to be called on each spawned process to initiate learning using DistributedDataParallel.
@@ -151,16 +75,14 @@ class Trainer:
         # model
         create_model = model_entrypoint(model_configs['name'])
 
-        model, optimizer = create_model(device=self.device, configs=model_configs)  # optimization属于model的部分
+        model, optimizer, scheduler, scheduler_unit = create_model(device=self.device, configs=model_configs)  # optimization属于model的部分
         if self.distributed:
             model = DDP(model, device_ids=[self.device], find_unused_parameters=True)
         self.model = model 
         self.optimizer = optimizer
         self.clip_gradient_norm = model_configs['optimization']['clip_max_norm'] # 0.1
-        scheduler, steps_or_epoch = get_scheduler(optimizer=optimizer, configs=model_configs['optimization']['scheduler'])
         self.scheduler = scheduler
-        self.schedule_unit = steps_or_epoch
-
+        self.schedule_unit = scheduler_unit
          
         # trainer
         self.out_dir = output_directory
@@ -271,8 +193,8 @@ class Trainer:
                 self.save_ckpt(None) # 先存下来
             if self.distributed:
                 dist.barrier() 
-                
-            if (self.scheduler_unit == 'epoch') and (self.scheduler is not None):
+
+            if (self.schedule_unit == 'epoch') and (self.scheduler is not None):
                 self.scheduler.step()  
 
     @torch.no_grad()
@@ -388,8 +310,8 @@ class Trainer:
         self.iteration = checkpoint['iteration']
         model_without_ddp = self.model.module if isinstance(self.model, DDP) else self.model
         model_without_ddp.load_state_dict(checkpoint['model_state_dict'], strict=False)
-        # self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        # self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
     
 @register_task
 def rvos(configs, process_id, device_id, num_processes,):

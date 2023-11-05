@@ -9025,6 +9025,8 @@ class Text_v0linamr(Text_V0):
         
 
 ###########################################################################
+import logging
+
 @register_model
 def amr_grounding_2dobj(device, configs):
     model = AMR_Grounding_2DObj(
@@ -9054,11 +9056,56 @@ def amr_grounding_2dobj(device, configs):
             "lr": configs['optimization']['vid_backbone_lr']},
         {"params": [p for n, p in model.named_parameters() if ("amrbart_wordEmbedding" in n) and p.requires_grad],
             "lr": configs['optimization']['text_backbone_lr']}, 
-    ] # CHECK params dict every run
+    ] 
     optimizer = get_optimizer(param_dicts=param_dicts, configs=configs['optimization']['optimizer'])
 
-    return model, optimizer 
-
+    sch_conf = configs['optimization']['scheduler']
+    if sch_conf['name'] == 'MultiStepLR':
+        logging.info('你没用任何scheduler')
+        print('你没用任何scheduler')
+        return model, optimizer, None, None
+    
+    if sch_conf['name'] == 'polynomial_split':
+        from models.model_utils import polynomial_decay_lambda
+        group_names = ['model', 'vbb', 'text']
+        poly_lambdas = []
+        for gname in group_names:
+            g_poly_conf = sch_conf[gname]
+            poly_lambdas.append(partial(polynomial_decay_lambda, initial_learning_rate=g_poly_conf['initial_learning_rate'],
+                                                                        end_learning_rate=g_poly_conf['end_learning_rate'],
+                                                                        decay_steps=g_poly_conf['decay_steps'],
+                                                                        power=g_poly_conf['power']))
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
+                                                      lr_lambda=poly_lambdas,
+                                                      last_epoch=-1,)
+        return model, optimizer, scheduler, sch_conf['unit']
+    elif sch_conf['name'] == 'polynomial_freezebb':
+        from models.model_utils import polynomial_decay_lambda
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
+                                                      lr_lambda=partial(polynomial_decay_lambda, 
+                                                                        initial_learning_rate=sch_conf['initial_learning_rate'],
+                                                                        end_learning_rate=sch_conf['end_learning_rate'],
+                                                                        decay_steps=sch_conf['decay_steps'],
+                                                                        power=sch_conf['power']),
+                                                      last_epoch=-1,)
+        return model, optimizer, scheduler, sch_conf['unit']
+    
+    elif sch_conf['name'] == 'multistep_lr':
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
+                                                        milestones=sch_conf['milestones'],
+                                                        gamma=sch_conf['gamma'],
+                                                        verbose=True), 
+        return model, optimizer, scheduler, sch_conf['unit']
+    
+    elif sch_conf['name'] == 'invert_sqrt':
+        from models.model_utils import inverse_sqrt_warmup_lambda
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, 
+                                                      lr_lambda=partial(inverse_sqrt_warmup_lambda,
+                                                                         num_warmup_steps=sch_conf['num_warmup_steps'],
+                                                                         num_training_steps=sch_conf['num_training_steps']), last_epoch=-1)
+        return model, optimizer, scheduler, sch_conf['unit']
+    else:
+        raise ValueError()
 
 @register_model
 def amr_grounding_2dobj_pad(device, configs):
