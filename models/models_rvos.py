@@ -3644,7 +3644,7 @@ class AMR_Grounding_2DObj(nn.Module):
                 p.requires_grad_(False) 
         assert amrtext_wordEmbedding_proj.pop('name') == 'FeatureResizer'
         self.amrtext_wordEmbedding_proj = FeatureResizer(**amrtext_wordEmbedding_proj)
-        self.amrtext_wordEmbedding_3c_to_c = nn.Linear(1024 * 3, 1024)
+        # self.amrtext_wordEmbedding_3c_to_c = nn.Linear(1024 * 3, 1024)
 
         self.register_buffer("pixel_mean", torch.Tensor(pixel_mean).view(-1, 1, 1), False)
         self.register_buffer("pixel_std", torch.Tensor(pixel_std).view(-1, 1, 1), False)
