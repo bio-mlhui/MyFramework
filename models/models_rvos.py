@@ -4368,7 +4368,7 @@ class AMR_Grounding_2DObj_withPad(AMR_Grounding_2DObj):
             referent_idx = targets['gt_referent_idx'] # list[int], batch
             ref_is_valid = torch.tensor([isva[ridx].any() for isva, ridx in zip(is_valid, referent_idx)]).bool() # b
             num_refs = (ref_is_valid.int().sum())
-            gt_probabilities = torch.zeors_like(layer_gscore_output) # b nq
+            gt_probabilities = torch.zeros_like(layer_gscore_output) # b nq
             for btc_idx, (ref_idx, (tgt_idx, src_idx)) in enumerate(zip(referent_idx,  matching_indices)): # b
                 sel_idx = src_idx.tolist().index(ref_idx)
                 match_as_gt_idx = tgt_idx[sel_idx]
