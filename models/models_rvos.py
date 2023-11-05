@@ -3644,6 +3644,7 @@ class AMR_Grounding_2DObj(nn.Module):
                 p.requires_grad_(False) 
         assert amrtext_wordEmbedding_proj.pop('name') == 'FeatureResizer'
         self.amrtext_wordEmbedding_proj = FeatureResizer(**amrtext_wordEmbedding_proj)
+        self.amrtext_wordEmbedding_3c_to_c = nn.Linear(1024 * 3, 1024)
 
         self.register_buffer("pixel_mean", torch.Tensor(pixel_mean).view(-1, 1, 1), False)
         self.register_buffer("pixel_std", torch.Tensor(pixel_std).view(-1, 1, 1), False)
@@ -3690,33 +3691,79 @@ class AMR_Grounding_2DObj(nn.Module):
         return self.pixel_mean.device
     
     def encode_text(self, text_queries, text_auxiliary, device):
-        amrs = text_auxiliary['amrs'] # list[Graph]
-        batch_size = len(amrs)
-        text_tokens = text_auxiliary['text_token_ids'] # b smax
-        text_tok_splits = text_auxiliary['text_token_splits'] # list[list[int]], batch
-        text_feats = self.amrbart_wordEmbedding(text_tokens) # b smax c
-        text_feats = self.amrtext_wordEmbedding_proj(text_feats) # b smax c
-        text_feats = [torch.split(tok_feat[:sum(tok_spli)], tok_spli, dim=0) for tok_feat, tok_spli in zip(text_feats, text_tok_splits)]
-        for batch_idx in range(batch_size):
-            text_feats[batch_idx] = torch.stack([t_f.mean(dim=0) for t_f in text_feats[batch_idx]], dim=0) 
-        text_feats, text_pad_masks = pad_1d_feats(text_feats)       
+        version = 'v2'
+        if version == 'v1':
+            amrs = text_auxiliary['amrs'] # list[Graph]
+            batch_size = len(amrs)
+            text_tokens = text_auxiliary['text_token_ids'] # b smax
+            text_tok_splits = text_auxiliary['text_token_splits'] # list[list[int]], batch
+            text_feats = self.amrbart_wordEmbedding(text_tokens) # b smax c
+            text_feats = self.amrtext_wordEmbedding_proj(text_feats) # b smax c
+            text_feats = [torch.split(tok_feat[:sum(tok_spli)], tok_spli, dim=0) for tok_feat, tok_spli in zip(text_feats, text_tok_splits)]
+            for batch_idx in range(batch_size):
+                text_feats[batch_idx] = torch.stack([t_f.mean(dim=0) for t_f in text_feats[batch_idx]], dim=0) 
+            text_feats, text_pad_masks = pad_1d_feats(text_feats)       
 
-        amr_token_seg_ids = text_auxiliary['seg_ids'].to(device)  # b (V+E)max
-        amr_token_splits = text_auxiliary['token_splits'] # list[list[int]]; max() = max_tok
-        amr_token_ids = text_auxiliary['token_ids'].to(device)  # b max_tok+pad
-        amr_token_feats = self.amrbart_wordEmbedding(amr_token_ids) 
-        amr_token_feats = self.amrtext_wordEmbedding_proj(amr_token_feats) # b max c
-            
-        # list[list[ti c]] -> list[Vi+Ei c]
-        amr_token_feats = [torch.split(tok_feat[:sum(tok_spli)], tok_spli, dim=0) for tok_feat, tok_spli in zip(amr_token_feats, amr_token_splits)]
-        for batch_idx in range(batch_size):
-            amr_token_feats[batch_idx] = torch.stack([t_f.mean(dim=0) for t_f in amr_token_feats[batch_idx]], dim=0)
-            
-        amr_token_feats = pad_1d_feats(amr_token_feats)[0] # b (V+E)max c
-        assert amr_token_feats.shape[1] == amr_token_seg_ids.shape[1]
-        assert (amr_token_feats.flatten(0, 1)[amr_token_seg_ids.flatten()==0]).sum() == 0
-        node_alignments = text_auxiliary['node_alignments']
-        return amrs, amr_token_feats, amr_token_seg_ids, text_feats, text_pad_masks, node_alignments
+            amr_token_seg_ids = text_auxiliary['seg_ids'].to(device)  # b (V+E)max
+            amr_token_splits = text_auxiliary['token_splits'] # list[list[int]]; max() = max_tok
+            amr_token_ids = text_auxiliary['token_ids'].to(device)  # b max_tok+pad
+            amr_token_feats = self.amrbart_wordEmbedding(amr_token_ids) 
+            amr_token_feats = self.amrtext_wordEmbedding_proj(amr_token_feats) # b max c
+                
+            # list[list[ti c]] -> list[Vi+Ei c]
+            amr_token_feats = [torch.split(tok_feat[:sum(tok_spli)], tok_spli, dim=0) for tok_feat, tok_spli in zip(amr_token_feats, amr_token_splits)]
+            for batch_idx in range(batch_size):
+                amr_token_feats[batch_idx] = torch.stack([t_f.mean(dim=0) for t_f in amr_token_feats[batch_idx]], dim=0)
+                
+            amr_token_feats = pad_1d_feats(amr_token_feats)[0] # b (V+E)max c
+            assert amr_token_feats.shape[1] == amr_token_seg_ids.shape[1]
+            assert (amr_token_feats.flatten(0, 1)[amr_token_seg_ids.flatten()==0]).sum() == 0
+            node_alignments = text_auxiliary['node_alignments']
+            return amrs, amr_token_feats, amr_token_seg_ids, text_feats, text_pad_masks, node_alignments
+        
+        elif version == 'v2':
+            amrs = text_auxiliary['amrs'] # list[Graph]
+            batch_size = len(amrs)
+            text_tokens = text_auxiliary['text_token_ids'] # b smax
+            text_tok_splits = text_auxiliary['text_token_splits'] # list[list[int]], batch
+            text_feats = self.amrbart_wordEmbedding(text_tokens) # b smax c
+            text_feats = self.amrtext_wordEmbedding_proj(text_feats) # b smax c
+            text_feats = [torch.split(tok_feat[:sum(tok_spli)], tok_spli, dim=0) for tok_feat, tok_spli in zip(text_feats, text_tok_splits)]
+            for batch_idx in range(batch_size):
+                text_feats[batch_idx] = torch.stack([t_f.mean(dim=0) for t_f in text_feats[batch_idx]], dim=0) 
+            text_feats, text_pad_masks = pad_1d_feats(text_feats)       
+
+            amr_token_seg_ids = text_auxiliary['seg_ids'].to(device)  # b (V+E)max
+            amr_token_splits = text_auxiliary['token_splits'] # list[list[int]]; max() = max_tok
+            amr_token_ids = text_auxiliary['token_ids'].to(device)  # b max_tok+pad
+            amr_token_feats = self.amrbart_wordEmbedding(amr_token_ids) 
+            # list[list[ti c]] -> list[Vi+Ei c]
+            amr_token_feats = [torch.split(tok_feat[:sum(tok_spli)], tok_spli, dim=0) for tok_feat, tok_spli in zip(amr_token_feats, amr_token_splits)]
+            for batch_idx in range(batch_size):
+                amr_token_feats[batch_idx] = torch.stack([t_f.mean(dim=0) for t_f in amr_token_feats[batch_idx]], dim=0) # V + E, c
+
+            num_nodes_by_batch = [g.num_nodes for g in amrs]
+            num_edges_by_batch = [g.num_edges for g in amrs]
+            batched_amrs = Batch.from_data_list(amrs) # concate
+            edge_index = batched_amrs.edge_index.to(device)  # 2 E
+            batched_node_feats: torch.Tensor = torch.cat([atf[:nnodes] for atf, nnodes in zip(amr_token_feats, num_nodes_by_batch)], dim=0) # V_sum c
+            batched_edge_feats = torch.cat([atf[nnodes:] for atf, nnodes in zip(amr_token_feats, num_nodes_by_batch)], dim=0) # E_sum c
+            src_feats, tgt_feats = batched_node_feats[edge_index[0]],  batched_node_feats[edge_index[1]]
+            batched_edge_feats = self.amrtext_wordEmbedding_3c_to_c(torch.cat([src_feats, tgt_feats, batched_edge_feats], dim=-1))
+
+            # split
+            batched_node_feats = batched_node_feats.split(num_nodes_by_batch)
+            batched_edge_feats = batched_edge_feats.split(num_edges_by_batch)
+            for batch_idx in range(batch_size):
+                amr_token_feats[batch_idx] = torch.cat([batched_node_feats[batch_idx],batched_edge_feats[batch_idx]], dim=0) # V + E, c
+
+            amr_token_feats = pad_1d_feats(amr_token_feats)[0] # b (V+E)max c
+            assert amr_token_feats.shape[1] == amr_token_seg_ids.shape[1]
+            assert (amr_token_feats.flatten(0, 1)[amr_token_seg_ids.flatten()==0]).sum() == 0
+            node_alignments = text_auxiliary['node_alignments']
+
+            amr_token_feats = self.amrtext_wordEmbedding_proj(amr_token_feats) # b (V+E)max c
+            return amrs, amr_token_feats, amr_token_seg_ids, text_feats, text_pad_masks, node_alignments
 
     def model_outputs(self, samples : NestedTensor, text_queries, auxiliary, targets=None):
         """ text_auxiliary
@@ -4333,7 +4380,7 @@ class AMR_Grounding_2DObj_withPad(AMR_Grounding_2DObj):
                                 'reason_2d': grounding_score_by_layer} ,} # list[b nq h w], num_layers
 
     def ref_choose_2d_loss(self, layer_gscore_output, matching_indices,  targets):
-        version = 'v5'
+        version = 'v3'
         if version == 'v2':
             # b nq
             is_valid = targets['isvalid'] # list[ni], batch
@@ -4374,7 +4421,7 @@ class AMR_Grounding_2DObj_withPad(AMR_Grounding_2DObj):
                 match_as_gt_idx = tgt_idx[sel_idx]
                 gt_probabilities[btc_idx][match_as_gt_idx] = 1.
             choose_loss = F.binary_cross_entropy_with_logits(layer_gscore_output[ref_is_valid], gt_probabilities[ref_is_valid], 
-                                                             reduction='none') # b
+                                                             reduction='none') # b nq
             return {'objdecoder_reason': choose_loss.sum() / num_refs}
 
         elif version == 'v5':
