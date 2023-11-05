@@ -72,31 +72,33 @@ def get_polynomial(
     
 def get_scheduler(optimizer, configs):
     name = configs['name']
+    if 'unit' not in configs:
+        unit = 'epoch'
+    else:
+        unit = configs['unit'] # epoch/step
+         
     if name == 'MultiStepLR':
+        print('假设你没用scheduler')
+        return None, None
+    
+    elif name == 'multistep_lr':
         milestones = configs['milestones']
         gamma = configs['gamma']
         return torch.optim.lr_scheduler.MultiStepLR(optimizer,
                                                     milestones=milestones,
                                                     gamma=gamma,
-                                                    verbose=True)
-    elif name == 'StepLR':
-        pass
-
-    elif name == 'ReduceLROnPlateau':
-        pass
+                                                    verbose=True), unit
     elif name == 'inverse_sqrt':
         return get_inverse_sqrt_schedule_with_warmup(optimizer,
                                                      num_warmup_steps=configs['num_warmup_steps'],
                                                      num_training_steps=configs['num_training_steps'],
-                                                     last_epoch=-1)
+                                                     last_epoch=-1), unit
     elif name == 'polymonial':
         return get_polynomial(optimizer=optimizer,
                               initial_learning_rate=configs['initial_learning_rate'],
                                end_learning_rate=configs['end_learning_rate'],
                                 decay_steps=configs['decay_steps'],
-                                 power=configs['power'] )
-
-
+                                 power=configs['power'] ), unit
     else:
         raise NotImplementedError
 
@@ -155,8 +157,10 @@ class Trainer:
         self.model = model 
         self.optimizer = optimizer
         self.clip_gradient_norm = model_configs['optimization']['clip_max_norm'] # 0.1
-        scheduler = get_scheduler(optimizer=optimizer, configs=model_configs['optimization']['scheduler'])
+        scheduler, steps_or_epoch = get_scheduler(optimizer=optimizer, configs=model_configs['optimization']['scheduler'])
         self.scheduler = scheduler
+        self.schedule_unit = steps_or_epoch
+
          
         # trainer
         self.out_dir = output_directory
@@ -256,8 +260,9 @@ class Trainer:
                     compute_mask.cache_clear()
                     gc.collect()
                     torch.cuda.empty_cache()
-                self.scheduler.step()
-
+                
+                if (self.schedule_unit == 'step') and (self.scheduler is not None):
+                    self.scheduler.step()
             # self.evaluate_ckpt()
             try:
                 self.evaluate_ckpt()
@@ -267,6 +272,9 @@ class Trainer:
             if self.distributed:
                 dist.barrier() 
                 
+            if (self.scheduler_unit == 'epoch') and (self.scheduler is not None):
+                self.scheduler.step()  
+
     @torch.no_grad()
     def evaluate_ckpt(self): # validate, test, visualize
         self.model.eval()
