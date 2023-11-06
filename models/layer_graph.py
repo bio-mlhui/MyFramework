@@ -1772,9 +1772,12 @@ class Grounding_v1_multihead_v2_MLP(geo_nn.MessagePassing):
         super().__init__(aggr=None,
                          flow=flow,)
         
+
+        self.query_proj = FeatureResizer(d_model, d_model, dropout=0.0, do_ln=True)
+
         self.context_2 = MLP(2 * d_model, d_model, d_model, num_layers=3)
         self.context_1 = MLP(d_model, d_model, 1, num_layers=3)
-   
+
         self.ref_2 = MLP(d_model, d_model, d_model, num_layers=3)
         self.ref_1 = MLP(d_model, d_model, 1, num_layers=3)
         
@@ -1795,7 +1798,8 @@ class Grounding_v1_multihead_v2_MLP(geo_nn.MessagePassing):
         device = edge_feats.device
         node_query_feats, node_query_pos = node_memories['feat'], node_memories['pos']
         node_query_feats = self.with_pos_embed(node_query_feats, node_query_pos) # V nq c
-        
+
+        node_query_feats = self.query_proj(node_query_feats)
         # c -> c
         # c * c -> 1
         scores = self.ref_1(self.ref_2(node_query_feats) * (node_feats.unsqueeze(-2))).squeeze(-1) # V nq
