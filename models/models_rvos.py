@@ -4045,7 +4045,7 @@ class AMR_Grounding_2DObj(nn.Module):
         return losses    
 
     def ref_choose_2d_loss(self, layer_gscore_output, matching_indices,  targets):
-        version = 'v2'
+        version = 'v1'
         if version == 'v1':
             is_valid = targets['isvalid'] # list[ni], batch
             referent_idx = targets['gt_referent_idx'] # list[int], batch

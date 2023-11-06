@@ -40,7 +40,7 @@ def run(process_id, trainer_configs, trainer_mode, trainer_name, gpu_ids):
     trainer = create_trainer(configs=trainer_configs, 
                             process_id=process_id, 
                             device_id=gpu_ids[process_id], 
-                            num_processes=len(gpu_ids))
+                            num_processes=len(gpu_ids),)
     
     if 'train' in trainer_mode:
         trainer.train()
@@ -102,7 +102,7 @@ if __name__=="__main__":
     configs = config_file_module.trainer_configs
 
     configs['out_dir'] = os.path.join('./', args.task.upper(), args.group, args.schedule_model_configs)
-    
+    configs['mode'] = args.mode
     configs['data']['data_dir'] = args.data_dir
     configs['data']['pt_tokenizer_dir'] = args.pt_dir
     configs['model']['pt_dir'] = args.pt_dir

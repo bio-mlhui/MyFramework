@@ -51,7 +51,8 @@ class Trainer:
                  trainer_ckpt,
                  wandb_configs,
                  visualize_configs,
-                 seed):
+                 seed,
+                 resume):
             
         self.distributed = num_processes > 1
         self.is_main_process = (process_id == 0)
@@ -91,7 +92,7 @@ class Trainer:
         self.epoch = -1
         self.iteration = -1
         if trainer_ckpt != "":
-            self.load_ckpt(trainer_ckpt)
+            self.load_ckpt(trainer_ckpt, resume=resume)
                         
         # visualize
         # 可视化model output 和 中间结果, to be added
@@ -302,7 +303,7 @@ class Trainer:
         torch.save(checkpoint_dict, filename)
         logging.info(f'保存了模型 {filename} {"但是还没有测试" if metrics is None else ""}')
 
-    def load_ckpt(self, ckpt_path):
+    def load_ckpt(self, ckpt_path, resume=False):
         assert os.path.exists(ckpt_path)
         
         checkpoint = torch.load(ckpt_path, map_location=self.device)
@@ -310,9 +311,13 @@ class Trainer:
         self.iteration = checkpoint['iteration']
         model_without_ddp = self.model.module if isinstance(self.model, DDP) else self.model
         model_without_ddp.load_state_dict(checkpoint['model_state_dict'], strict=False)
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        if self.scheduler is not None:
-            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        if resume:
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            if self.scheduler is not None:
+                self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        else:
+            # 不resume, 只load 模型, optimizer是config给的
+            pass
     
 @register_task
 def rvos(configs, process_id, device_id, num_processes,):
@@ -324,5 +329,6 @@ def rvos(configs, process_id, device_id, num_processes,):
         trainer_ckpt=configs['trainer_ckpt'],
         wandb_configs=configs['wandb'],
         visualize_configs=configs['visualize'],
-        seed=configs['seed']
+        seed=configs['seed'],
+        resume=configs['mode'] == 'train_resume'
     )
