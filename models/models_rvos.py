@@ -4559,7 +4559,32 @@ class AMR_Grounding_3DObj(nn.Module):
     @property
     def device(self):
         return self.pixel_mean.device
-    
+
+    def positional_encoding(self, g, pos_enc_dim):
+        """
+            Graph positional encoding v/ Laplacian eigenvectors
+        """
+        import scipy as sp
+        import dgl
+        # Laplacian
+        A = g.adjacency_matrix_scipy(return_edge_ids=False).astype(float)
+        N = sp.diags(dgl.backend.asnumpy(g.in_degrees()).clip(1) ** -0.5, dtype=float)
+        L = sp.eye(g.number_of_nodes()) - N * A * N
+
+        # # Eigenvectors with numpy
+        # EigVal, EigVec = np.linalg.eig(L.toarray())
+        # idx = EigVal.argsort() # increasing order
+        # EigVal, EigVec = EigVal[idx], np.real(EigVec[:,idx])
+        # g.ndata['pos_enc'] = torch.from_numpy(np.abs(EigVec[:,1:pos_enc_dim+1])).float() 
+
+        # Eigenvectors with scipy
+        #EigVal, EigVec = sp.linalg.eigs(L, k=pos_enc_dim+1, which='SR')
+        EigVal, EigVec = sp.linalg.eigs(L, k=pos_enc_dim+1, which='SR', tol=1e-2) # for 40 PEs
+        EigVec = EigVec[:, EigVal.argsort()] # increasing order
+        g.ndata['pos_enc'] = torch.from_numpy(EigVec[:,1:pos_enc_dim+1]).float() 
+
+        return g
+
     def encode_text(self, text_queries, text_auxiliary, device):
         amrs = text_auxiliary['amrs'] # list[Graph]
         batch_size = len(amrs)
@@ -4610,16 +4635,18 @@ class AMR_Grounding_3DObj(nn.Module):
 
         # list[bt nq c], num_layers,  obj_queries
         # list[bt nq h w], num_layers,  pred_masks
+        # TODO: 添加text 特征变换
         temporal_decoder_output = self.temporal_decoder(samples, 
                                                 text_feats=text_feats, 
                                                 text_pad_masks=text_pad_masks,
                                                 amr_feats=amr_token_feats,
                                                 amr_pad_masks=amr_token_seg_ids==0)
-         # l b nq c, l b t nqf c, l b nq nqf, l b t nq h w,
+         # l b nq c, l b t nqf c, l b nq T nqf
+         #  l b t nq h w,
         video_queries, frame_queries, cross_attn_weights,\
               pred_masks_by_layer, multiscale_feats = temporal_decoder_output['video_queries'], temporal_decoder_output['frame_queries'], \
                                                             temporal_decoder_output['cross_attn_weights'],\
-                                                         temporal_decoder_output['pred_masks'],temporal_decoder_output['multiscale_feats']
+                                                         temporal_decoder_output['pred_masks'], temporal_decoder_output['multiscale_feats']
 
         if self.mode == 'rvos测试预训练vis':
             return {'tempdecoder': {'pred_masks': pred_masks_by_layer,}}
@@ -4633,21 +4660,18 @@ class AMR_Grounding_3DObj(nn.Module):
                                                             text_feats=text_feats, 
                                                             text_pad_masks=text_pad_masks,
                                                             amr_feats=amr_token_feats,
-                                                            amr_pad_masks=amr_token_seg_ids==0)
-                    g_score_by_batch = []
-                    for bch_idx in range(batch_size):
-                        bch_node_score = torch.stack([grounding_score[idx] for idx, batch_id in enumerate(nodes_batch_ids) if batch_id == bch_idx], dim=0)
-                        g_score_by_batch.append(bch_node_score) # vi nq
-
+                                                            amr_pad_masks=amr_token_seg_ids==0) # list[vi nq]
+                    
                     if self.reason_3d_choose == '第一个':
-                        grounding_score = torch.stack([lg[0] for lg in g_score_by_batch], dim=0)
+                        grounding_score = torch.stack([lg[0] for lg in grounding_score], dim=0)
                     else:
                         raise ValueError()
-                    grounding_score_by_layer.append(grounding_score)
+                    grounding_score_by_layer.append(torch.stack(grounding_score, dim=0))
                 else:
                     grounding_score_by_layer.append(None)
+
             return {'tmpdecoder': {'pred_masks': pred_masks_by_layer, # b nq h w
-                                   'reason_2d': grounding_score_by_layer} ,} # list[b nq h w], num_layers
+                                   'reason_3d': grounding_score_by_layer} ,} # list[b nq h w], num_layers
 
     def rvos_targets_handler(self, targets, pad_H, pad_W):
         batch_size = len(targets)
