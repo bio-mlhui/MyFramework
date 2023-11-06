@@ -290,7 +290,7 @@ class Trainer:
             'iteration': self.iteration,
             'model_state_dict': model_without_ddp.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'scheduler_state_dict': self.scheduler.state_dict(),
+            'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler is not None else None,
             # 'rng_state': rng_state_dict
         }
         epoch_dir = os.path.join(self.out_dir, f'epoch_{self.epoch}')
@@ -311,7 +311,8 @@ class Trainer:
         model_without_ddp = self.model.module if isinstance(self.model, DDP) else self.model
         model_without_ddp.load_state_dict(checkpoint['model_state_dict'], strict=False)
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        if self.scheduler is not None:
+            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
     
 @register_task
 def rvos(configs, process_id, device_id, num_processes,):
