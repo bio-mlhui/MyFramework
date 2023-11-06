@@ -4045,18 +4045,35 @@ class AMR_Grounding_2DObj(nn.Module):
         return losses    
 
     def ref_choose_2d_loss(self, layer_gscore_output, matching_indices,  targets):
-        is_valid = targets['isvalid'] # list[ni], batch
-        referent_idx = targets['gt_referent_idx'] # list[int], batch
-        ref_is_valid = torch.tensor([isva[ridx].any() for isva, ridx in zip(is_valid, referent_idx)]).bool() # b
-        num_refs = (ref_is_valid.int().sum())
-        match_as_gt_indices = [] # list[int], bt
-        for ref_idx, (tgt_idx, src_idx) in zip(referent_idx,  matching_indices): # b
-            sel_idx = src_idx.tolist().index(ref_idx)
-            match_as_gt_idx = tgt_idx[sel_idx]
-            match_as_gt_indices.append(match_as_gt_idx.item())
-        match_as_gt_indices = torch.tensor(match_as_gt_indices).long().to(layer_gscore_output.device) # b
-        choose_loss = F.cross_entropy(layer_gscore_output[ref_is_valid], match_as_gt_indices[ref_is_valid], reduction='none') # b
-        return {'objdecoder_reason': choose_loss.sum() / num_refs}
+        version = 'v2'
+        if version == 'v1':
+            is_valid = targets['isvalid'] # list[ni], batch
+            referent_idx = targets['gt_referent_idx'] # list[int], batch
+            ref_is_valid = torch.tensor([isva[ridx].any() for isva, ridx in zip(is_valid, referent_idx)]).bool() # b
+            num_refs = (ref_is_valid.int().sum())
+            match_as_gt_indices = [] # list[int], bt
+            for ref_idx, (tgt_idx, src_idx) in zip(referent_idx,  matching_indices): # b
+                sel_idx = src_idx.tolist().index(ref_idx)
+                match_as_gt_idx = tgt_idx[sel_idx]
+                match_as_gt_indices.append(match_as_gt_idx.item())
+            match_as_gt_indices = torch.tensor(match_as_gt_indices).long().to(layer_gscore_output.device) # b
+            choose_loss = F.cross_entropy(layer_gscore_output[ref_is_valid], match_as_gt_indices[ref_is_valid], reduction='none') # b
+            return {'objdecoder_reason': choose_loss.sum() / num_refs}
+        
+        elif version == 'v2':
+            is_valid = targets['isvalid'] # list[ni], batch
+            referent_idx = targets['gt_referent_idx'] # list[int], batch
+            ref_is_valid = torch.tensor([isva[ridx].any() for isva, ridx in zip(is_valid, referent_idx)]).bool() # b
+            assert ref_is_valid.any()
+            choose_loss_by_batch = []
+            for ref_val, ref_idx, (src_idx, tgt_idx), g_score in zip(ref_is_valid, referent_idx, matching_indices, layer_gscore_output):
+                if ref_val:
+                    # nq -> ni
+                    pred = g_score[src_idx]
+                    sel_idx = torch.tensor(tgt_idx.tolist().index(ref_idx)).to(self.device)
+                    choose_loss_by_batch.append(F.cross_entropy(pred, sel_idx))
+            return {'objdecoder_reason': torch.tensor(choose_loss_by_batch).mean()}
+        
 
     def forward(self, samples : NestedTensor, text_queries, auxiliary, targets, visualize=False):
         # 把pixel mean, pixel std加上去
