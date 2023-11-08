@@ -2151,6 +2151,7 @@ class Spatial_Temporal_Grounding_v2(geo_nn.MessagePassing):
                 nn.init.xavier_uniform_(p)
         glorot(self.context_2)
         glorot(self.context_1)
+        glorot(self.context_3)
         glorot(self.ref_1)
         glorot(self.ref_2)
 
@@ -2301,7 +2302,7 @@ class Spatial_Temporal_Grounding_v2(geo_nn.MessagePassing):
         # E h nq c @ 1 h c c -> E h nq c
         context_feat_j = context_feat_j @ self.context_2
         context_feat_i = context_feat_i @ self.context_2
-        context_feat = context_feat_j * context_feat_i
+        context_feat = context_feat_j * context_feat_i # E h nq c, E h nq c
         # E h nq c @ 1 h c c -> E h nq c
         context_feat = context_feat @ self.context_3
         # E h nq 2c @ 1 h 2c c -> E h nq c
