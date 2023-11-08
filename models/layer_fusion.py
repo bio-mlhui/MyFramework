@@ -234,68 +234,6 @@ class VidQuery_Text_v2(nn.Module):
 def vidquery_text_v2(configs):
     return VidQuery_Text_v2(configs)
 
-# multiscale + text
-class perFrameVideo_Text_v1(nn.Module):
-    def __init__(self, d_model, nhead, dropout) -> None:
-        super().__init__()
-        self.cross_module = VisionLanguageFusionModule(d_model=d_model,
-                                                                nhead=nhead,
-                                                                dropout=dropout)
-        self.text1d_pos = build_position_encoding(position_embedding_name='1d')
-        # amr shortest path positional embedding
-    
-    def forward(self, video_feats, video_poses,
-                text_feats, text_pad_masks,
-                amr_feats, amr_pad_masks):
-        # dict, bt c h w
-        # text_feats: b s c
-        # amr_feats: b v+e_max c
-        BT = video_feats[0].shape[0]
-        B = len(text_feats)
-        T = BT // B
-        text_feats = repeat(text_feats, 'b s c -> (b t) s c', t=T)
-        text_pad_masks = repeat(text_pad_masks, 'b s -> (b t) s',t=T)
-        amr_feats = repeat(amr_feats, 'b s c -> (b t) s c', t=T)
-        amr_pad_masks = repeat(amr_pad_masks, 'b s -> (b t) s',t=T)
-
-        text_pos = self.text1d_pos(text_pad_masks, hidden_dim=text_feats.shape[-1]).permute(0,2,1) # b s c
-        amr_pos = torch.zeros_like(amr_feats)
-        memory = torch.cat([text_feats, amr_feats], dim=1)   
-        memory_pad_masks = torch.cat([text_pad_masks, amr_pad_masks], dim=1)
-        memory_pos = torch.cat([text_pos, amr_pos], dim=1)
-
-        for lvl, (tgt_feat, tgt_pos) in enumerate(zip(video_feats, video_poses)):
-            tgt_pos = tgt_pos.flatten(2).permute(0, 2, 1) # bt c h w -> bt c hw -> bt hw c
-            h, w = tgt_feat.shape[-2:]
-            tgt_feat = tgt_feat.flatten(2).permute(0,2,1) # bt hw c
-            tgt_feat = self.cross_module(tgt=tgt_feat.permute(1,0,2),
-                                    memory=memory.permute(1,0,2), 
-                                    memory_key_padding_mask=memory_pad_masks,
-                                    pos=memory_pos.permute(1,0,2), 
-                                    query_pos=tgt_pos.permute(1,0,2))[0]
-            video_feats[lvl] = rearrange(tgt_feat, '(h w) bt c-> bt c h w',h=h,w=w)
-
-        return video_feats
-
-@register_fusion
-def perFrameVideo_text_v1(configs):
-    return perFrameVideo_Text_v1(d_model=configs['d_model'],
-                                 nhead=configs['nhead'],
-                                 dropout=configs['dropout'])
-
-class perFrameVideo_Text_nofusion(nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
-    
-    def forward(self, video_feats, video_poses,
-                text_feats=None, text_pad_masks=None,
-                amr_feats=None, amr_pad_masks=None):
-        return video_feats
-
-@register_fusion
-def perFrameVideo_text_nofusion(configs):
-    return perFrameVideo_Text_nofusion()
-
 
 class perFrameMultiscaleFlatten_Text_nofusion(nn.Module):
     def __init__(self) -> None:
@@ -354,68 +292,533 @@ def perFrameVideoFlatten_text_v1(configs):
                                              nheads=configs['nheads'],
                                              dropout=configs['dropout'])
 
-# perframe query + text
-class perFrameQuery_Text_nofusion(nn.Module):
-    def __init__(self) -> None:
+
+class CommonCrossAttentionWeights(nn.Module):
+    def __init__(self, 
+                 d_model,
+                 nheads,
+                  dropout=0.0,
+                  dot_or_add='dot'):
         super().__init__()
-    
-    def forward(self, frame_query, 
-                text_feats=None, text_pad_masks=None,
-                amr_feats=None, amr_pad_masks=None):
-        return frame_query
 
-@register_fusion
-def perFrameQuery_text_nofusion_(configs):
-    return perFrameQuery_Text_nofusion()
+        assert d_model % nheads == 0
+        head_dim = d_model // nheads
+        self.scale = head_dim ** -0.5
+        self.nheads = nheads
+        self.head_dim = head_dim
+        self.dot_or_add = dot_or_add
 
-# dot_cross
-class perFrameQuery_Text_v1(nn.Module):
-    def __init__(self, d_model, nheads, dropout) -> None:
+        self.amr_emb = nn.Linear(d_model, nheads * head_dim, bias=False)
+        self.amr_v_emb = nn.Linear(d_model, nheads * head_dim, bias=False)
+
+        self.vis_emb = nn.Linear(d_model, nheads * head_dim, bias=False)
+        self.vis_v_emb = nn.Linear(d_model, nheads * head_dim, bias=False)
+  
+        self.visual_out = nn.Sequential( nn.Linear(d_model, d_model), nn.Dropout(dropout))
+        self.amr_out = nn.Sequential( nn.Linear(d_model, d_model), nn.Dropout(dropout))
+
+    def with_pos_embed(self, tensor, pos):
+        return tensor if pos is None else tensor + pos
+
+    def forward(self, amr_feats, amr_pad_mask, visual_feats):
+        amr_pad_mask = repeat(amr_pad_mask, 'b s -> (b h) s',h=self.nheads)
+        # b s c, b s, b s c
+        amr_feats_qk = self.amr_emb(amr_feats)
+        visual_feats_qk = self.vis_emb(visual_feats)
+        amr_feats_qk, visual_feats_qk = map(lambda t: rearrange(t, 'b s (h c) -> (b h) s c', h=self.nheads), (amr_feats_qk, visual_feats_qk))
+
+        amr_values = self.amr_v_emb(amr_feats)
+        visual_values = self.vis_v_emb(visual_feats)
+        amr_values, visual_values = map(lambda t: rearrange(t, 'b s (h c) -> (b h) s c', h=self.nheads), (amr_values, visual_values))
+
+        common_weights = torch.einsum('bnc,bmc->bnm', amr_feats_qk, visual_feats_qk) * self.scale
+
+        # amr cross vis:
+        amr_vis_weights = common_weights.softmax(-1) # b s_amr s_vis
+        amr_feats_2 = amr_vis_weights @ visual_values
+        amr_feats_2 = rearrange(amr_feats_2, '(b h) s c -> b s (h c)', h=self.nheads)
+        amr_feats_2 = self.amr_out(amr_feats_2)
+
+        # visual cross text:
+        vis_text_weights = common_weights.permute(0, 2, 1) # bh s_vis s_amr
+        vis_text_weights.masked_fill_(amr_pad_mask.unsqueeze(1), torch.finfo(common_weights.dtype).min)
+        vis_text_weights = vis_text_weights.softmax(dim=-1)
+        visual_feats_2 = vis_text_weights @ amr_values
+        visual_feats_2 = rearrange(visual_feats_2, '(b h) s c -> b s (h c)', h=self.nheads)
+        visual_feats_2 = self.visual_out(visual_feats_2)
+
+        if self.dot_or_add == 'dot':
+            return amr_feats_2 * amr_feats, visual_feats * visual_feats_2
+        elif self.dot_or_add =='add':
+            return amr_feats_2 + amr_feats, visual_feats + visual_feats_2
+        elif self.dot_or_add == 'dot_add':
+            return amr_feats + (amr_feats * amr_feats_2), visual_feats + (visual_feats * visual_feats_2)
+
+class VisionLanguageFusionModule_v2(nn.Module):
+    def __init__(self, d_model, nhead, 
+                 dropout=0.0, dot_or_add='dot'):
         super().__init__()
-        self.cross_module = VisionLanguageFusionModule(d_model=d_model,
-                                                        nhead=nheads,
-                                                        dropout=dropout)
-        self.text1d_pos = build_position_encoding(position_embedding_name='1d')
-    
-    def forward(self, frame_query,
-                text_feats=None, text_pad_masks=None,
-                amr_feats=None, amr_pad_masks=None):
-        assert (amr_feats is not None) and (amr_pad_masks is not None)
-        T, Nq, batch_size, _ = frame_query.shape
-        # t nq b c
-        output = frame_query.flatten(0,1)
-        memory = amr_feats.clone() # b v+e_max c
-        memory_key_padding_mask = amr_pad_masks # b v+e_max
-        memory_pos = torch.zeros_like(amr_feats) 
+        self.multihead_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        self.dot_or_add = dot_or_add
+    def with_pos_embed(self, tensor, pos):
+        return tensor if pos is None else tensor + pos
 
-        if text_feats is not None:
-            assert text_pad_masks is not None
-            text_pos = self.text1d_pos(text_pad_masks, hidden_dim=text_feats.shape[-1]).permute(0, 2, 1) # b s c
+    def forward(self, tgt, memory,
+                memory_key_padding_mask = None,
+                pos= None,
+                query_pos = None):
+        tgt2, attn_weights = self.multihead_attn(query=self.with_pos_embed(tgt, query_pos),
+                                   key=self.with_pos_embed(memory, pos),
+                                   value=memory, attn_mask=None,
+                                   key_padding_mask=memory_key_padding_mask) # b tgt src, float, 0,1
+        if self.dot_or_add == 'add':
+            return tgt + tgt2, attn_weights
+        else:
+            return tgt * tgt2, attn_weights
+
+# multiscale + text
+class Visual_AMRText_SeqSeq(nn.Module):
+    def __init__(self, 
+                 d_model,
+                nheads=8, 
+                dropout=0.0,
+                amr_pos_type=['lap', 'depth'],
+                text_pos_type=['sin', 'learned'],
+                use_text=False,
+                transform_amr_text=False,
+                dot_or_add='dot',) -> None:
+        super().__init__()
+        self.d_model = d_model
+        self.amr_pos_type = amr_pos_type
+        self.text_pos_type = text_pos_type
+        self.transform_amr_text = transform_amr_text             # 这一层内部全部转换text, visual,
+                                                                     # 但是transoform amr text控制是否把内部的text用起来
+        self.use_text = use_text
+        
+        if self.transform_amr_text:
+            self.multiscale_text_module = CommonCrossAttentionWeights(d_model=d_model,
+                                                                       nheads=nheads,
+                                                                         dropout=dropout,
+                                                                      dot_or_add=dot_or_add)
+        else:
+            self.multiscale_text_module = VisionLanguageFusionModule_v2(d_model=d_model,
+                                                                     nhead=nheads,
+                                                                     dropout=dropout,
+                                                                     dot_or_add=dot_or_add,)
+        if 'depth' in amr_pos_type:
+            # 最大深度
+            self.depth_amr_pos = nn.Embedding(50, embedding_dim=d_model)
+        if 'learned' in text_pos_type:
+            self.lrn_text_pos = nn.Embedding(512, embedding_dim=512)
+        elif 'sin' in self.text_pos_type:
+            self.sin_text_pos = build_position_encoding(position_embedding_name='1d')
+
+    def amr_positional_encoding(self, g, pos_enc_dim):
+        """
+            Graph positional encoding v/ Laplacian eigenvectors
+        """
+        if self.amr_pos_type == 'lap':
+            import scipy as sp
+            import dgl
+            # Laplacian
+            A = g.adjacency_matrix_scipy(return_edge_ids=False).astype(float)
+            N = sp.diags(dgl.backend.asnumpy(g.in_degrees()).clip(1) ** -0.5, dtype=float)
+            L = sp.eye(g.number_of_nodes()) - N * A * N
+
+            # # Eigenvectors with numpy
+            # EigVal, EigVec = np.linalg.eig(L.toarray())
+            # idx = EigVal.argsort() # increasing order
+            # EigVal, EigVec = EigVal[idx], np.real(EigVec[:,idx])
+            # g.ndata['pos_enc'] = torch.from_numpy(np.abs(EigVec[:,1:pos_enc_dim+1])).float() 
+
+            # Eigenvectors with scipy
+            #EigVal, EigVec = sp.linalg.eigs(L, k=pos_enc_dim+1, which='SR')
+            EigVal, EigVec = sp.linalg.eigs(L, k=pos_enc_dim+1, which='SR', tol=1e-2) # for 40 PEs
+            EigVec = EigVec[:, EigVal.argsort()] # increasing order
+            g.ndata['pos_enc'] = torch.from_numpy(EigVec[:,1:pos_enc_dim+1]).float() 
+
+            return g
+
+    def get_amr_poses(self, amrs=None, amr_token_feats=None, amr_token_seg_ids=None):
+        # b (v+e)_max c
+        amr_poses = torch.zeros_like(amr_token_feats)
+        if 'lap' in self.amr_pos_type:
+            raise NotImplementedError()
+        return amr_poses
+
+    def get_text_poses(self, text_feats=None, text_pad_masks=None):
+        # b s c
+        text_poses = torch.zeros_like(text_feats)
+        if 'sin' in self.text_pos_type:
+            sin_pos = self.sin_text_pos(text_pad_masks, hidden_dim=text_feats.shape[-1]).permute(0, 2, 1) # b s c
+            text_poses += sin_pos
+        return text_poses
+
+    def forward_video_multiscale(self,
+                multiscale_feats, multiscale_poses, multiscale_is_flattened,
+                amrs, amr_token_feats, amr_token_seg_ids,
+                text_feats=None, text_pad_masks=None):
+        B = len(amrs)
+        if multiscale_is_flattened:
+            # bt \sigmaHE c
+            assert len(multiscale_feats.shape) == 3
+            BT = multiscale_is_flattened.shape[0]
+            multiscale_feats = multiscale_feats + multiscale_poses # bt s c
+        else:
+            # list[bt c h w]
+            BT = multiscale_feats[0].shape[0]
+            scale_sizes = [mf.shape[-2:] for mf in multiscale_feats]
+            scale_length = [sum(mf.shape[-2:]) for mf in multiscale_feats]
+            flattened_multiscale = torch.cat([mf.flatten(2) for mf in multiscale_feats], dim=-1) # bt c \sigmaHW
+            flattened_poses = torch.cat([mf.flatten(2) for mf in multiscale_poses], dim=-1)
+            flattened_multiscale = flattened_multiscale + flattened_poses
+            multiscale_feats = flattened_multiscale.permute(0, 2, 1) # bt s c
+
+        T = BT // B
+        amr_poses = self.get_amr_poses(amrs=amrs, amr_token_feats=amr_token_feats, amr_token_seg_ids=amr_token_seg_ids)
+        memory = repeat(amr_token_feats, 'b s c -> (b t) s c', t=T)    
+        memory_pad_masks = repeat(amr_token_seg_ids==0, 'b s -> (b t) s',t=T)
+        memory_poses = repeat(amr_poses, 'b s c -> (b t) s c', t=T)
+
+        if self.use_text:
+            assert text_feats is not None
+            text_poses = self.get_text_poses(text_feats=text_feats, 
+                                             text_pad_masks=text_pad_masks)
+            memory = torch.cat([memory, 
+                                repeat(text_feats, 'b s c -> (b t) s c', t=T)], dim=1)
+            
+            memory_pad_masks = torch.cat([memory_pad_masks, 
+                                          repeat(text_pad_masks, 'b s -> (b t) s',t=T)], dim=1)
+            
+            memory_poses = torch.cat([memory_poses, repeat(text_poses, 'b s c -> (b t) s c', t=T)])
+        
+        memory = memory + memory_poses # bt s c
+
+        if self.transform_amr_text:
+            memory, multiscale_feats = self.multiscale_text_module(amr_feats=memory,
+                                                                   amr_pad_mask=memory_pad_masks, 
+                                                                   visual_feats=multiscale_feats)
+        else:
+            multiscale_feats = self.multiscale_text_module(tgt=multiscale_feats.permute(1,0,2),
+                                                            memory=memory.permute(1,0,2), 
+                                                            memory_key_padding_mask=memory_pad_masks,
+                                                            pos=None, 
+                                                            query_pos=multiscale_feats.permute(1,0,2))[0]
+            multiscale_feats = multiscale_feats.permute(1, 0, 2)
+        
+        if not multiscale_is_flattened:
+            multiscale_feats = multiscale_feats.split(scale_length, dim=-1) # list[bt c hw]
+            multiscale_feats = [rearrange(mf, 'bt c (h w) -> bt c h w', h=sz[0], w=sz[1]) for mf, sz in zip(multiscale_feats, scale_sizes)]
+
+        if not self.transform_amr_text:
+            return multiscale_feats, amr_token_feats, text_feats
+        else:
+            amr_length = amr_token_feats.shape[1]
+            if self.use_text:
+                amr_token_feats = rearrange(memory[:, :amr_length], '(b t) s c -> b t s c', b=B, T=T)
+                text_feats = rearrange(memory[:, amr_length:], '(b t) s c -> b t s c', b=B, T=T)
+                amr_token_feats = amr_token_feats.mean(1)
+                text_feats = text_feats.mean(1)
+            else:
+                amr_token_feats = memory
+                amr_token_feats = amr_token_feats.mean(1)
+            # bt -> b
+            return multiscale_feats, amr_token_feats, text_feats
+
+
+    def forward_video_frameQuery(self,
+                frame_queries, # b t nq c
+                amrs, amr_token_feats, amr_token_seg_ids,
+                text_feats=None, text_pad_masks=None):
+
+        B, T, nq, _ = frame_queries.shape
+
+        amr_poses = self.get_amr_poses(amrs=amrs, amr_token_feats=amr_token_feats, amr_token_seg_ids=amr_token_seg_ids)
+        memory = amr_token_feats.clone(),    
+        memory_pad_masks = amr_token_seg_ids==0
+        memory_poses = amr_poses
+
+        if self.use_text:
+            assert text_feats is not None
+            text_poses = self.get_text_poses(text_feats=text_feats, 
+                                             text_pad_masks=text_pad_masks)
+            memory = torch.cat([memory,text_feats], dim=1)
+            memory_pad_masks = torch.cat([memory_pad_masks, text_pad_masks], dim=1)
+            memory_poses = torch.cat([memory_poses, text_poses])
+        
+        memory = memory + memory_poses # b s c
+        frame_queries = frame_queries.flatten(1, 2) # b tnq c
+        if self.transform_amr_text:
+            memory, frame_queries = self.query_text_module(memory=memory,
+                                                        memory_pad_masks=memory_pad_masks,
+                                                        visual_feats=frame_queries)
+        else:
+            frame_queries = self.query_text_module(tgt=frame_queries.permute(1,0,2),
+                                                        memory=memory.permute(1,0,2), 
+                                                        memory_key_padding_mask=memory_pad_masks,
+                                                        pos=None, 
+                                                        query_pos=None)[0]
+            frame_queries = frame_queries.permute(1,0,2)
+
+        frame_queries = rearrange(frame_queries, 'b (t nq) c -> b t nq c',t=T, nq=nq)
+        if not self.transform_amr_text:
+            return frame_queries, amr_token_feats, text_feats
+        else:
+            amr_length = amr_token_feats.shape[1]
+            if self.use_text:
+                amr_token_feats = memory[:, :amr_length]
+                text_feats = memory[:, amr_length:]
+            else:
+                amr_token_feats = memory
+            return frame_queries, amr_token_feats, text_feats
+
+
+    def forward_image_multiscale(self,
+                multiscale_feats, multiscale_poses, multiscale_is_flattened,
+                amrs, amr_token_feats, amr_token_seg_ids,
+                text_feats=None, text_pad_masks=None): # 假设multiscale肯定转换
+        B = len(amrs)
+        if multiscale_is_flattened:
+            # b \sigmaHE c
+            assert len(multiscale_feats.shape) == 3
+            multiscale_feats = multiscale_feats + multiscale_poses # b s c
+        else:
+            # list[b c h w]
+            scale_sizes = [mf.shape[-2:] for mf in multiscale_feats]
+            scale_length = [(mf.shape[-2:][0] * mf.shape[-2:][1]) for mf in multiscale_feats]
+            flattened_multiscale = torch.cat([mf.flatten(2) for mf in multiscale_feats], dim=-1) # b c \sigmaHW
+            flattened_poses = torch.cat([mf.flatten(2) for mf in multiscale_poses], dim=-1)
+            flattened_multiscale = flattened_multiscale + flattened_poses
+            multiscale_feats = flattened_multiscale.permute(0, 2, 1) # b s c
+        amr_poses = self.get_amr_poses(amrs=amrs, amr_token_feats=amr_token_feats, amr_token_seg_ids=amr_token_seg_ids)
+        memory = amr_token_feats.clone()   
+        memory_pad_masks = amr_token_seg_ids==0
+        memory_poses = amr_poses
+
+        if self.use_text:
+            assert text_feats is not None
+            text_poses = self.get_text_poses(text_feats=text_feats, text_pad_masks=text_pad_masks)
             memory = torch.cat([memory, text_feats], dim=1)
-            memory_key_padding_mask = torch.cat([memory_key_padding_mask, text_pad_masks], dim=1)
-            memory_pos = torch.cat([memory_pos,text_pos], dim=1)
+            memory_pad_masks = torch.cat([memory_pad_masks, text_pad_masks], dim=1)
+            memory_poses = torch.cat([memory_poses, text_poses], dim=1)
+        
+        memory = memory + memory_poses # b s c
 
-        output = self.cross_module(tgt=output,
-                                    memory=memory.permute(1,0,2), 
-                                    memory_key_padding_mask=memory_key_padding_mask,
-                                    pos=memory_pos.permute(1,0,2), 
-                                    query_pos=None)[0]
-        output = rearrange(output, '(t nq) b c -> t nq b c',t=T, nq=Nq)
-        return output
+        if self.transform_amr_text:
+            memory, multiscale_feats = self.multiscale_text_module(amr_feats=memory,
+                                                                   amr_pad_mask=memory_pad_masks, 
+                                                                   visual_feats=multiscale_feats) # b s c
+        else:
+            multiscale_feats = self.multiscale_text_module(tgt=multiscale_feats.permute(1,0,2),
+                                                            memory=memory.permute(1,0,2), 
+                                                            memory_key_padding_mask=memory_pad_masks,
+                                                            pos=None, 
+                                                            query_pos=multiscale_feats.permute(1,0,2))[0]
+            multiscale_feats = multiscale_feats.permute(1, 0, 2)
+        
+        if not multiscale_is_flattened:
+            multiscale_feats = multiscale_feats.permute(0, 2, 1) # b c s
+            multiscale_feats = multiscale_feats.split(scale_length, dim=-1) # list[bt c hw]
+            multiscale_feats = [rearrange(mf, 'bt c (h w) -> bt c h w', h=sz[0], w=sz[1]) for mf, sz in zip(multiscale_feats, scale_sizes)]
+
+        if not self.transform_amr_text:
+            return multiscale_feats, amr_token_feats, text_feats
+        else:
+            amr_length = amr_token_feats.shape[1]
+            if self.use_text:
+                amr_token_feats = memory[:, :amr_length]
+                text_feats = memory[:, amr_length:]
+            else:
+                amr_token_feats = memory
+            # bt -> b
+            return multiscale_feats, amr_token_feats, text_feats
+
+
+
+    def forward(self,
+                amrs, amr_token_feats, amr_token_seg_ids,
+                is_image_multiscale=False,
+                is_video_multiscale=False,
+                is_video_frame_query=False,
+                text_feats=None, text_pad_masks=None,
+
+                frame_queries=None, # b t nq c
+                multiscale_feats=None, multiscale_poses=None, multiscale_is_flattened=None,
+                ):
+        if is_video_multiscale:
+            return self.forward_video_multiscale(multiscale_feats=multiscale_feats,
+                                           multiscale_poses=multiscale_poses,
+                                           multiscale_is_flattened=multiscale_is_flattened,
+                                           amrs=amrs, 
+                                            amr_token_feats=amr_token_feats, 
+                                            amr_token_seg_ids=amr_token_seg_ids, 
+                                            text_feats=text_feats, 
+                                            text_pad_masks=text_pad_masks)
+        elif is_image_multiscale:
+            return self.forward_image_multiscale(multiscale_feats=multiscale_feats,
+                                           multiscale_poses=multiscale_poses,
+                                           multiscale_is_flattened=multiscale_is_flattened,
+                                           amrs=amrs, 
+                                            amr_token_feats=amr_token_feats, 
+                                            amr_token_seg_ids=amr_token_seg_ids, 
+                                            text_feats=text_feats, 
+                                            text_pad_masks=text_pad_masks)
+        elif is_video_frame_query:
+            return self.forward_video_frameQuery(frame_queries=frame_queries,
+                                            amrs=amrs, 
+                                            amr_token_feats=amr_token_feats, 
+                                            amr_token_seg_ids=amr_token_seg_ids, 
+                                            text_feats=text_feats, 
+                                            text_pad_masks=text_pad_masks)
+        pass
 
 @register_fusion
-def perFrameQuery_text_v1(configs):
-    return perFrameQuery_Text_v1(d_model=configs['d_model'],
-                                nheads=configs['nheads'],
-                                dropout=configs['dropout'])
+def visual_amrtext_seqseq(configs):
+    return Visual_AMRText_SeqSeq(d_model=configs['d_model'],
+                                    nheads=configs['nheads'],
+                                    dropout=configs['dropout'],
+                                    amr_pos_type=configs['amr_pos_type'],
+                                    text_pos_type=configs['text_pos_type'],
+                                    use_text=configs['use_text'],
+                                    transform_amr_text=configs['transform_amr_text'],
+                                    dot_or_add=configs['dot_or_add'],)
+
+class perFrameQuery_AMRText(nn.Module):
+    def __init__(self, 
+                 d_model,
+                nheads=8, 
+                dropout=0.0,
+                no_fusion=False,
+                amr_pos_type=['lap', 'depth'],
+                text_pos_type=['sin', 'learned'],
+                use_text=False,
+                transform_amr_text=False,
+                dot_or_add='dot') -> None:
+        super().__init__()
+        self.d_model = d_model
+        self.no_fusion = no_fusion
+        if no_fusion:
+            return
+        self.amr_pos_type = amr_pos_type
+        self.text_pos_type = text_pos_type
+        self.transform_amr_text = transform_amr_text # 是否
+        self.use_text = use_text
+        if self.transform_amr_text:
+            self.query_text_module = CommonCrossAttentionWeights(d_model=d_model, nhead=nheads, dropout=dropout,
+                                                                      dot_or_add=dot_or_add)
+        else:
+            self.query_text_module = VisionLanguageFusionModule(d_model=d_model,
+                                                                     nhead=nheads,
+                                                                     dropout=dropout)
+        if 'depth' in amr_pos_type:
+            # 最大深度
+            self.depth_amr_pos = nn.Embedding(50, embedding_dim=d_model)
+        if 'learned' in text_pos_type:
+            self.lrn_text_pos = nn.Embedding(512, embedding_dim=512)
+        elif 'sin' in self.text_pos_type:
+            self.sin_text_pos = build_position_encoding(position_embedding_name='1d')
+
+    def amr_positional_encoding(self, g, pos_enc_dim):
+        """
+            Graph positional encoding v/ Laplacian eigenvectors
+        """
+        if self.amr_pos_type == 'lap':
+            import scipy as sp
+            import dgl
+            # Laplacian
+            A = g.adjacency_matrix_scipy(return_edge_ids=False).astype(float)
+            N = sp.diags(dgl.backend.asnumpy(g.in_degrees()).clip(1) ** -0.5, dtype=float)
+            L = sp.eye(g.number_of_nodes()) - N * A * N
+
+            # # Eigenvectors with numpy
+            # EigVal, EigVec = np.linalg.eig(L.toarray())
+            # idx = EigVal.argsort() # increasing order
+            # EigVal, EigVec = EigVal[idx], np.real(EigVec[:,idx])
+            # g.ndata['pos_enc'] = torch.from_numpy(np.abs(EigVec[:,1:pos_enc_dim+1])).float() 
+
+            # Eigenvectors with scipy
+            #EigVal, EigVec = sp.linalg.eigs(L, k=pos_enc_dim+1, which='SR')
+            EigVal, EigVec = sp.linalg.eigs(L, k=pos_enc_dim+1, which='SR', tol=1e-2) # for 40 PEs
+            EigVec = EigVec[:, EigVal.argsort()] # increasing order
+            g.ndata['pos_enc'] = torch.from_numpy(EigVec[:,1:pos_enc_dim+1]).float() 
+
+            return g
+
+    def get_amr_poses(self, amrs=None, amr_token_feats=None, amr_token_seg_ids=None):
+        # b (v+e)_max c
+        amr_poses = torch.zeros_like(amr_token_feats)
+        if 'lap' in self.amr_pos_type:
+            raise NotImplementedError()
+        return amr_poses
+
+    def get_text_poses(self, text_feats=None, text_pad_masks=None):
+        # b s c
+        text_poses = torch.zeros_like(text_feats)
+        if 'sin' in self.text_pos_type:
+            sin_pos = self.sin_text_pos(text_pad_masks, hidden_dim=text_feats.shape[-1]).permute(0, 2, 1) # b s c
+            text_poses += sin_pos
+        return text_poses
+
+    def forward(self,
+                frame_queries, # b t nq c
+                amrs, amr_token_feats, amr_token_seg_ids,
+                text_feats=None, text_pad_masks=None):
+        if self.no_fusion:
+            return frame_queries, text_feats, amr_token_feats
+
+        B, T, nq, _ = frame_queries.shape
+
+        amr_poses = self.get_amr_poses(amrs=amrs, amr_token_feats=amr_token_feats, amr_token_seg_ids=amr_token_seg_ids)
+        memory = amr_token_feats.clone(),    
+        memory_pad_masks = amr_token_seg_ids==0
+        memory_poses = amr_poses
+
+        if self.use_text:
+            assert text_feats is not None
+            text_poses = self.get_text_poses(text_feats=text_feats, 
+                                             text_pad_masks=text_pad_masks)
+            memory = torch.cat([memory,text_feats], dim=1)
+            memory_pad_masks = torch.cat([memory_pad_masks, text_pad_masks], dim=1)
+            memory_poses = torch.cat([memory_poses, text_poses])
+        
+        memory = memory + memory_poses # b s c
+        frame_queries = frame_queries.flatten(1, 2) # b tnq c
+        if self.transform_amr_text:
+            memory, frame_queries = self.query_text_module(memory=memory,
+                                                        memory_pad_masks=memory_pad_masks,
+                                                        visual_feats=frame_queries)
+        else:
+            frame_queries = self.query_text_module(tgt=frame_queries.permute(1,0,2),
+                                                        memory=memory.permute(1,0,2), 
+                                                        memory_key_padding_mask=memory_pad_masks,
+                                                        pos=None, 
+                                                        query_pos=None)[0]
+            frame_queries = frame_queries.permute(1,0,2)
+
+        frame_queries = rearrange(frame_queries, 'b (t nq) c -> b t nq c',t=T, nq=nq)
+        if not self.transform_amr_text:
+            return frame_queries, amr_token_feats, text_feats
+        else:
+            amr_length = amr_token_feats.shape[1]
+            if self.use_text:
+                amr_token_feats = memory[:, :amr_length]
+                text_feats = memory[:, amr_length:]
+            else:
+                amr_token_feats = memory
+            return frame_queries, amr_token_feats, text_feats
 
 
-
-
-
-
-
-
+@register_fusion
+def perFrameQuery_amr_text(configs):
+    return perFrameQuery_AMRText(d_model=configs['d_model'],
+                                    nheads=configs['nheads'],
+                                    dropout=configs['dropout'],
+                                    no_fusion=configs['no_fusion'],
+                                    amr_pos_type=configs['amr_pos_type'],
+                                    text_pos_type=configs['text_pos_type'],
+                                    use_text=configs['use_text'],
+                                    transform_amr_text=configs['transform_amr_text'],
+                                    dot_or_add=configs['dot_or_add'])
 
 
 

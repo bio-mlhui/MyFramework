@@ -570,7 +570,7 @@ def yrvos_schedule(configs, is_distributed, process_id, num_processes):
     num_workers= configs['num_workers']
     test_batch_size= configs['test_batch_size']
     
-    # 训练样本的生成, 测试样本的生成
+    # 如果每个sample的视频有大量的交集，那么模型可以通过记住一个sample的结果来分割另一个sample
     generate_traintest_params: dict = configs['generate_traintest_params']
     # 训练时额外的数据 
     amr_are_used: bool = configs['amr_are_used']
@@ -734,9 +734,9 @@ class YRVOS_Dataset(DatasetWithAux):
             self.video_root = os.path.join(self.root, f'valid/JPEGImages')
         elif self.split in ['train', 'validate']:
             self.video_root = os.path.join(self.root, f'train/JPEGImages')
+            self.mask_ann_root = os.path.join(self.root, f'train/Annotations')
         else:
             raise ValueError()
-        self.mask_ann_root = os.path.join(self.root, f'{self.split}/Annotations')
         collator_kwargs = {}
         if text_aux_version == 1 or text_aux_version == 2 or text_aux_version == 3 or text_aux_version == 4:
             collator_kwargs['tokenizer'] = self.tokenizer
@@ -763,7 +763,6 @@ class YRVOS_Dataset(DatasetWithAux):
             if 0 in appear_obj_ids:
                 appear_obj_ids = list(appear_obj_ids - set([0]))
             appear_obj_ids = sorted(appear_obj_ids) # 1，2，3, 5
-            
             annotated_exps_by_object = []
             masks_by_object = [] 
             obj_classes_by_object = []
@@ -776,31 +775,12 @@ class YRVOS_Dataset(DatasetWithAux):
                 annotated_exps_by_object.append(obj_exps)
             masks = torch.stack(masks_by_object, dim=0) # n t h w, bool
             class_labels = torch.tensor(obj_classes_by_object).long() # n
-            referent_idx = appear_obj_ids.index(int(all_exps_dict[exp_id]['obj_id'])) # 在1, 2, 3, 5中的下标
-      
-            num_obj, nf, *_= masks.shape
-            boxes = []
-            valids = masks.flatten(2).any(-1) # n t
-            for object_mask in masks.flatten(0, 1):
-                if object_mask.any():
-                    y1, y2, x1, x2 = bounding_box_from_mask(object_mask.numpy())
-                    box = torch.tensor([x1, y1, x2, y2]).to(torch.float)
-                    boxes.append(box)
-                else:
-                    box = torch.tensor([0,0,0,0]).to(torch.float)
-                    boxes.append(box)
-            boxes = torch.stack(boxes, dim=0) 
-            boxes = rearrange(boxes, '(n t) c -> n t c', n=num_obj, t=nf)
-                            
+            referent_idx = appear_obj_ids.index(int(all_exps_dict[exp_id]['obj_id'])) # 在1, 2, 3, 5中的下标    
             targets = {
                 'has_ann': torch.ones(len(vframes)).bool(), # t
-                'masks': masks, # n t h w (bool)
-                'boxes': boxes, # n t 4, xyxy, float
-                'valid': valids.int(), # n t, 
+                'masks': masks, # n t h w (bool) 
                 'class_labels': class_labels, # n
-                'referent_idx': referent_idx, 
-                'orig_size': masks.shape[-2:],  
-                'size': masks.shape[-2:],
+                'referent_idx': referent_idx,
                 'orig_size': torch.tensor([len(vframes), height, width]), # T h w
                 'size': torch.tensor([len(vframes),  height, width]), # T h w
             }
@@ -822,20 +802,21 @@ class YRVOS_Dataset(DatasetWithAux):
             
         elif self.split == 'test': 
             video_id, window_frames, exp_id = self.samples[sample_idx]            
-            all_exps_dict = self.text_annotations_groupby_video[video_id]["expressions"]
+            all_exps_dict = self.video_to_texts[video_id]["expressions"] # exp_id: exp
             text_query = all_exps_dict[exp_id]['exp']
             vframes = [Image.open(os.path.join(self.vframes_root, video_id, f'{f}.jpg')) for f in window_frames]
-            w, h = vframes[0].size
+            width, height = vframes[0].size
             meta_data = {
-                'size': [h, w],
-                'orig_size': [h, w],
-                'inputvideo_whichframe_hasann': torch.tensor([True]*len(vframes)), # T
+                'size': torch.tensor([len(vframes),  height, width]),
+                'orig_size': torch.tensor([len(vframes),  height, width]),
+                'has_ann': torch.ones(len(vframes)).bool(), # t
                 'video_id': video_id,
                 'all_frames': window_frames,
                 'exp_id': exp_id,
             }
             vframes, text_query, meta_data = self.augmentation(vframes, [text_query], meta_data)  # T(t 3 h w), list[none]
-            return vframes, text_query[0], self.get_aux(sample_idx), meta_data
+            return vframes, text_query[0], \
+                self.get_aux(sample_idx, annotated_exps_by_object, video_auxid=None, text_auxid=text_query), meta_data
 
     def get_aux(self, item_idx, exist_queries,
                 video_auxid,

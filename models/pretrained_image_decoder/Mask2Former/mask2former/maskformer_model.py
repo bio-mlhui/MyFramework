@@ -540,22 +540,26 @@ class MaskFormer_fusionText(nn.Module):
         return self.pixel_mean.device
 
     def forward(self, batched_inputs, 
-                text_feats=None, text_pad_masks=None,
-                amr_feats=None, amr_pad_masks=None,):
+                amrs=None, 
+                amr_token_feats=None, 
+                amr_token_seg_ids=None,
+                text_feats=None, 
+                text_pad_masks=None):
         # b 3 h w
         features = self.backbone(batched_inputs.tensors)
         # 
-        outputs, frame_queries, mask_features, multi_scale_feats = self.sem_seg_head(features,
-                                                                                     text_feats=text_feats, 
-                                                                                    text_pad_masks=text_pad_masks,
-                                                                                    amr_feats=amr_feats,
-                                                                                    amr_pad_masks=amr_pad_masks)
+        outputs, frame_queries, mask_features, multi_scale_feats , amr_token_feats, text_feats = self.sem_seg_head(features,
+                                                                                         amrs=amrs, 
+                                                                                        amr_token_feats=amr_token_feats,
+                                                                                        amr_token_seg_ids=amr_token_seg_ids, 
+                                                                                        text_feats=text_feats, 
+                                                                                        text_pad_masks=text_pad_masks)
         # mask features是pixel decoder的输出, 不是conved的时候用的
-        return {'obj_queries': frame_queries, 
-                'multiscale_feats':multi_scale_feats, 
+        return {'obj_queries': frame_queries,  # list[b nq c]
+                'multiscale_feats':multi_scale_feats,  # 32/16/8
                 'mask_features': mask_features,
                 'pred_masks': outputs['pred_masks'],
-                "pred_logits": outputs['pred_logits']}
+                "pred_logits": outputs['pred_logits']}, amr_token_feats, text_feats
 
 
 
@@ -565,24 +569,20 @@ from detectron2.engine import default_setup
 from detectron2.config import get_cfg
 from . import add_maskformer2_config
 import os
-def merge_fusion_configs(configs, cfg):
-    cfg.MODEL.SEM_SEG_HEAD.FUSION.NAME = configs['fusion']["name"]
-    cfg.MODEL.SEM_SEG_HEAD.FUSION.NHEADS= configs['fusion']['nheads']
-    cfg.MODEL.SEM_SEG_HEAD.FUSION.D_MODEL= configs['fusion']['d_model']
-    cfg.MODEL.SEM_SEG_HEAD.FUSION.REL_SELF= configs['fusion']['rel_self']
-    cfg.MODEL.SEM_SEG_HEAD.FUSION.DROPOUT= configs['fusion']['dropout']
-
+import logging
 @register_pt_obj_2d_decoder
 def mask2former(configs, pt_dir, work_dir):
     cfg = get_cfg()
     add_deeplab_config(cfg)
     add_maskformer2_config(cfg)
     cfg.merge_from_file(os.path.join(work_dir, configs['config_file']))
-    merge_fusion_configs(configs, cfg)
     cfg.freeze()
     model:torch.nn.Module = MaskFormer_fusionText(cfg)
-    checkpoint = torch.load(os.path.join(pt_dir, f'{configs["pt_file_name"]}'), map_location='cpu')['model']
-    model.load_state_dict(checkpoint, strict=False) # since fusion modules not included
+    if configs["imgseg_pt_file_name"] is not None:
+        checkpoint = torch.load(os.path.join(pt_dir, f'{configs["imgseg_pt_file_name"]}'), map_location='cpu')['model']
+        model.load_state_dict(checkpoint, strict=True)
+        logging.info('mask2former load了一个image segmentation的模型权重')
+        print('mask2former load了一个image segmentation的模型权重')
     if configs['freeze_bb']:
         for p in model.backbone.parameters():
             p.requires_grad_(False)

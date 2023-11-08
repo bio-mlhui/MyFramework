@@ -36,7 +36,6 @@ class FixSize(VideoText_Transforms):
         normalize = T.Compose([T.ToTensor(), T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
         self.transform = T.Compose([
             T.RandomResize([fixsize]),
-            T.Check(),
             normalize,
             
         ])
@@ -50,7 +49,6 @@ class Hflip_FixSize(VideoText_Transforms):
         self.transform = T.Compose([
             T.RandomHorizontalFlip(),
             T.RandomResize([fixsize]),
-            T.Check(),
             normalize,
             
         ])
@@ -58,13 +56,13 @@ class Hflip_FixSize(VideoText_Transforms):
 class Hflip_ReSizeSmaller(VideoText_Transforms):
     def __init__(self, 
                  sizes,
+                 max_size,
                  ):
         normalize = T.Compose([T.ToTensor(), T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
         self.transform = T.Compose([
             T.RandomHorizontalFlip(),
             T.RandomResize(sizes=sizes,
-                           max_size=None),
-            T.Check(),
+                           max_size=max_size),
             normalize,
             
         ])
@@ -77,9 +75,7 @@ class ReSizeSmaller(VideoText_Transforms):
         self.transform = T.Compose([
             T.RandomResize(sizes=sizes,
                            max_size=None),
-            T.Check(),
             normalize,
-            
         ])
                        
 class Hflip_ResizeAndCrop(VideoText_Transforms):
@@ -101,15 +97,12 @@ class Hflip_ResizeAndCrop(VideoText_Transforms):
             T.RandomHorizontalFlip(),
             T.RandomResize(sizes=scales, max_size=train_max_size),
             T.RandomSizeCrop(crop_range[0], crop_range[1]),
-            T.Check(),
             normalize
         ])
  
 class JustNormalize(VideoText_Transforms):
     def __init__(self):
-        self.transform = T.Compose([T.Check(),
-                                    T.ToTensor(), 
-                                    T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])                
+        self.transform = T.Compose([T.ToTensor(), T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])                
 
 @register_aug
 def justnormalize(configs):
@@ -126,13 +119,13 @@ def hflip_fixsize(configs):
 
 @register_aug
 def hflip_ResizeSmaller(configs):
-    train_transform = Hflip_ReSizeSmaller(sizes=configs['sizes'])
-    return train_transform
+    return Hflip_ReSizeSmaller(sizes=configs['sizes'],
+                                max_size=configs['max_size'])
 
 @register_aug
 def resizeSmaller(configs):
-    train_transform = ReSizeSmaller(sizes=configs['sizes'])
-    return train_transform
+    return ReSizeSmaller(sizes=configs['sizes'],
+                         max_size=configs['max_size'])
 
 @register_aug
 def hflip_resize_and_crop(configs):

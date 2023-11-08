@@ -7,7 +7,9 @@ from torch.nn import functional as F
 
 from detectron2.config import configurable
 from detectron2.layers import Conv2d
-
+import copy
+from models.transformer import _get_clones
+from einops import repeat, rearrange
 
 class SelfAttentionLayer(nn.Module):
 
@@ -258,36 +260,44 @@ class VITA(nn.Module):
         self.use_sim = use_sim
         self.aux_loss = aux_loss
 
+        # temporal encoder
         self.enc_layers = enc_layers
-        assert enc_layers > 0
-        if enc_layers > 0:
-            self.enc_self_attn = nn.ModuleList()
-            self.enc_ffn = nn.ModuleList()
-            from models.layer_fusion import fusion_entrypoint
-            from models.transformer import _get_clones
-            create_fusion = fusion_entrypoint(fusion_configs['name'])
-            fusion_module = create_fusion(fusion_configs)
-            self.enc_cross_attn = _get_clones(fusion_module, self.enc_layers)
-            self.fusion_rel_self = fusion_configs['rel_self']
+        self.enc_self_attn = nn.ModuleList()
+        self.enc_ffn = nn.ModuleList()
 
-            for _ in range(self.enc_layers):
-                self.enc_self_attn.append(
-                    SelfAttentionLayer(
-                        d_model=hidden_dim,
-                        nhead=nheads,
-                        dropout=0.0,
-                        normalize_before=pre_norm,
-                    ),
-                )
-                self.enc_ffn.append(
-                    FFNLayer(
-                        d_model=hidden_dim,
-                        dim_feedforward=dim_feedforward,
-                        dropout=0.0,
-                        normalize_before=pre_norm,
-                    )
-                )
+        from models.layer_fusion import fusion_entrypoint
+        create_fusion = fusion_entrypoint(fusion_configs['name'])
+        self.fusion_module = create_fusion(fusion_configs)
+        self.fusion_rel_self = fusion_configs['rel_self']
+        if fusion_configs['hack'] == 'same':
+            self.fusion_modules = [copy.copy(self.fusion_module)] * self.enc_layers
+        elif fusion_configs['hack'] == 'diff':
+            self.fusion_modules = _get_clones(self.fusion_module, enc_layers)
+        elif fusion_configs['hack'] == 'no':
+            assert self.fusion_rel_self == None
+            self.fusion_modules = None
+        else:
+            raise ValueError()
 
+        for _ in range(self.enc_layers):
+            self.enc_self_attn.append(
+                SelfAttentionLayer(
+                    d_model=hidden_dim,
+                    nhead=nheads,
+                    dropout=0.0,
+                    normalize_before=pre_norm,
+                ),
+            )
+            self.enc_ffn.append(
+                FFNLayer(
+                    d_model=hidden_dim,
+                    dim_feedforward=dim_feedforward,
+                    dropout=0.0,
+                    normalize_before=pre_norm,
+                )
+            )
+
+        # temporal decoder
         for _ in range(self.num_layers):
             self.transformer_self_attention_layers.append(
                 SelfAttentionLayer(
@@ -361,8 +371,8 @@ class VITA(nn.Module):
         ret["dim_feedforward"] = cfg.MODEL.VITA.DIM_FEEDFORWARD
 
         assert cfg.MODEL.VITA.DEC_LAYERS >= 1
-        ret["enc_layers"] = cfg.MODEL.VITA.ENC_LAYERS
-        ret["dec_layers"] = cfg.MODEL.VITA.DEC_LAYERS
+        ret["enc_layers"] = cfg.MODEL.VITA.ENC_LAYERS # 6
+        ret["dec_layers"] = cfg.MODEL.VITA.DEC_LAYERS # 3
         ret["enc_window_size"] = cfg.MODEL.VITA.ENC_WINDOW_SIZE
         ret["pre_norm"] = cfg.MODEL.VITA.PRE_NORM
         ret["enforce_input_project"] = cfg.MODEL.VITA.ENFORCE_INPUT_PROJ
@@ -382,42 +392,54 @@ class VITA(nn.Module):
         ret['fusion_configs'] = lowercase_configs
         return ret
 
-    def forward(self, frame_query,
-                text_feats=None, text_pad_masks=None,
-                amr_feats=None, amr_pad_masks=None,): # l, bt, nqf, c
-        if not self.training:
-            frame_query = frame_query[[-1]]
-
-        L, BT, fQ, C = frame_query.shape
-        B = BT // self.num_frames if self.training else 1
-        T = self.num_frames if self.training else BT // B
-
-        frame_query = frame_query.reshape(L*B, T, fQ, C) # b t nqf c
-        frame_query = frame_query.permute(1, 2, 0, 3).contiguous() # t nqf b c
+    def forward(self, 
+                frame_query,
+                amrs=None, 
+                amr_token_feats=None, 
+                amr_token_seg_ids=None, 
+                text_feats=None, 
+                text_pad_masks=None): 
+        B = len(amrs)
+        L, BT, fQ, C = frame_query.shape # L bt nq c
+        T = BT // B
+        if self.training:
+            assert T == self.num_frames
+        frame_query = rearrange(frame_query, 'L (b T) nq c -> T nq (L b) c', T=T, b=B)
         frame_query = self.input_proj_dec(frame_query)
+
+        frame_query, amr_token_feats, text_feats = self.fusion_module(frame_query, # b t nq c
+                                                                    amrs=amrs, 
+                                                                    amr_token_feats=amr_token_feats,
+                                                                    amr_token_seg_ids=amr_token_seg_ids, 
+                                                                    text_feats=text_feats, 
+                                                                    text_pad_masks=text_pad_masks)
 
         if self.window_size > 0:
             pad = int(ceil(T / self.window_size)) * self.window_size - T # 让window能
             _T = pad + T
-            frame_query = F.pad(frame_query, (0,0,0,0,0,0,0,pad))  # t_pad
-            enc_mask = frame_query.new_ones(L*B, _T).bool()        # b t_pad
+            frame_query = F.pad(frame_query, (0,0,0,0,0,0,0,pad))  # _T nq lb c
+            enc_mask = frame_query.new_ones(L*B, _T).bool()        # lb _T
             enc_mask[:, :T] = False
         else:
             enc_mask = None
 
-        frame_query = self.encode_frame_query(frame_query, enc_mask,
-                                              text_feats=text_feats, text_pad_masks=text_pad_masks,
-                                            amr_feats=amr_feats, amr_pad_masks=amr_pad_masks,)
-        frame_query = frame_query[:T].flatten(0,1)              # TfQ, LB, C
+        frame_query = self.encode_frame_query(frame_query, 
+                                              enc_mask,
+                                              amrs=amrs, 
+                                              amr_token_feats=amr_token_feats,
+                                              amr_token_seg_ids=amr_token_seg_ids, 
+                                              text_feats=text_feats, 
+                                              text_pad_masks=text_pad_masks)
+        frame_query = frame_query[:T].flatten(0,1)              # T_nq, lb, C
 
         if self.use_sim:
-            pred_fq_embed = self.sim_embed_frame(frame_query)   # TfQ, LB, C
+            pred_fq_embed = self.sim_embed_frame(frame_query)   # T_nq, lb, C
             pred_fq_embed = pred_fq_embed.transpose(0, 1).reshape(L, B, T, fQ, C)
         else:
             pred_fq_embed = None
 
-        src = self.src_embed(frame_query)   # TfQ, LB, C
-        dec_pos = self.fq_pos.weight[None, :, None, :].repeat(T, 1, L*B, 1).flatten(0, 1) # TfQ, LB, C
+        src = self.src_embed(frame_query)   # T_nq, lb, C
+        dec_pos = self.fq_pos.weight[None, :, None, :].repeat(T, 1, L*B, 1).flatten(0, 1) 
 
         # QxNxC
         query_embed = self.query_embed.weight.unsqueeze(1).repeat(1, L*B, 1) # cQ, LB, C
@@ -468,7 +490,7 @@ class VITA(nn.Module):
                 pred_cls, pred_mask_embed, pred_cq_embed, pred_fq_embed
             )
         }
-        return out
+        return out, amr_token_feats, text_feats
 
     @torch.jit.unused
     def _set_aux_loss(
@@ -478,19 +500,19 @@ class VITA(nn.Module):
                 for a, b, c in zip(outputs_cls[:-1], outputs_mask_embed[:-1], outputs_cq_embed[:-1])]
 
     def encode_frame_query(self, frame_query, attn_mask,
-                           text_feats=None, text_pad_masks=None,
-                           amr_feats=None, amr_pad_masks=None,):
+                           amrs=None,  
+                           amr_token_feats=None, 
+                           amr_token_seg_ids=None, 
+                           text_feats=None, 
+                           text_pad_masks=None):
         """
-        t_pad nqf b c   ;   b t_pad
+        T nq lb c;   lb T
         b s c, b s
         """
         if self.window_size == 0:
             return_shape = frame_query.shape 
             frame_query = frame_query.flatten(0, 1)
             for i in range(self.enc_layers):
-                frame_query = self.enc_cross_attn[layer_idx](frame_query=frame_query,
-                                text_feats=text_feats, text_pad_masks=text_pad_masks,
-                            amr_feats=amr_feats, amr_pad_masks=amr_pad_masks,)
                 frame_query = self.enc_self_attn[i](frame_query) # t nqf b c
                 frame_query = self.enc_ffn[i](frame_query)
             frame_query = frame_query.view(return_shape)
@@ -514,22 +536,10 @@ class VITA(nn.Module):
             shift_window_mask = _attn_mask.float() * -1000
 
             for layer_idx in range(self.enc_layers):
-                # cross
-                # fusion with text: t nqf b c -> tnqf b c, s b c
-                frame_query = self.enc_cross_attn[layer_idx](frame_query=frame_query,
-                                                             text_feats=text_feats, text_pad_masks=text_pad_masks,
-                                                            amr_feats=amr_feats, amr_pad_masks=amr_pad_masks,)
-                # self
-                num_input_frames = T
-                if num_input_frames <= self.window_size:
-                    frame_query = self._window_attn(frame_query, window_mask, layer_idx,)
+                if self.training or layer_idx % 2 == 0:
+                    frame_query = self._window_attn(frame_query, window_mask, layer_idx)
                 else:
-                    if layer_idx % 2 == 0:
-                        frame_query = self._window_attn(frame_query, window_mask, layer_idx,)
-                    else:
-                        frame_query = self._shift_window_attn(frame_query, shift_window_mask, layer_idx,)
-                # ffn
-                frame_query = self.enc_ffn[layer_idx](frame_query)
+                    frame_query = self._shift_window_attn(frame_query, shift_window_mask, layer_idx)
             return frame_query
 
     def _window_attn(self, frame_query, attn_mask, layer_idx):

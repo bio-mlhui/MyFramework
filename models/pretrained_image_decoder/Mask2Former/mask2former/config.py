@@ -112,10 +112,3 @@ def add_maskformer2_config(cfg):
     # Importance sampling parameter for PointRend point sampling during training. Parametr `beta` in
     # the original paper.
     cfg.MODEL.MASK_FORMER.IMPORTANCE_SAMPLE_RATIO = 0.75
-
-    cfg.MODEL.SEM_SEG_HEAD.FUSION = CN()
-    cfg.MODEL.SEM_SEG_HEAD.FUSION.NAME = 'no_fusion'
-    cfg.MODEL.SEM_SEG_HEAD.FUSION.NHEADS = 8
-    cfg.MODEL.SEM_SEG_HEAD.FUSION.D_MODEL = 256
-    cfg.MODEL.SEM_SEG_HEAD.FUSION.REL_SELF = 'after'
-    cfg.MODEL.SEM_SEG_HEAD.FUSION.DROPOUT = 0.0

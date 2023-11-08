@@ -17,7 +17,7 @@ from detectron2.modeling import SEM_SEG_HEADS_REGISTRY
 from ..transformer_decoder.position_encoding import PositionEmbeddingSine
 from ..transformer_decoder.transformer import _get_clones, _get_activation_fn
 from .ops.modules import MSDeformAttn
-
+import copy
 
 # MSDeformAttn Transformer encoder in deformable detr
 class MSDeformAttnTransformerEncoderOnly(nn.Module):
@@ -361,21 +361,13 @@ class MSDeformAttnPixelDecoder(nn.Module):
 
 
 class MSDeformAttnTransformerEncoder_fusionText(nn.Module):
-    def __init__(self, encoder_layer, num_layers, fusion_configs,):
+    def __init__(self, encoder_layer, num_layers,):
         super().__init__()
         self.layers = _get_clones(encoder_layer, num_layers)
         self.num_layers = num_layers
         
-        from models.layer_fusion import fusion_entrypoint
-        create_fusion = fusion_entrypoint(fusion_configs['name'])
-        fusion_module = create_fusion(fusion_configs)
-        self.fusion_rel_self = fusion_configs['rel_self']
-        if self.fusion_rel_self == 'first':
-            self.fusion_modules = fusion_module
-        elif self.fusion_rel_self in ['before', 'after']:
-            self.fusion_modules = _get_clones(fusion_module, num_layers)
-        else:
-            raise ValueError()
+        self.fusion_rel_self = None # 'before', 'after', None
+        self.fusion_modules = None # hack
 
     @staticmethod
     def get_reference_points(spatial_shapes, valid_ratios, device):
@@ -391,67 +383,66 @@ class MSDeformAttnTransformerEncoder_fusionText(nn.Module):
         reference_points = torch.cat(reference_points_list, 1)
         reference_points = reference_points[:, :, None] * valid_ratios[:, None]
         return reference_points
-
-    def forward_first(self, src, spatial_shapes, level_start_index, valid_ratios, pos=None, padding_mask=None,
-                text_feats=None, text_pad_masks=None,
-                amr_feats=None, amr_pad_masks=None):
+    
+    def forward_before(self, src, spatial_shapes, level_start_index, valid_ratios, pos=None, padding_mask=None,
+                amrs=None, amr_token_feats=None, amr_token_seg_ids=None, text_feats=None, text_pad_masks=None):
         output = src
-        reference_points = self.get_reference_points(spatial_shapes, valid_ratios, device=src.device)
-        if text_feats is not None:
-            output = self.fusion_modules(flatten_multiscale=output,  # b s c
-                                    flatten_multiscale_pos=pos, # b s c
-                                    text_feats=text_feats, text_pad_masks=text_pad_masks,
-                                    amr_feats=amr_feats, amr_pad_masks=amr_pad_masks)   
+        reference_points = self.get_reference_points(spatial_shapes, valid_ratios, device=src.device)           
+        for _, (layer, fusion_module) in enumerate(zip(self.layers, self.fusion_modules)):
+            output, amr_token_feats, text_feats = fusion_module(multiscale_feats=output, 
+                                                                multiscale_poses=pos,
+                                                                multiscale_is_flattened=True,
+                                                                amrs=amrs, 
+                                                                amr_token_feats=amr_token_feats,
+                                                                amr_token_seg_ids=amr_token_seg_ids, 
+                                                                text_feats=text_feats, 
+                                                                text_pad_masks=text_pad_masks)
+            output = layer(output, pos, reference_points, spatial_shapes, level_start_index, padding_mask)
+        return output, amr_token_feats, text_feats
+    
+    def forward_after(self, src, spatial_shapes, level_start_index, valid_ratios, pos=None, padding_mask=None,
+                amrs=None, amr_token_feats=None, amr_token_seg_ids=None, text_feats=None, text_pad_masks=None):
+        output = src
+        reference_points = self.get_reference_points(spatial_shapes, valid_ratios, device=src.device)           
+        for _, (layer, fusion_module) in enumerate(zip(self.layers, self.fusion_modules)):
+            output = layer(output, pos, reference_points, spatial_shapes, level_start_index, padding_mask)
+            output, amr_token_feats, text_feats = fusion_module(multiscale_feats=output, 
+                                                                multiscale_poses=pos,
+                                                                multiscale_is_flattened=True,
+                                                                amrs=amrs, 
+                                                                amr_token_feats=amr_token_feats,
+                                                                amr_token_seg_ids=amr_token_seg_ids, 
+                                                                text_feats=text_feats, 
+                                                                text_pad_masks=text_pad_masks)
+        return output, amr_token_feats, text_feats
+
+    def forward_none(self, src, spatial_shapes, level_start_index, valid_ratios, pos=None, padding_mask=None):
+        output = src
+        reference_points = self.get_reference_points(spatial_shapes, valid_ratios, device=src.device)           
         for _, layer in enumerate(self.layers):
             output = layer(output, pos, reference_points, spatial_shapes, level_start_index, padding_mask)
         return output
-    
-    def forward_before(self, src, spatial_shapes, level_start_index, valid_ratios, pos=None, padding_mask=None,
-                text_feats=None, text_pad_masks=None,
-                amr_feats=None, amr_pad_masks=None):
-        output = src
-        reference_points = self.get_reference_points(spatial_shapes, valid_ratios, device=src.device)           
-        for _, (layer, fusion_module) in enumerate(zip(self.layers, self.fusion_modules)):
-            if text_feats is not None:
-                output = fusion_module(flatten_multiscale=output,  # b s c
-                                        flatten_multiscale_pos=pos, # b s c
-                                        text_feats=text_feats, text_pad_masks=text_pad_masks,
-                                        amr_feats=amr_feats, amr_pad_masks=amr_pad_masks)
-            output = layer(output, pos, reference_points, spatial_shapes, level_start_index, padding_mask)
-        return output
-    
-
-    def forward_after(self, src, spatial_shapes, level_start_index, valid_ratios, pos=None, padding_mask=None,
-                text_feats=None, text_pad_masks=None,
-                amr_feats=None, amr_pad_masks=None):
-        output = src
-        reference_points = self.get_reference_points(spatial_shapes, valid_ratios, device=src.device)           
-        for _, (layer, fusion_module) in enumerate(zip(self.layers, self.fusion_modules)):
-            output = layer(output, pos, reference_points, spatial_shapes, level_start_index, padding_mask)
-            if text_feats is not None:
-                output = fusion_module(flatten_multiscale=output,  # b s c
-                                        flatten_multiscale_pos=pos, # b s c
-                                        text_feats=text_feats, text_pad_masks=text_pad_masks,
-                                        amr_feats=amr_feats, amr_pad_masks=amr_pad_masks)
-        return output
-    
 
     def forward(self, src, spatial_shapes, level_start_index, valid_ratios, pos=None, padding_mask=None,
-                text_feats=None, text_pad_masks=None,
-                amr_feats=None, amr_pad_masks=None):
+                amrs=None, amr_token_feats=None, amr_token_seg_ids=None, text_feats=None, text_pad_masks=None):
 
-        if self.fusion_rel_self == 'first':
-            return self.forward_first(src, spatial_shapes, level_start_index, valid_ratios, pos=pos, padding_mask=padding_mask,
-                            text_feats=text_feats, text_pad_masks=text_pad_masks,
-                            amr_feats=amr_feats, amr_pad_masks=amr_pad_masks)            
+        if self.fusion_rel_self == None:
+            return self.forward_none(src, spatial_shapes, level_start_index, valid_ratios, pos=pos, padding_mask=padding_mask), \
+                            amr_token_feats, text_feats
         if self.fusion_rel_self == 'before':
             return self.forward_before(src, spatial_shapes, level_start_index, valid_ratios, pos=pos, padding_mask=padding_mask,
-                            text_feats=text_feats, text_pad_masks=text_pad_masks,
-                            amr_feats=amr_feats, amr_pad_masks=amr_pad_masks)   
+                                        amrs=amrs, 
+                                        amr_token_feats=amr_token_feats,
+                                        amr_token_seg_ids=amr_token_seg_ids, 
+                                        text_feats=text_feats, 
+                                        text_pad_masks=text_pad_masks)  
         elif self.fusion_rel_self == 'after':
             return self.forward_after(src, spatial_shapes, level_start_index, valid_ratios, pos=pos, padding_mask=padding_mask,
-                            text_feats=text_feats, text_pad_masks=text_pad_masks,
-                            amr_feats=amr_feats, amr_pad_masks=amr_pad_masks) 
+                                        amrs=amrs, 
+                                        amr_token_feats=amr_token_feats,
+                                        amr_token_seg_ids=amr_token_seg_ids, 
+                                        text_feats=text_feats, 
+                                        text_pad_masks=text_pad_masks)  
         else:
             raise ValueError()
 
@@ -461,7 +452,6 @@ class MSDeformAttnTransformerEncoderOnly_fusionText(nn.Module):
                  num_encoder_layers=6, dim_feedforward=1024, dropout=0.1,
                  activation="relu",
                  num_feature_levels=4, enc_n_points=4,
-                 fusion_configs=None,
         ):
         super().__init__()
 
@@ -471,8 +461,7 @@ class MSDeformAttnTransformerEncoderOnly_fusionText(nn.Module):
         encoder_layer = MSDeformAttnTransformerEncoderLayer(d_model, dim_feedforward,
                                                             dropout, activation,
                                                             num_feature_levels, nhead, enc_n_points)
-        self.encoder = MSDeformAttnTransformerEncoder_fusionText(encoder_layer, num_encoder_layers,
-                                                                 fusion_configs=fusion_configs)
+        self.encoder = MSDeformAttnTransformerEncoder_fusionText(encoder_layer, num_encoder_layers)
 
         self.level_embed = nn.Parameter(torch.Tensor(num_feature_levels, d_model))
 
@@ -496,7 +485,12 @@ class MSDeformAttnTransformerEncoderOnly_fusionText(nn.Module):
         valid_ratio = torch.stack([valid_ratio_w, valid_ratio_h], -1)
         return valid_ratio
 
-    def forward(self, srcs, pos_embeds, text_feats=None, text_pad_masks=None, amr_feats=None, amr_pad_masks=None):
+    def forward(self, srcs, pos_embeds, 
+                amrs=None, 
+                amr_token_feats=None, 
+                amr_token_seg_ids=None, 
+                text_feats=None, 
+                text_pad_masks=None):
         masks = [torch.zeros((x.size(0), x.size(2), x.size(3)), device=x.device, dtype=torch.bool) for x in srcs]
         # prepare input for encoder
         src_flatten = []
@@ -522,11 +516,14 @@ class MSDeformAttnTransformerEncoderOnly_fusionText(nn.Module):
         valid_ratios = torch.stack([self.get_valid_ratio(m) for m in masks], 1)
 
         # encoder
-        memory = self.encoder(src_flatten, spatial_shapes, level_start_index, valid_ratios, lvl_pos_embed_flatten, mask_flatten,
-                              text_feats=text_feats, text_pad_masks=text_pad_masks, 
-                              amr_feats=amr_feats, amr_pad_masks=amr_pad_masks)
+        memory, amr_token_feats, text_feats = self.encoder(src_flatten, spatial_shapes, level_start_index, valid_ratios, lvl_pos_embed_flatten, mask_flatten,
+                                                            amrs=amrs, 
+                                                            amr_token_feats=amr_token_feats, 
+                                                            amr_token_seg_ids=amr_token_seg_ids, 
+                                                            text_feats=text_feats, 
+                                                            text_pad_masks=text_pad_masks)
 
-        return memory, spatial_shapes, level_start_index
+        return memory, spatial_shapes, level_start_index, amr_token_feats, text_feats
 
 @SEM_SEG_HEADS_REGISTRY.register()
 class MSDeformAttnPixelDecoder_fusionText(nn.Module):
@@ -597,6 +594,11 @@ class MSDeformAttnPixelDecoder_fusionText(nn.Module):
             nn.init.xavier_uniform_(proj[0].weight, gain=1)
             nn.init.constant_(proj[0].bias, 0)
 
+        from models.layer_fusion import fusion_entrypoint
+        create_fusion = fusion_entrypoint(fusion_configs['name'])
+        fusion_module = create_fusion(fusion_configs)
+        self.fusion_module = fusion_module
+
         self.transformer = MSDeformAttnTransformerEncoderOnly_fusionText(
             d_model=conv_dim,
             dropout=transformer_dropout,
@@ -604,8 +606,20 @@ class MSDeformAttnPixelDecoder_fusionText(nn.Module):
             dim_feedforward=transformer_dim_feedforward,
             num_encoder_layers=transformer_enc_layers,
             num_feature_levels=self.transformer_num_feature_levels,
-            fusion_configs=fusion_configs
         )
+
+        self.transformer.encoder.fusion_rel_self = fusion_configs['rel_self']
+        if fusion_configs['hack'] == 'same':
+            assert self.transformer.encoder.fusion_rel_self != None
+            self.transformer.encoder.fusion_modules = [copy.copy(self.fusion_module)] * self.transformer.encoder.num_layers
+        elif fusion_configs['hack'] == 'diff':
+            assert self.transformer.encoder.fusion_rel_self != None
+            self.transformer.encoder.fusion_modules = _get_clones(self.fusion_module, self.transformer.encoder.num_layers)
+        elif fusion_configs['hack'] == 'no':
+            assert self.transformer.encoder.fusion_rel_self == None
+            self.transformer.encoder.fusion_modules = None
+        else:
+            raise ValueError()
         N_steps = conv_dim // 2
         self.pe_layer = PositionEmbeddingSine(N_steps, normalize=True)
 
@@ -686,7 +700,13 @@ class MSDeformAttnPixelDecoder_fusionText(nn.Module):
         return ret
     
     @autocast(enabled=False)
-    def forward_features(self, features, text_feats=None, text_pad_masks=None, amr_feats=None, amr_pad_masks=None):
+    def forward_features(self, features, 
+                         
+                        amrs=None, 
+                        amr_token_feats=None, 
+                        amr_token_seg_ids=None,
+                        text_feats=None, 
+                        text_pad_masks=None):
         srcs = []
         pos = []
         # Reverse feature maps into top-down order (from low to high resolution)
@@ -694,9 +714,23 @@ class MSDeformAttnPixelDecoder_fusionText(nn.Module):
             x = features[f].float()  # deformable detr does not support half precision
             srcs.append(self.input_proj[idx](x))
             pos.append(self.pe_layer(x))
-        y, spatial_shapes, level_start_index = self.transformer(srcs, pos,
-                                                                text_feats=text_feats, text_pad_masks=text_pad_masks, 
-                                                                amr_feats=amr_feats, amr_pad_masks=amr_pad_masks)
+
+        srcs, amr_token_feats, text_feats = self.fusion_module(multiscale_feats=srcs, 
+                                                        multiscale_poses=pos,
+                                                        multiscale_is_flattened=False,
+
+                                                        amrs=amrs, 
+                                                        amr_token_feats=amr_token_feats,
+                                                        amr_token_seg_ids=amr_token_seg_ids, 
+                                                        text_feats=text_feats, 
+                                                        text_pad_masks=text_pad_masks)
+        y, spatial_shapes, level_start_index, amr_token_feats, text_feats = self.transformer(srcs, pos,
+                                                                                             
+                                                                                            amrs=amrs, 
+                                                                                            amr_token_feats=amr_token_feats, 
+                                                                                            amr_token_seg_ids=amr_token_seg_ids, 
+                                                                                            text_feats=text_feats, 
+                                                                                            text_pad_masks=text_pad_masks)
         bs = y.shape[0]
 
         split_size_or_sections = [None] * self.transformer_num_feature_levels
@@ -730,4 +764,4 @@ class MSDeformAttnPixelDecoder_fusionText(nn.Module):
                 multi_scale_features.append(o)
                 num_cur_levels += 1
 
-        return self.mask_features(out[-1]), out[-1], out[0], multi_scale_features
+        return self.mask_features(out[-1]), out[-1], out[0], multi_scale_features, amr_token_feats, text_feats

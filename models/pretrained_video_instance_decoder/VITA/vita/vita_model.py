@@ -538,7 +538,7 @@ class Vita_2(nn.Module):
         self.vita_criterion = vita_criterion
         self.is_multi_cls = is_multi_cls
         self.apply_cls_thres = apply_cls_thres
-
+        
         if freeze_detector:
             for name, p in self.named_parameters():
                 if not "vita_module" in name:
@@ -670,12 +670,16 @@ class Vita_2(nn.Module):
 
             "mask_out_stride": cfg.MODEL.SEM_SEG_HEAD.COMMON_STRIDE,
             "mask_threshold": 0.5,
-            'num_layers': cfg.MODEL.VITA.DEC_LAYERS 
+            'num_layers': cfg.MODEL.VITA.DEC_LAYERS + 1
         }
 
     def forward(self, batched_inputs, 
-                text_feats=None, text_pad_masks=None,
-                amr_feats=None, amr_pad_masks=None,):
+                
+                amrs=None, 
+                amr_token_feats=None, 
+                amr_token_seg_ids=None,
+                text_feats=None, 
+                text_pad_masks=None):
         # NT(t b c h w)
         # t b c h w -> b t c h w -> bt c h w
         T, B = batched_inputs.tensors.shape[:2]
@@ -687,16 +691,24 @@ class Vita_2(nn.Module):
                               
         BT = len(images)
         # ;l bt 200 c; bt c h/4 w/4, list[bt c h w]
-        outputs, frame_queries, mask_features, multi_scale_feats = self.sem_seg_head(features,
-                                                                  text_feats=text_feats, 
-                                                                text_pad_masks=text_pad_masks,
-                                                                amr_feats=amr_feats,
-                                                                amr_pad_masks=amr_pad_masks)
-        
+        outputs, frame_queries, mask_features, multi_scale_feats, \
+                            amr_token_feats, text_feats = self.sem_seg_head(features,
+                                                                            amrs=amrs, 
+                                                                            amr_token_feats=amr_token_feats,
+                                                                            amr_token_seg_ids=amr_token_seg_ids, 
+                                                                            text_feats=text_feats, 
+                                                                            text_pad_masks=text_pad_masks)
         mask_features = self.vita_module.vita_mask_features(mask_features) # conv2d
+
+        frame_queries = frame_queries[[-1]] # 1 bt 200 c
         mask_features = mask_features.view(B, T, *mask_features.shape[-3:]) # b t c h w
         # l b nq c, 200 -> 100
-        vita_outputs = self.vita_module(frame_queries)
+        vita_outputs, amr_token_feats, text_feats = self.vita_module(frame_queries,
+                                        amrs=amrs, 
+                                        amr_token_feats=amr_token_feats,
+                                        amr_token_seg_ids=amr_token_seg_ids, 
+                                        text_feats=text_feats, 
+                                        text_pad_masks=text_pad_masks)
 
         # b nq t h w -> l b t nq h w
         pred_masks = torch.einsum("lbqc,btchw->lbqthw", vita_outputs["pred_mask_embed"], mask_features).permute(0,2,1,3,4)
@@ -705,7 +717,7 @@ class Vita_2(nn.Module):
                 'cross_attn_weights':vita_outputs['cross_attn_weights'],
                 'multiscale_feats':multi_scale_feats, 
                 'pred_masks': pred_masks,
-                'mask_features': mask_features}
+                'mask_features': mask_features}, amr_token_feats, text_feats
 
 from detectron2.projects.deeplab import add_deeplab_config, build_lr_scheduler
 from detectron2.config import get_cfg

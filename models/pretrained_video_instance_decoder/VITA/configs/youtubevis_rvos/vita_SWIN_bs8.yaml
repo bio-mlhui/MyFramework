@@ -25,7 +25,7 @@ MODEL:
     MASK_DIM: 256
     NORM: "GN"
     # pixel decoder
-    PIXEL_DECODER_NAME: "MSDeformAttnPixelDecoder"
+    PIXEL_DECODER_NAME: "MSDeformAttnPixelDecoder_fusionText"
     IN_FEATURES: ["res2", "res3", "res4", "res5"]
     DEFORMABLE_TRANSFORMER_ENCODER_IN_FEATURES: ["res3", "res4", "res5"]
     COMMON_STRIDE: 4
