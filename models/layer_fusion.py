@@ -613,7 +613,7 @@ class Visual_AMRText_SeqSeq(nn.Module):
                                                             memory=memory.permute(1,0,2), 
                                                             memory_key_padding_mask=memory_pad_masks,
                                                             pos=None, 
-                                                            query_pos=multiscale_feats.permute(1,0,2))[0]
+                                                            query_pos=None)[0]
             multiscale_feats = multiscale_feats.permute(1, 0, 2)
         
         if not multiscale_is_flattened:
