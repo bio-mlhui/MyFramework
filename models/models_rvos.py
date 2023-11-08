@@ -3686,7 +3686,7 @@ class AMR_Grounding_2DObj(nn.Module):
             from .layer_temporal_decoder import temporal_decoder_entrypoint
             create_temporal_decoder = temporal_decoder_entrypoint(temporal_decoder['name'])
             self.temporal_decoder = create_temporal_decoder(temporal_decoder, pt_dir)
-            self.temporal_decoder_num_layers = self.temporal_decoder.num_layers
+            self.temporal_decoder_num_layers = self.temporal_decoder.num_layers + 1
             self.temporal_decoder_mask_out_stride = self.temporal_decoder.mask_out_stride
             self.temporal_decoder_mask_threshold = self.temporal_decoder.mask_threshold
 
@@ -3846,9 +3846,9 @@ class AMR_Grounding_2DObj(nn.Module):
             # l b nq c, l b t nqf c, l b nq T nqf
             # l b t nq h w,
             temporal_queries_by_layer, frame_queries_by_layer, cross_attn_weights_by_layer,\
-              pred_masks_by_layer, multiscale_feats = temporal_decoder_output['video_queries'], temporal_decoder_output['frame_queries'], \
-                                                            temporal_decoder_output['cross_attn_weights'],\
-                                                         temporal_decoder_output['pred_masks'], temporal_decoder_output['multiscale_feats']
+              temporal_pred_masks_by_layer = temporal_decoder_output['video_queries'], temporal_decoder_output['frame_queries'], \
+                                                                temporal_decoder_output['cross_attn_weights'],\
+                                                                temporal_decoder_output['pred_masks']
             grounding_score_by_layer = []
             for layer_idx, (frame_queries, temporal_queries, cross_attn_weights) in enumerate(zip(frame_queries_by_layer, 
                                                                                                   temporal_queries_by_layer, 
@@ -3871,9 +3871,11 @@ class AMR_Grounding_2DObj(nn.Module):
                     grounding_score_by_layer.append(torch.stack(grounding_score, dim=0))
                 else:
                     grounding_score_by_layer.append(None)
-            return {'temporal_decoder': {'pred_masks': pred_masks_by_layer, # list[b nq h w]
-                                         'reason_3d': grounding_score_by_layer} ,} # list[b nq h w], num_layers
-                    # 'objdecoder' 也可以加上来进行训练
+            return {'temporal_decoder': {'pred_masks': temporal_pred_masks_by_layer, # list[b nq h w]
+                                         'reason_3d': grounding_score_by_layer},
+                    'objdecoder': {'pred_masks': pred_masks_by_layer, # b nq h w
+                                   'reason_2d': grounding_score_by_layer} ,} # list[b nq h w], num_layers
+
         
 
     def forward_rios(self, samples, text_queries, auxiliary, targets, visualize=False):

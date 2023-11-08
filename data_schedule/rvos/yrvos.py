@@ -34,7 +34,7 @@ from .utils import Evaluate_Sampler_Distributed, TrainRandomSampler_ByEpoch_Dist
     bounding_box_from_mask,DatasetWithAux, CollatorWithAux
 from data_schedule.rvos.metric_utils import get_AP_PAT_IOU_PerFrame
 
-__all__ = ['yrvos_schedule', 'yrvos_v300s1999_schedule']
+__all__ = ['youtube_schedule', 'yrvos_v300s1999_schedule']
 
 def show_dataset_information_and_validate(root):
     
@@ -556,7 +556,7 @@ def yrvos_v300s1999_schedule(configs, is_distributed, process_id, num_processes)
 
 import logging
 @register_data_schedule
-def yrvos_schedule(configs, is_distributed, process_id, num_processes):
+def youtube_schedule(configs, is_distributed, process_id, num_processes):
     all_categories = {'truck': 1, 'leopard': 2, 'knife': 3, 'sedan': 4, 'parrot': 5, 'snail': 6, 'snowboard': 7, 'sign': 8, 'rabbit': 9, 'bus': 10, 'crocodile': 11, 'penguin': 12, 'skateboard': 13, 'eagle': 14, 'dolphin': 15, 'lion': 16, 'others': 17, 'surfboard': 18, 'earless_seal': 19, 'cow': 20, 'hat': 21, 'lizard': 22, 'duck': 23, 'dog': 24, 'hedgehog': 25, 'zebra': 26, 'bird': 27, 'turtle': 28, 'hand': 29, 'elephant': 30, 'motorbike': 31, 'bike': 32, 'bear': 33, 'tiger': 34, 'ape': 35, 'fish': 36, 'deer': 37, 'frisbee': 38, 'snake': 39, 'horse': 40, 'bucket': 41, 'train': 42, 'owl': 43, 'parachute': 44, 'monkey': 45, 'airplane': 46, 'person': 47, 'paddle': 48, 'plant': 49, 'mouse': 50, 'camel': 51, 'shark': 52, 'raccoon': 53, 'squirrel': 54, 'giraffe': 55, 'boat': 56, 'sheep': 57, 'giant_panda': 58, 'whale': 59, 'tennis_racket': 60, 'toilet': 61, 'umbrella': 62, 'frog': 63, 'cat': 64, 'fox': 65}
     category_name_to_id = {}
     cnt = 0

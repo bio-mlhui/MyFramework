@@ -208,95 +208,61 @@ class MLP(nn.Module):
             x = F.relu(layer(x)) if i < self.num_layers - 1 else layer(x)
         return x
 
+import copy
+from models.transformer import _get_clones
 
 class VITA(nn.Module):
-
-    @configurable
     def __init__(
         self,
         in_channels,
-        aux_loss,
-        *,
-        hidden_dim: int,
-        num_frame_queries: int,
+        hidden_dim,
         num_queries: int,
-        nheads: int,
-        dim_feedforward: int,
         enc_layers: int,
         dec_layers: int,
         enc_window_size: int,
+        num_frames: int,
+
+        nheads: int,
+        dim_feedforward: int,
         pre_norm: bool,
         enforce_input_project: bool,
-        num_frames: int,
-        num_classes: int,
-        clip_last_layer_num: bool,
-        conv_dim: int,
-        mask_dim: int,
-        sim_use_clip: list,
-        use_sim: bool,
-        fusion_configs: dict,
-    ):
-        """
-        NOTE: this interface is experimental.
-        Args:
-            in_channels: channels of the input features
-            hidden_dim: Transformer feature dimension
-            num_queries: number of queries
-            nheads: number of heads
-            dim_feedforward: feature dimension in feedforward network
-            enc_layers: number of Transformer encoder layers
-            dec_layers: number of Transformer decoder layers
-            pre_norm: whether to use pre-LayerNorm or not
-            enforce_input_project: add input project 1x1 conv even if input
-                channels and hidden dim is identical
-        """
-        super().__init__()
 
+    ):
+        super().__init__()
         # define Transformer decoder here
         self.num_heads = nheads
         self.num_layers = dec_layers
+
         self.transformer_self_attention_layers = nn.ModuleList()
         self.transformer_cross_attention_layers = nn.ModuleList()
         self.transformer_ffn_layers = nn.ModuleList()
         self.num_frames = num_frames
-        self.num_classes = num_classes
-        self.clip_last_layer_num = clip_last_layer_num
 
         self.enc_layers = enc_layers
         self.window_size = enc_window_size
-        self.sim_use_clip = sim_use_clip
-        self.use_sim = use_sim
-        self.aux_loss = aux_loss
 
-        self.enc_layers = enc_layers
-        assert enc_layers > 0
-        if enc_layers > 0:
-            self.enc_self_attn = nn.ModuleList()
-            self.enc_ffn = nn.ModuleList()
-            from models.layer_fusion import fusion_entrypoint
-            from models.transformer import _get_clones
-            create_fusion = fusion_entrypoint(fusion_configs['name'])
-            fusion_module = create_fusion(fusion_configs)
-            self.enc_cross_attn = _get_clones(fusion_module, self.enc_layers)
-            self.fusion_rel_self = fusion_configs['rel_self']
+        self.early_fusion = None
+        self.layer_fusion_modules = [None]
+        self.enc_self_attn = nn.ModuleList()
+        self.enc_ffn = nn.ModuleList()
 
-            for _ in range(self.enc_layers):
-                self.enc_self_attn.append(
-                    SelfAttentionLayer(
-                        d_model=hidden_dim,
-                        nhead=nheads,
-                        dropout=0.0,
-                        normalize_before=pre_norm,
-                    ),
+        for _ in range(self.enc_layers):
+            self.enc_self_attn.append(
+                SelfAttentionLayer(
+                    d_model=hidden_dim,
+                    nhead=nheads,
+                    dropout=0.0,
+                    normalize_before=pre_norm,
+                ),
+            )
+            self.enc_ffn.append(
+                FFNLayer(
+                    d_model=hidden_dim,
+                    dim_feedforward=dim_feedforward,
+                    dropout=0.0,
+                    normalize_before=pre_norm,
                 )
-                self.enc_ffn.append(
-                    FFNLayer(
-                        d_model=hidden_dim,
-                        dim_feedforward=dim_feedforward,
-                        dropout=0.0,
-                        normalize_before=pre_norm,
-                    )
-                )
+            )
 
         for _ in range(self.num_layers):
             self.transformer_self_attention_layers.append(
@@ -327,8 +293,8 @@ class VITA(nn.Module):
             )
 
         self.vita_mask_features = Conv2d(
-            conv_dim,
-            mask_dim,
+            hidden_dim,
+            hidden_dim,
             kernel_size=1,
             stride=1,
             padding=0,
@@ -343,27 +309,50 @@ class VITA(nn.Module):
         # learnable query p.e.
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
 
-        self.fq_pos = nn.Embedding(num_frame_queries, hidden_dim)
+        self.input_proj_dec = nn.Linear(hidden_dim, hidden_dim)
 
-        if in_channels != hidden_dim or enforce_input_project:
-            self.input_proj_dec = nn.Linear(hidden_dim, hidden_dim)
+        self.mask_embed = MLP(hidden_dim, hidden_dim, hidden_dim, 3)
+
+    def hack_fusion(self, 
+                    fusion_module,
+                    early_fusion,
+                    early_fusion_deep_copy, 
+                    encoder_layer_ref_self,
+                    encoder_layer_deep_copy,):
+        if early_fusion:
+            if early_fusion_deep_copy:
+                self.early_fusion = nn.ModuleList([copy.deepcopy(fusion_module)])
+            else:
+                self.early_fusion = [fusion_module] # do not save in checkpoint
         else:
-            self.input_proj_dec = nn.Sequential()
-        self.src_embed = nn.Identity()
+            self.early_fusion = [None]
 
-        self.class_embed = nn.Linear(hidden_dim, num_classes + 1)
-        self.mask_embed = MLP(hidden_dim, hidden_dim, mask_dim, 3)
-        if self.use_sim:
-            self.sim_embed_frame = nn.Linear(hidden_dim, hidden_dim)
-            if self.sim_use_clip:
-                self.sim_embed_clip = nn.Linear(hidden_dim, hidden_dim)
+        self.layer_fusion_ref_self = encoder_layer_ref_self
+        if encoder_layer_ref_self is not None:
+            if encoder_layer_deep_copy:
+                self.layer_fusion_modules = _get_clones(fusion_module, self.enc_layers)
+            else:
+                self.layer_fusion_modules = [fusion_module] * self.enc_layers
 
-    def forward(self, frame_query,
-                text_feats=None, text_pad_masks=None,
-                amr_feats=None, amr_pad_masks=None,): # l, bt, nqf, c
+
+    def forward(self,
+                frame_query,
+                amrs=None, 
+                amr_token_feats=None, 
+                amr_token_seg_ids=None,
+                text_feats=None, 
+                text_pad_masks=None):
         if not self.training:
             frame_query = frame_query[[-1]]
-
+        if self.early_fusion is not None:
+            frame_query, amr_token_feats, text_feats = self.fusion_module[0](
+                                                frame_queries=frame_query,
+                                                is_video_frame_query=True,
+                                                amrs=amrs, 
+                                                amr_token_feats=amr_token_feats,
+                                                amr_token_seg_ids=amr_token_seg_ids, 
+                                                text_feats=text_feats, 
+                                                text_pad_masks=text_pad_masks)
         L, BT, fQ, C = frame_query.shape
         B = BT // self.num_frames if self.training else 1
         T = self.num_frames if self.training else BT // B

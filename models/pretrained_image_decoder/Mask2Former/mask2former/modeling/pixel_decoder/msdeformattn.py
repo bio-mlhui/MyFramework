@@ -367,7 +367,7 @@ class MSDeformAttnTransformerEncoder_fusionText(nn.Module):
         self.num_layers = num_layers
         
         self.fusion_rel_self = None # 'before', 'after', None
-        self.fusion_modules = [None] # hack
+        self.fusion_modules = None # hack
 
     @staticmethod
     def get_reference_points(spatial_shapes, valid_ratios, device):
@@ -681,7 +681,7 @@ class MSDeformAttnPixelDecoder_fusionText(nn.Module):
             if encoder_layer_deep_copy:
                 self.transformer.encoder.fusion_modules = _get_clones(fusion_module, self.transformer.encoder.num_layers)
             else:
-                self.transformer.encoder.fusion_modules = [fusion_module] * self.transformer.encoder.num_layers, # do not save in checkpoint
+                self.transformer.encoder.fusion_modules = [fusion_module] * self.transformer.encoder.num_layers # do not save in checkpoint
 
     @classmethod
     def from_config(cls, cfg, input_shape: Dict[str, ShapeSpec]):
