@@ -1994,10 +1994,14 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
             node_feats, edge_feats,= self.batching_graph(amrs=amrs,
                                                 amr_token_feats=amr_token_feats,
                                                 amr_seg_ids=amr_token_seg_ids,)
-    
+        V, E = node_feats.shape[0], edge_feats.shape[0]
         obj_queries = self.obj_query_proj(obj_queries)
         node_feats = self.node_linear(node_feats)
-        edge_feats = self.edge_linear(edge_feats)       
+        if E > 0:
+            edge_feats = self.edge_linear(edge_feats) 
+        else:
+            zero_foo = (self.edge_linear.weight * torch.zeros_like(self.edge_linear.weight)).sum()
+            node_feats = node_feats + zero_foo
         node_obj_queries, edge_obj_queries = self.batching_memory(obj_queries, nodes_batch_ids, edges_batch_ids)
 
         grounding_score = self.reason(node_feats=node_feats, 
@@ -2009,7 +2013,7 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
         for bch_idx in range(batch_size):
             bch_node_score = torch.stack([grounding_score[idx] for idx, batch_id in enumerate(nodes_batch_ids) if batch_id == bch_idx], dim=0)
             g_score_by_batch.append(bch_node_score) # vi nq
-        
+
         return g_score_by_batch
         
     def reason(self, 
@@ -2045,6 +2049,8 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
                                         edge_attr=edge_feats[order_eid, :].clone(), # E hc
                                         node_obj_query=node_obj_queries.flatten(1), # V h_nq_c
                                         )
+        if E == 0:
+            scores = scores + self.context_2.sum() * 0. + self.context_1.sum() * 0.
         return scores # V nq
     
     def message(self, 
@@ -2230,10 +2236,14 @@ class Spatial_Temporal_Grounding_v2(geo_nn.MessagePassing):
             node_feats, edge_feats,= self.batching_graph(amrs=amrs,
                                                 amr_token_feats=amr_token_feats,
                                                 amr_seg_ids=amr_token_seg_ids,)
-    
+        V, E = len(node_feats), len(edge_feats)
         obj_queries = self.obj_query_proj(obj_queries)
         node_feats = self.node_linear(node_feats)
-        edge_feats = self.edge_linear(edge_feats)       
+        if E > 0:
+            edge_feats = self.edge_linear(edge_feats) 
+        else:
+            zero_foo = (self.edge_linear.weight * torch.zeros_like(self.edge_linear.weight)).sum()
+            node_feats = node_feats + zero_foo      
         node_obj_queries, edge_obj_queries = self.batching_memory(obj_queries, nodes_batch_ids, edges_batch_ids)
 
         grounding_score = self.reason(node_feats=node_feats, 
@@ -2281,6 +2291,9 @@ class Spatial_Temporal_Grounding_v2(geo_nn.MessagePassing):
                                         edge_attr=edge_feats[order_eid, :].clone(), # E hc
                                         node_obj_query=node_obj_queries.flatten(1), # V h_nq_c
                                         )
+        if E == 0:
+            scores = scores + self.context_2.sum() * 0. + self.context_1.sum() * 0.
+            
         return scores # V nq
     
     def message(self, 
