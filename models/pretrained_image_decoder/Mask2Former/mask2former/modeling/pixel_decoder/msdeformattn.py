@@ -393,7 +393,6 @@ class MSDeformAttnTransformerEncoder_fusionText(nn.Module):
             output, amr_token_feats, text_feats = fusion_module(multiscale_feats=output, 
                                                                 multiscale_poses=pos,
                                                                 multiscale_is_flattened=True,
-                                                                is_image=True,
                                                                 is_image_multiscale=True,
                                                                 amrs=amrs, 
                                                                 amr_token_feats=amr_token_feats,
