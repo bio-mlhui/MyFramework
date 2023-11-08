@@ -316,7 +316,9 @@ def refcocog_schedule(configs, is_distributed, process_id, num_processes, just_d
     MetadataCatalog.get('refcocog_rios').thing_colors = [(255., 140., 0.), (0., 255., 0.)]
 
     if just_dataset:
-        return train_dataset, validate_val_dataset, validate_test_dataset
+        return {'refcocog_train': train_dataset, 
+                'refcocog_val': validate_val_dataset,
+                 'refcocog_test': validate_test_dataset}
         
     return train_loader, sampler_train,\
             {'refcocog_val': {"loader": validate_val_loader, "coco_eval_file":os.path.join(root, 'instances_refcocog_val.json')},
@@ -651,101 +653,39 @@ def refcoco_plus_schedule(configs, is_distributed, process_id, num_processes, ju
 
 @register_data_schedule
 def refcoco_all_schedule(configs, is_distributed, process_id, num_processes):
-    root = configs['data_dir']
-    imgs_dir = os.path.join(root, 'refer/train2014/train2014')
-    root = os.path.join(root, 'refer')
-    pt_tokenizer_dir=configs['pt_tokenizer_dir']
-    num_workers= configs['num_workers']
-    validate_batch_size= configs['validate_batch_size']
-    amr_are_used: bool = configs['amr_are_used']
-    text_aux_version: int = configs['text_aux_version']
-    image_aux_version: int = configs['image_aux_version']
-    train_augmentation: dict = configs['train_augmentation']
-    validate_augmentation: dict = configs['validate_augmentation']
-    training_seed: int  = configs['training_seed']
-    train_batch_size= configs['train_batch_size']
-    validate_metrics = configs['validate_metrics']
-
-    if amr_are_used:
-        amr_legi_augs = ['fixsize', 'justnormalize', 'resize', 'hflip_fixsize', 'hflip_ResizeSmaller', "resizeSmaller"]
-        assert train_augmentation['name'] in amr_legi_augs
-        assert validate_augmentation['name'] in amr_legi_augs
+    all_datas = {}
+    all_datas.update(refcoco_schedule(configs, is_distributed, process_id, num_processes, just_dataset=True))
+    all_datas.update(refcoco_plus_schedule(configs, is_distributed, process_id, num_processes, just_dataset=True))
+    all_datas.update(refcocog_schedule(configs, is_distributed, process_id, num_processes, just_dataset=True))
     
-    # 合并所有图像, 没有validate和test
-    splits = ['train', 'test', 'val']
-    split_to_samples = {}
-    cat_to_ids = None
-    for split in splits:
-        with open(os.path.join(root, f'instances_refcocog_{split}.json'), 'r') as f:
-            split_samples = json.load(f)
-        split_num_samples = len(split_samples['images']) # 80512,
-        assert split_num_samples == len(split_samples['annotations'])
-        if process_id == 0:
-            logging.info(f'Number of {split} samples: {split_num_samples}')
-            print(f'Number of {split} samples: {split_num_samples}')
-        if cat_to_ids is None:
-            categories = split_samples['categories']
-            all_category_ids = [foo['id'] for foo in categories]
-            assert len(all_category_ids) == 80
-            cat_to_ids = {cid:idx for idx, cid in enumerate(all_category_ids)}
-        split_to_samples[split] = split_samples
+    all_dataset = [val for key, val in all_datas.items()]
+    collator = all_dataset[0].collator
+    from torch.utils.data import ConcatDataset
 
-    with open(os.path.join(root, f'global_mappings.json'), 'r') as f:
-        globals = json.load(f) 
-    imgToAnns = globals['imgToAnns']
-    imgToRefs = globals['imgToRefs']
-    if text_aux_version != 0:
-        text_aux_file = os.path.join(root, f'text_to_aux.json')
-        # you need to generate outside the main module
-        with open(text_aux_file, 'r') as f:
-            text_aux_by_auxid = json.load(f)
-    else:
-        text_aux_by_auxid = None
+    train_dataset = ConcatDataset(all_dataset)
 
-    if image_aux_version != 0:
-        pass
-    else:
-        image_aux_by_auxid = None        
-    
-    create_train_aug = image_aug_entrypoints(train_augmentation['name'])
-    train_aug = create_train_aug(train_augmentation)
-    train_dataset = REFCOCO(imgs_dir=imgs_dir,
-                            pt_tokenizer_dir=pt_tokenizer_dir,
-                            split='train',
-                            set_name='refcocog',
-                            imgToRefs=imgToRefs,
-                            catToId=cat_to_ids,
-                            imgToAnns=imgToAnns,
-                            samples = split_to_samples['train'],
-                            augmentation=train_aug,
-                            text_aux_by_auxid=text_aux_by_auxid,
-                            text_aux_version=text_aux_version,
-                            image_aux_version=image_aux_version,
-                            image_aux_by_auxid=image_aux_by_auxid) 
-     
     sampler_train = TrainRandomSampler_ByEpoch_Distributed(train_dataset,
-                                    num_replicas=num_processes,
-                                    rank=process_id,
-                                    seed=training_seed,)
+                                                        num_replicas=num_processes,
+                                                        rank=process_id,
+                                                        seed=configs['training_seed'],)
     train_loader = DataLoader(train_dataset,
-                            batch_size=train_batch_size,
+                            batch_size=configs['train_batch_size'],
                             sampler=sampler_train,
-                            collate_fn=train_dataset.collator, 
-                            num_workers=num_workers,
+                            collate_fn=collator, 
+                            num_workers=configs['num_workers'],
                             pin_memory=True,
                             persistent_workers=True)
             
     def my_dataset_function():
         return [{}]
     from detectron2.data import DatasetCatalog
-    DatasetCatalog.register('refcocog_rios', my_dataset_function)
+    DatasetCatalog.register('refcoco_alll_rios', my_dataset_function)
     from detectron2.data import MetadataCatalog
-    MetadataCatalog.get('refcocog_rios').thing_classes = ['r', 'nr']
-    MetadataCatalog.get('refcocog_rios').thing_colors = [(255., 140., 0.), (0., 255., 0.)]
+    MetadataCatalog.get('refcoco_all_rios').thing_classes = ['r', 'nr']
+    MetadataCatalog.get('refcoco_all_rios').thing_colors = [(255., 140., 0.), (0., 255., 0.)]
 
         
-    return train_loader, sampler_train,\
-            None, None, None, None
+    return train_loader, sampler_train,None, None, None, None
 
 
 class REFCOCO(DatasetWithAux):
