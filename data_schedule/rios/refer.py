@@ -165,7 +165,7 @@ def convert_poly_to_mask_for_single_obj_torchBool(poly_seg, height, width):
 # 49822个referent: 42226/2573/5023
 # 95020个句子, 80512/4896/9602
 @register_data_schedule
-def refcocog_schedule(configs, is_distributed, process_id, num_processes, just_dataset=False):
+def refcocog_schedule(configs, is_distributed, process_id, num_processes, just_dataset=False, out='rios'):
     root = configs['data_dir']
     imgs_dir = os.path.join(root, 'refer/train2014/train2014')
     # cocotrain14_ann_file = os.path.join(root, 'refer/trainval2014_ann/annotations/instances_train2014.json')
@@ -234,6 +234,7 @@ def refcocog_schedule(configs, is_distributed, process_id, num_processes, just_d
                             pt_tokenizer_dir=pt_tokenizer_dir,
                             split='train',
                             set_name='refcocog',
+                            out=out,
                             imgToRefs=imgToRefs,
                             catToId=cat_to_ids,
                             imgToAnns=imgToAnns,
@@ -250,6 +251,7 @@ def refcocog_schedule(configs, is_distributed, process_id, num_processes, just_d
                             pt_tokenizer_dir=pt_tokenizer_dir,
                             split='validate',
                             set_name='refcocog',
+                            out=out,
                             catToId=cat_to_ids,
                             imgToRefs=imgToRefs,
                             imgToAnns=imgToAnns,
@@ -264,6 +266,7 @@ def refcocog_schedule(configs, is_distributed, process_id, num_processes, just_d
                             pt_tokenizer_dir=pt_tokenizer_dir,
                             split='validate',
                             set_name='refcocog',
+                            out=out,
                             catToId=cat_to_ids,
                             imgToRefs=imgToRefs,
                             imgToAnns=imgToAnns,
@@ -316,9 +319,13 @@ def refcocog_schedule(configs, is_distributed, process_id, num_processes, just_d
     MetadataCatalog.get('refcocog_rios').thing_colors = [(255., 140., 0.), (0., 255., 0.)]
 
     if just_dataset:
-        return {'refcocog_train': train_dataset, 
+        ret = {'refcocog_train': train_dataset, 
                 'refcocog_val': validate_val_dataset,
                  'refcocog_test': validate_test_dataset}
+        for key, val in ret.items():
+            logging.info(f'{key} has {len(val)} samples')
+            print(f'{key} has {len(val)} samples')
+        return ret
         
     return train_loader, sampler_train,\
             {'refcocog_val': {"loader": validate_val_loader, "coco_eval_file":os.path.join(root, 'instances_refcocog_val.json')},
@@ -327,7 +334,7 @@ def refcocog_schedule(configs, is_distributed, process_id, num_processes, just_d
                 None, None
 
 @register_data_schedule
-def refcoco_schedule(configs, is_distributed, process_id, num_processes, just_dataset=False):
+def refcoco_schedule(configs, is_distributed, process_id, num_processes, just_dataset=False, out='rios'):
     root = configs['data_dir']
     imgs_dir = os.path.join(root, 'refer/train2014/train2014')
     # cocotrain14_ann_file = os.path.join(root, 'refer/trainval2014_ann/annotations/instances_train2014.json')
@@ -396,6 +403,7 @@ def refcoco_schedule(configs, is_distributed, process_id, num_processes, just_da
                             pt_tokenizer_dir=pt_tokenizer_dir,
                             split='train',
                             set_name='refcoco',
+                            out=out,
                             imgToRefs=imgToRefs,
                             catToId=cat_to_ids,
                             imgToAnns=imgToAnns,
@@ -412,6 +420,7 @@ def refcoco_schedule(configs, is_distributed, process_id, num_processes, just_da
                             pt_tokenizer_dir=pt_tokenizer_dir,
                             split='validate',
                             set_name='refcoco',
+                            out=out,
                             catToId=cat_to_ids,
                             imgToRefs=imgToRefs,
                             imgToAnns=imgToAnns,
@@ -426,6 +435,7 @@ def refcoco_schedule(configs, is_distributed, process_id, num_processes, just_da
                             pt_tokenizer_dir=pt_tokenizer_dir,
                             split='validate',
                             set_name='refcoco',
+                            out=out,
                             catToId=cat_to_ids,
                             imgToRefs=imgToRefs,
                             imgToAnns=imgToAnns,
@@ -478,9 +488,13 @@ def refcoco_schedule(configs, is_distributed, process_id, num_processes, just_da
     MetadataCatalog.get('refcoco_rios').thing_colors = [(255., 140., 0.), (0., 255., 0.)]
 
     if just_dataset:
-        return {'refcoco_train': train_dataset, 
+        ret = {'refcoco_train': train_dataset, 
                 'refcoco_testA': validate_testA_dataset, 
                 'refcoco_testB': validate_testB_dataset}
+        for key, val in ret.items():
+            logging.info(f'{key} has {len(val)} samples')
+            print(f'{key} has {len(val)} samples')
+        return ret
         
     return train_loader, sampler_train,\
             {'refcoco_testA': {"loader": validate_testA_loader, "coco_eval_file":os.path.join(root, 'instances_refcoco_testA.json')},
@@ -489,7 +503,7 @@ def refcoco_schedule(configs, is_distributed, process_id, num_processes, just_da
                 None, None
 
 @register_data_schedule
-def refcoco_plus_schedule(configs, is_distributed, process_id, num_processes, just_dataset=False):
+def refcoco_plus_schedule(configs, is_distributed, process_id, num_processes, just_dataset=False, out='rios'):
     root = configs['data_dir']
     imgs_dir = os.path.join(root, 'refer/train2014/train2014')
     # cocotrain14_ann_file = os.path.join(root, 'refer/trainval2014_ann/annotations/instances_train2014.json')
@@ -558,6 +572,7 @@ def refcoco_plus_schedule(configs, is_distributed, process_id, num_processes, ju
                             pt_tokenizer_dir=pt_tokenizer_dir,
                             split='train',
                             set_name='refcoco+',
+                            out=out,
                             imgToRefs=imgToRefs,
                             catToId=cat_to_ids,
                             imgToAnns=imgToAnns,
@@ -574,6 +589,7 @@ def refcoco_plus_schedule(configs, is_distributed, process_id, num_processes, ju
                             pt_tokenizer_dir=pt_tokenizer_dir,
                             split='validate',
                             set_name='refcoco+',
+                            out=out,
                             catToId=cat_to_ids,
                             imgToRefs=imgToRefs,
                             imgToAnns=imgToAnns,
@@ -588,6 +604,7 @@ def refcoco_plus_schedule(configs, is_distributed, process_id, num_processes, ju
                             pt_tokenizer_dir=pt_tokenizer_dir,
                             split='validate',
                             set_name='refcoco+',
+                            out=out,
                             catToId=cat_to_ids,
                             imgToRefs=imgToRefs,
                             imgToAnns=imgToAnns,
@@ -640,9 +657,13 @@ def refcoco_plus_schedule(configs, is_distributed, process_id, num_processes, ju
     MetadataCatalog.get('refcoco+_rios').thing_colors = [(255., 140., 0.), (0., 255., 0.)]
 
     if just_dataset:
-        return {'refcoco+_train': train_dataset, 
+        ret = {'refcoco+_train': train_dataset, 
                 'refcoco+_testA': validate_testA_dataset, 
                 'refcoco+_testB': validate_testB_dataset}
+        for key, val in ret.items():
+            logging.info(f'{key} has {len(val)} samples')
+            print(f'{key} has {len(val)} samples')
+        return ret
         
     return train_loader, sampler_train,\
             {'refcoco+_testA': {"loader": validate_testA_loader, "coco_eval_file":os.path.join(root, 'instances_refcoco+_testA.json')},
@@ -703,6 +724,7 @@ class REFCOCO(DatasetWithAux):
                  image_aux_version,
                  image_aux_by_auxid,
                  pt_tokenizer_dir,
+                 out='rios',
                  ) -> None:
         super().__init__(text_aux_version=text_aux_version,
                          text_aux_by_auxid=text_aux_by_auxid,
@@ -719,7 +741,7 @@ class REFCOCO(DatasetWithAux):
         self.imgToAnns = imgToAnns
         self.category_id_map = catToId
         self.augmentation = augmentation
-
+        self.out = out
         self.split = split
         collator_kwargs = {}
         if text_aux_version == 1 or text_aux_version == 2 or text_aux_version == 3 or text_aux_version == 4:
@@ -782,47 +804,50 @@ class REFCOCO(DatasetWithAux):
     def __getitem__(self, item_idx):
         # 每个图像的每个(obj, text)成为一个测试样本
         if self.split == 'train' or self.split == 'validate':
-            chosen_sample = self.samples[item_idx] 
-            chosen_sample_ann = self.samples_anns[item_idx]
-            file_name, H, W, original_image_id, test_img_id, text_query, sent_id = chosen_sample['file_name'], chosen_sample['height'],chosen_sample['width'],\
-                                                            chosen_sample['original_id'], chosen_sample['id'],chosen_sample['caption'], chosen_sample['sent_id']
-            ann_id = chosen_sample_ann['original_id']
-            text_query = refcoco_normalize_text(text_query, set_name=self.set_name, sent_id=sent_id)  
-            if text_query == 'man i a white shirt':
-                print('this')
-                pass
-            image = Image.open(os.path.join(self.imgs_dir, file_name)).convert("RGB") 
-            assert image.size[0] == W and image.size[1] == H
-            all_obj_anns = self.imgToAnns[str(original_image_id)] # 因为Json导致key成了string
-            all_obj_ann_ids = [aoa['id'] for aoa in all_obj_anns]
-            referent_idx = all_obj_ann_ids.index(ann_id)  # 每个obj能区分的就是annotation id
-            all_obj_anns = self.decode_annotations(all_obj_anns, H=H, W=W)
-            all_refs = self.imgToRefs[str(original_image_id)]
-            appear_texts = self.decode_text(all_refs, all_obj_ann_ids) # list[[list[str]]], 按照all_obj_ann_ids排列每个物体的sentences
-            targets = {
-                'masks': all_obj_anns['masks'], # n h w (bool)
-                'class_labels': all_obj_anns['class_labels'], # n
-                'boxes': all_obj_anns['boxes'], # n 4, xyxy, float
-                'valid': all_obj_anns['valids'], # n
-                'referent_idx': referent_idx, 
-                'image_id': test_img_id,
-                'orig_size': torch.tensor([H, W]),
-                'size': torch.tensor([H, W]), # h w
-            }
-            flatten_texts = [text_query]
-            for atxt in appear_texts:
-                flatten_texts.extend(copy.deepcopy(atxt))
-            
-            image, flatten_texts, targets = self.augmentation(image, flatten_texts, targets)
-            text_query = flatten_texts[0]
-            cnt = 1
-            for idx, foo in enumerate(appear_texts):
-                appear_texts[idx] = flatten_texts[cnt:(cnt+len(foo))]
-                cnt += len(foo)
-            assert cnt == len(flatten_texts)
+            if self.out == 'rios':
+                chosen_sample = self.samples[item_idx] 
+                chosen_sample_ann = self.samples_anns[item_idx]
+                file_name, H, W, original_image_id, test_img_id, text_query, sent_id = chosen_sample['file_name'], chosen_sample['height'],chosen_sample['width'],\
+                                                                chosen_sample['original_id'], chosen_sample['id'],chosen_sample['caption'], chosen_sample['sent_id']
+                ann_id = chosen_sample_ann['original_id']
+                text_query = refcoco_normalize_text(text_query, set_name=self.set_name, sent_id=sent_id)  
+                image = Image.open(os.path.join(self.imgs_dir, file_name)).convert("RGB") 
+                assert image.size[0] == W and image.size[1] == H
+                all_obj_anns = self.imgToAnns[str(original_image_id)] # 因为Json导致key成了string
+                all_obj_ann_ids = [aoa['id'] for aoa in all_obj_anns]
+                referent_idx = all_obj_ann_ids.index(ann_id)  # 每个obj能区分的就是annotation id
+                all_obj_anns = self.decode_annotations(all_obj_anns, H=H, W=W)
+                all_refs = self.imgToRefs[str(original_image_id)]
+                appear_texts = self.decode_text(all_refs, all_obj_ann_ids) # list[[list[str]]], 按照all_obj_ann_ids排列每个物体的sentences
+                targets = {
+                    'masks': all_obj_anns['masks'], # n h w (bool)
+                    'class_labels': all_obj_anns['class_labels'], # n
+                    'boxes': all_obj_anns['boxes'], # n 4, xyxy, float
+                    'valid': all_obj_anns['valids'], # n
+                    'referent_idx': referent_idx, 
+                    'image_id': test_img_id,
+                    'orig_size': torch.tensor([H, W]),
+                    'size': torch.tensor([H, W]), # h w
+                }
+                flatten_texts = [text_query]
+                for atxt in appear_texts:
+                    flatten_texts.extend(copy.deepcopy(atxt))
+                
+                image, flatten_texts, targets = self.augmentation(image, flatten_texts, targets)
+                text_query = flatten_texts[0]
+                cnt = 1
+                for idx, foo in enumerate(appear_texts):
+                    appear_texts[idx] = flatten_texts[cnt:(cnt+len(foo))]
+                    cnt += len(foo)
+                assert cnt == len(flatten_texts)
 
-            return image, text_query, self.get_aux(item_idx, queries_by_objid=appear_texts,
-                                                     image_auxid=None, text_auxid=text_query), targets
+                return image, text_query, self.get_aux(item_idx, queries_by_objid=appear_texts,
+                                                        image_auxid=None, text_auxid=text_query), targets
+            elif self.out == 'rvos':
+                pass
+            else:
+                raise ValueError()
+
 
     def get_aux(self, item_idx, queries_by_objid,
                 image_auxid,
