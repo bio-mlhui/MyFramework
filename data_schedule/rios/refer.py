@@ -165,7 +165,7 @@ def convert_poly_to_mask_for_single_obj_torchBool(poly_seg, height, width):
 # 49822个referent: 42226/2573/5023
 # 95020个句子, 80512/4896/9602
 @register_data_schedule
-def refcocog_schedule(configs, is_distributed, process_id, num_processes):
+def refcocog_schedule(configs, is_distributed, process_id, num_processes, just_dataset=False):
     root = configs['data_dir']
     imgs_dir = os.path.join(root, 'refer/train2014/train2014')
     # cocotrain14_ann_file = os.path.join(root, 'refer/trainval2014_ann/annotations/instances_train2014.json')
@@ -315,12 +315,339 @@ def refcocog_schedule(configs, is_distributed, process_id, num_processes):
     MetadataCatalog.get('refcocog_rios').thing_classes = ['r', 'nr']
     MetadataCatalog.get('refcocog_rios').thing_colors = [(255., 140., 0.), (0., 255., 0.)]
 
+    if just_dataset:
+        return train_dataset, validate_val_dataset, validate_test_dataset
         
     return train_loader, sampler_train,\
             {'refcocog_val': {"loader": validate_val_loader, "coco_eval_file":os.path.join(root, 'instances_refcocog_val.json')},
              "refcocog_test": {"loader": validate_test_loader, "coco_eval_file":os.path.join(root, 'instances_refcocog_test.json')}}, \
                 partial(validate, validate_metrics=validate_metrics, root=root),\
                 None, None
+
+@register_data_schedule
+def refcoco_schedule(configs, is_distributed, process_id, num_processes, just_dataset=False):
+    root = configs['data_dir']
+    imgs_dir = os.path.join(root, 'refer/train2014/train2014')
+    # cocotrain14_ann_file = os.path.join(root, 'refer/trainval2014_ann/annotations/instances_train2014.json')
+    # for img_id in self.imgToAnns.keys():
+    #     assert len(self.imgToAnns[img_id]) == len(coco.imgToAnns[int(img_id)])
+    root = os.path.join(root, 'refer/refcoco')
+    pt_tokenizer_dir=configs['pt_tokenizer_dir']
+    num_workers= configs['num_workers']
+    validate_batch_size= configs['validate_batch_size']
+    amr_are_used: bool = configs['amr_are_used']
+    text_aux_version: int = configs['text_aux_version']
+    image_aux_version: int = configs['image_aux_version']
+    train_augmentation: dict = configs['train_augmentation']
+    validate_augmentation: dict = configs['validate_augmentation']
+    training_seed: int  = configs['training_seed']
+    train_batch_size= configs['train_batch_size']
+    validate_metrics = configs['validate_metrics']
+
+    if amr_are_used:
+        amr_legi_augs = ['fixsize', 'justnormalize', 'resize', 'hflip_fixsize', 'hflip_ResizeSmaller', "resizeSmaller"]
+        assert train_augmentation['name'] in amr_legi_augs
+        assert validate_augmentation['name'] in amr_legi_augs
+   
+    splits = ['train', 'testA', 'testB']
+    split_to_samples = {}
+    cat_to_ids = None
+    for split in splits:
+        with open(os.path.join(root, f'instances_refcoco_{split}.json'), 'r') as f:
+            split_samples = json.load(f)
+        split_num_samples = len(split_samples['images']) # 80512,
+        assert split_num_samples == len(split_samples['annotations'])
+        if process_id == 0:
+            logging.info(f'Number of {split} samples: {split_num_samples}')
+            print(f'Number of {split} samples: {split_num_samples}')
+        if cat_to_ids is None:
+            categories = split_samples['categories']
+            all_category_ids = [foo['id'] for foo in categories]
+            assert len(all_category_ids) == 80
+            cat_to_ids = {cid:idx for idx, cid in enumerate(all_category_ids)}
+        split_to_samples[split] = split_samples
+        # if split == 'test' or split == 'val':
+        #     tgt_file_name = os.path.join(root, f'{split}_coco_eval.json')
+        #     if not os.path.exists(tgt_file_name):
+        #         generate_coco_eval_file(tgt_file_name, split_samples)
+
+    with open(os.path.join(root, f'global_mappings.json'), 'r') as f:
+        globals = json.load(f) 
+    imgToAnns = globals['imgToAnns']
+    imgToRefs = globals['imgToRefs']
+    if text_aux_version != 0:
+        text_aux_file = os.path.join(root, f'text_to_aux.json')
+        # you need to generate outside the main module
+        with open(text_aux_file, 'r') as f:
+            text_aux_by_auxid = json.load(f)
+    else:
+        text_aux_by_auxid = None
+
+    if image_aux_version != 0:
+        pass
+    else:
+        image_aux_by_auxid = None        
+    
+    create_train_aug = image_aug_entrypoints(train_augmentation['name'])
+    train_aug = create_train_aug(train_augmentation)
+    train_dataset = REFCOCO(imgs_dir=imgs_dir,
+                            pt_tokenizer_dir=pt_tokenizer_dir,
+                            split='train',
+                            set_name='refcoco',
+                            imgToRefs=imgToRefs,
+                            catToId=cat_to_ids,
+                            imgToAnns=imgToAnns,
+                            samples = split_to_samples['train'],
+                            augmentation=train_aug,
+                            text_aux_by_auxid=text_aux_by_auxid,
+                            text_aux_version=text_aux_version,
+                            image_aux_version=image_aux_version,
+                            image_aux_by_auxid=image_aux_by_auxid) 
+    
+    create_validate_aug = image_aug_entrypoints(validate_augmentation['name'])
+    validate_aug = create_validate_aug(validate_augmentation)                     
+    validate_testA_dataset = REFCOCO(imgs_dir=imgs_dir,
+                            pt_tokenizer_dir=pt_tokenizer_dir,
+                            split='validate',
+                            set_name='refcoco',
+                            catToId=cat_to_ids,
+                            imgToRefs=imgToRefs,
+                            imgToAnns=imgToAnns,
+                            samples = split_to_samples['testA'],
+                            augmentation=validate_aug,
+                            text_aux_by_auxid=text_aux_by_auxid,
+                            text_aux_version=text_aux_version,
+                            image_aux_version=image_aux_version,
+                            image_aux_by_auxid=image_aux_by_auxid) 
+
+    validate_testB_dataset = REFCOCO(imgs_dir=imgs_dir,
+                            pt_tokenizer_dir=pt_tokenizer_dir,
+                            split='validate',
+                            set_name='refcoco',
+                            catToId=cat_to_ids,
+                            imgToRefs=imgToRefs,
+                            imgToAnns=imgToAnns,
+                            samples = split_to_samples['testB'],
+                            augmentation=validate_aug,
+                            text_aux_by_auxid=text_aux_by_auxid,
+                            text_aux_version=text_aux_version,
+                            image_aux_version=image_aux_version,
+                            image_aux_by_auxid=image_aux_by_auxid) 
+    
+    sampler_train = TrainRandomSampler_ByEpoch_Distributed(train_dataset,
+                                    num_replicas=num_processes,
+                                    rank=process_id,
+                                    seed=training_seed,)
+    train_loader = DataLoader(train_dataset,
+                            batch_size=train_batch_size,
+                            sampler=sampler_train,
+                            collate_fn=train_dataset.collator, 
+                            num_workers=num_workers,
+                            pin_memory=True,
+                            persistent_workers=True)
+            
+    sampler_validate_testA = Evaluate_Sampler_Distributed(validate_testA_dataset, 
+                                    num_replicas=num_processes, 
+                                    rank=process_id,)
+    validate_testA_loader = DataLoader(validate_testA_dataset, 
+                                batch_size=validate_batch_size, 
+                                sampler=sampler_validate_testA,
+                                collate_fn=validate_testA_dataset.collator,
+                                num_workers=num_workers,
+                                pin_memory=True,
+                                persistent_workers=True)
+    sampler_validate_testB = Evaluate_Sampler_Distributed(validate_testB_dataset, 
+                                    num_replicas=num_processes, 
+                                    rank=process_id,)
+    validate_testB_loader = DataLoader(validate_testB_dataset, 
+                                batch_size=validate_batch_size, 
+                                sampler=sampler_validate_testB,
+                                collate_fn=validate_testB_dataset.collator,
+                                num_workers=num_workers,
+                                pin_memory=True,
+                                persistent_workers=True)
+       
+    def my_dataset_function():
+        return [{}]
+    from detectron2.data import DatasetCatalog
+    DatasetCatalog.register('refcoco_rios', my_dataset_function)
+    from detectron2.data import MetadataCatalog
+    MetadataCatalog.get('refcoco_rios').thing_classes = ['r', 'nr']
+    MetadataCatalog.get('refcoco_rios').thing_colors = [(255., 140., 0.), (0., 255., 0.)]
+
+    if just_dataset:
+        return {'refcoco_train': train_dataset, 
+                'refcoco_testA': validate_testA_dataset, 
+                'refcoco_testB': validate_testB_dataset}
+        
+    return train_loader, sampler_train,\
+            {'refcoco_testA': {"loader": validate_testA_loader, "coco_eval_file":os.path.join(root, 'instances_refcoco_testA.json')},
+             "refcoco_testB": {"loader": validate_testB_loader, "coco_eval_file":os.path.join(root, 'instances_refcoco_testB.json')}}, \
+                partial(validate, validate_metrics=validate_metrics, root=root),\
+                None, None
+
+@register_data_schedule
+def refcoco_plus_schedule(configs, is_distributed, process_id, num_processes, just_dataset=False):
+    root = configs['data_dir']
+    imgs_dir = os.path.join(root, 'refer/train2014/train2014')
+    # cocotrain14_ann_file = os.path.join(root, 'refer/trainval2014_ann/annotations/instances_train2014.json')
+    # for img_id in self.imgToAnns.keys():
+    #     assert len(self.imgToAnns[img_id]) == len(coco.imgToAnns[int(img_id)])
+    root = os.path.join(root, 'refer/refcoco+')
+    pt_tokenizer_dir=configs['pt_tokenizer_dir']
+    num_workers= configs['num_workers']
+    validate_batch_size= configs['validate_batch_size']
+    amr_are_used: bool = configs['amr_are_used']
+    text_aux_version: int = configs['text_aux_version']
+    image_aux_version: int = configs['image_aux_version']
+    train_augmentation: dict = configs['train_augmentation']
+    validate_augmentation: dict = configs['validate_augmentation']
+    training_seed: int  = configs['training_seed']
+    train_batch_size= configs['train_batch_size']
+    validate_metrics = configs['validate_metrics']
+
+    if amr_are_used:
+        amr_legi_augs = ['fixsize', 'justnormalize', 'resize', 'hflip_fixsize', 'hflip_ResizeSmaller', "resizeSmaller"]
+        assert train_augmentation['name'] in amr_legi_augs
+        assert validate_augmentation['name'] in amr_legi_augs
+   
+    splits = ['train', 'testA', 'testB']
+    split_to_samples = {}
+    cat_to_ids = None
+    for split in splits:
+        with open(os.path.join(root, f'instances_refcoco+_{split}.json'), 'r') as f:
+            split_samples = json.load(f)
+        split_num_samples = len(split_samples['images']) # 80512,
+        assert split_num_samples == len(split_samples['annotations'])
+        if process_id == 0:
+            logging.info(f'Number of {split} samples: {split_num_samples}')
+            print(f'Number of {split} samples: {split_num_samples}')
+        if cat_to_ids is None:
+            categories = split_samples['categories']
+            all_category_ids = [foo['id'] for foo in categories]
+            assert len(all_category_ids) == 80
+            cat_to_ids = {cid:idx for idx, cid in enumerate(all_category_ids)}
+        split_to_samples[split] = split_samples
+        # if split == 'test' or split == 'val':
+        #     tgt_file_name = os.path.join(root, f'{split}_coco_eval.json')
+        #     if not os.path.exists(tgt_file_name):
+        #         generate_coco_eval_file(tgt_file_name, split_samples)
+
+    with open(os.path.join(root, f'global_mappings.json'), 'r') as f:
+        globals = json.load(f) 
+    imgToAnns = globals['imgToAnns']
+    imgToRefs = globals['imgToRefs']
+    if text_aux_version != 0:
+        text_aux_file = os.path.join(root, f'text_to_aux.json')
+        # you need to generate outside the main module
+        with open(text_aux_file, 'r') as f:
+            text_aux_by_auxid = json.load(f)
+    else:
+        text_aux_by_auxid = None
+
+    if image_aux_version != 0:
+        pass
+    else:
+        image_aux_by_auxid = None        
+    
+    create_train_aug = image_aug_entrypoints(train_augmentation['name'])
+    train_aug = create_train_aug(train_augmentation)
+    train_dataset = REFCOCO(imgs_dir=imgs_dir,
+                            pt_tokenizer_dir=pt_tokenizer_dir,
+                            split='train',
+                            set_name='refcoco+',
+                            imgToRefs=imgToRefs,
+                            catToId=cat_to_ids,
+                            imgToAnns=imgToAnns,
+                            samples = split_to_samples['train'],
+                            augmentation=train_aug,
+                            text_aux_by_auxid=text_aux_by_auxid,
+                            text_aux_version=text_aux_version,
+                            image_aux_version=image_aux_version,
+                            image_aux_by_auxid=image_aux_by_auxid) 
+    
+    create_validate_aug = image_aug_entrypoints(validate_augmentation['name'])
+    validate_aug = create_validate_aug(validate_augmentation)                     
+    validate_testA_dataset = REFCOCO(imgs_dir=imgs_dir,
+                            pt_tokenizer_dir=pt_tokenizer_dir,
+                            split='validate',
+                            set_name='refcoco+',
+                            catToId=cat_to_ids,
+                            imgToRefs=imgToRefs,
+                            imgToAnns=imgToAnns,
+                            samples = split_to_samples['testA'],
+                            augmentation=validate_aug,
+                            text_aux_by_auxid=text_aux_by_auxid,
+                            text_aux_version=text_aux_version,
+                            image_aux_version=image_aux_version,
+                            image_aux_by_auxid=image_aux_by_auxid) 
+
+    validate_testB_dataset = REFCOCO(imgs_dir=imgs_dir,
+                            pt_tokenizer_dir=pt_tokenizer_dir,
+                            split='validate',
+                            set_name='refcoco+',
+                            catToId=cat_to_ids,
+                            imgToRefs=imgToRefs,
+                            imgToAnns=imgToAnns,
+                            samples = split_to_samples['testB'],
+                            augmentation=validate_aug,
+                            text_aux_by_auxid=text_aux_by_auxid,
+                            text_aux_version=text_aux_version,
+                            image_aux_version=image_aux_version,
+                            image_aux_by_auxid=image_aux_by_auxid) 
+    
+    sampler_train = TrainRandomSampler_ByEpoch_Distributed(train_dataset,
+                                    num_replicas=num_processes,
+                                    rank=process_id,
+                                    seed=training_seed,)
+    train_loader = DataLoader(train_dataset,
+                            batch_size=train_batch_size,
+                            sampler=sampler_train,
+                            collate_fn=train_dataset.collator, 
+                            num_workers=num_workers,
+                            pin_memory=True,
+                            persistent_workers=True)
+            
+    sampler_validate_testA = Evaluate_Sampler_Distributed(validate_testA_dataset, 
+                                    num_replicas=num_processes, 
+                                    rank=process_id,)
+    validate_testA_loader = DataLoader(validate_testA_dataset, 
+                                batch_size=validate_batch_size, 
+                                sampler=sampler_validate_testA,
+                                collate_fn=validate_testA_dataset.collator,
+                                num_workers=num_workers,
+                                pin_memory=True,
+                                persistent_workers=True)
+    sampler_validate_testB = Evaluate_Sampler_Distributed(validate_testB_dataset, 
+                                    num_replicas=num_processes, 
+                                    rank=process_id,)
+    validate_testB_loader = DataLoader(validate_testB_dataset, 
+                                batch_size=validate_batch_size, 
+                                sampler=sampler_validate_testB,
+                                collate_fn=validate_testB_dataset.collator,
+                                num_workers=num_workers,
+                                pin_memory=True,
+                                persistent_workers=True)
+       
+    def my_dataset_function():
+        return [{}]
+    from detectron2.data import DatasetCatalog
+    DatasetCatalog.register('refcoco+_rios', my_dataset_function)
+    from detectron2.data import MetadataCatalog
+    MetadataCatalog.get('refcoco+_rios').thing_classes = ['r', 'nr']
+    MetadataCatalog.get('refcoco+_rios').thing_colors = [(255., 140., 0.), (0., 255., 0.)]
+
+    if just_dataset:
+        return {'refcoco+_train': train_dataset, 
+                'refcoco+_testA': validate_testA_dataset, 
+                'refcoco+_testB': validate_testB_dataset}
+        
+    return train_loader, sampler_train,\
+            {'refcoco+_testA': {"loader": validate_testA_loader, "coco_eval_file":os.path.join(root, 'instances_refcoco+_testA.json')},
+             "refcoco+_testB": {"loader": validate_testB_loader, "coco_eval_file":os.path.join(root, 'instances_refcoco+_testB.json')}}, \
+                partial(validate, validate_metrics=validate_metrics, root=root),\
+                None, None
+
 
 @register_data_schedule
 def refcoco_all_schedule(configs, is_distributed, process_id, num_processes):
