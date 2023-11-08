@@ -376,7 +376,12 @@ class VisionLanguageFusionModule_v2(nn.Module):
         else:
             return tgt * tgt2, attn_weights
 
+from torch_geometric.data import Data
+import dgl
+import torch_geometric.utils as tg_util
+import networkx as nx
 # multiscale + text
+import numpy as np
 class Visual_AMRText_SeqSeq(nn.Module):
     def __init__(self, 
                  d_model,
@@ -405,45 +410,55 @@ class Visual_AMRText_SeqSeq(nn.Module):
                                                                      nhead=nheads,
                                                                      dropout=dropout,
                                                                      dot_or_add=dot_or_add,)
-        if 'depth' in amr_pos_type:
+        if 'refer' in amr_pos_type:
             # 最大深度
-            self.depth_amr_pos = nn.Embedding(50, embedding_dim=d_model)
+            self.depth_amr_pos = nn.Embedding(100, embedding_dim=d_model)
         if 'learned' in text_pos_type:
             self.lrn_text_pos = nn.Embedding(512, embedding_dim=512)
         elif 'sin' in self.text_pos_type:
             self.sin_text_pos = build_position_encoding(position_embedding_name='1d')
 
-    def amr_positional_encoding(self, g, pos_enc_dim):
+    def amr_positional_encoding(self, g: dgl.DGLGraph, pos_enc_dim):
         """
             Graph positional encoding v/ Laplacian eigenvectors
         """
-        if self.amr_pos_type == 'lap':
-            import scipy as sp
-            import dgl
-            # Laplacian
-            A = g.adjacency_matrix_scipy(return_edge_ids=False).astype(float)
-            N = sp.diags(dgl.backend.asnumpy(g.in_degrees()).clip(1) ** -0.5, dtype=float)
-            L = sp.eye(g.number_of_nodes()) - N * A * N
+        import scipy as sp
+        import dgl
+        # Laplacian
+        A = g.adj().to_dense().numpy().astype(float)
+        N = sp.sparse.diags(dgl.backend.asnumpy(g.in_degrees()).clip(1) ** -0.5, dtype=float).toarray()
+        L = sp.eye(g.number_of_nodes()) - N * A * N
 
-            # # Eigenvectors with numpy
-            # EigVal, EigVec = np.linalg.eig(L.toarray())
-            # idx = EigVal.argsort() # increasing order
-            # EigVal, EigVec = EigVal[idx], np.real(EigVec[:,idx])
-            # g.ndata['pos_enc'] = torch.from_numpy(np.abs(EigVec[:,1:pos_enc_dim+1])).float() 
+        # Eigenvectors with numpy
+        EigVal, EigVec = np.linalg.eig(L)
+        idx = EigVal.argsort() # increasing order
+        EigVal, EigVec = EigVal[idx], np.real(EigVec[:,idx])
+        return torch.from_numpy(np.abs(EigVec[:,1:pos_enc_dim+1])).float() 
 
-            # Eigenvectors with scipy
-            #EigVal, EigVec = sp.linalg.eigs(L, k=pos_enc_dim+1, which='SR')
-            EigVal, EigVec = sp.linalg.eigs(L, k=pos_enc_dim+1, which='SR', tol=1e-2) # for 40 PEs
-            EigVec = EigVec[:, EigVal.argsort()] # increasing order
-            g.ndata['pos_enc'] = torch.from_numpy(EigVec[:,1:pos_enc_dim+1]).float() 
+        # Eigenvectors with scipy
+        #EigVal, EigVec = sp.linalg.eigs(L, k=pos_enc_dim+1, which='SR')
+        # EigVal, EigVec = sp.sparse.linalg.eigs(L, k=pos_enc_dim+1, which='SR', tol=1e-2) # for 40 PEs
+        # EigVec = EigVec[:, EigVal.argsort()] # increasing order
+        # return torch.from_numpy(EigVec[:,1:pos_enc_dim+1]).float() 
 
-            return g
-
-    def get_amr_poses(self, amrs=None, amr_token_feats=None, amr_token_seg_ids=None):
+    def get_amr_poses(self, amrs : Data =None, amr_token_feats=None, amr_token_seg_ids=None):
         # b (v+e)_max c
+        enc_dim = amr_token_feats.shape[-1]
         amr_poses = torch.zeros_like(amr_token_feats)
         if 'lap' in self.amr_pos_type:
-            raise NotImplementedError()
+            for btch_idx, amr in enumerate(amrs):
+                num_nodes = amr.num_nodes
+                lap_pos = self.amr_positional_encoding(tg_util.to_dgl(amr), pos_enc_dim=1).squeeze(-1)
+                amr_poses[btch_idx][:num_nodes] += lap_pos
+        if 'refer' in self.amr_pos_type:
+            # compute shortest path
+            for btch_idx, amr in enumerate(amrs):
+                num_nodes = amr.num_nodes
+                nx_graph = tg_util.to_networkx(amr)
+                all_lengths = dict(nx.single_target_shortest_path_length(nx_graph, 0)) # 0, 1, 2, 3
+                pos_lengths = torch.tensor([all_lengths[idx] for idx in range(num_nodes)], dtype=torch.int64).to(amr_token_feats.device)
+                pos = self.depth_amr_pos(pos_lengths)
+                amr_poses[btch_idx][:num_nodes] += pos
         return amr_poses
 
     def get_text_poses(self, text_feats=None, text_pad_masks=None):
