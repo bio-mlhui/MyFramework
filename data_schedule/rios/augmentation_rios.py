@@ -48,6 +48,13 @@ class Hflip_FixSize(ImgText_Transform):
             T.ToTensor()           
         ])
 
+
+class No(ImgText_Transform):
+    def __init__(self):
+        self.transform = T.Compose([
+            T.ToTensor()           
+        ])
+
 @register_aug
 def fixsize(configs):
     return FixSize(fixsize=configs['fixsize'])
@@ -55,7 +62,10 @@ def fixsize(configs):
 @register_aug
 def hflip_fixsize(configs):
     return Hflip_FixSize(fixsize=configs['fixsize'])
-    
+
+@register_aug
+def no(configs):
+    return No()
 
 
 

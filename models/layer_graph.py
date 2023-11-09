@@ -1876,7 +1876,7 @@ def grounding_v1_multihead_v2_mlp(configs):
     return Grounding_v1_multihead_v2_MLP(d_model=configs['d_model'],
                                         flow=configs['flow'],
                                         score_aggr=configs['score_aggr'] if 'score_aggr' in configs else 'sum')
-
+import math
 class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
     def __init__(self, 
                  d_model,
@@ -1916,11 +1916,6 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
         glorot(self.context_1)
         glorot(self.ref_1)
         glorot(self.ref_2)
-
-        # nn.init.kaiming_uniform_(self.context_1, a=math.sqrt(5))
-        # nn.init.kaiming_uniform_(self.context_2, a=math.sqrt(5))
-        # nn.init.kaiming_uniform_(self.ref_1, a=math.sqrt(5))
-        # nn.init.kaiming_uniform_(self.ref_2, a=math.sqrt(5))
 
     def batching_graph(self, 
                        amrs=None,
