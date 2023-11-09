@@ -256,12 +256,7 @@ class perFrameMultiscaleFlatten_Text_v1(nn.Module):
                                                         nhead=nheads,
                                                         dropout=dropout)
         self.text1d_pos = build_position_encoding(position_embedding_name='1d')
-        self._reset_parameters()
-        
-    def _reset_parameters(self):
-        for p in self.parameters():
-            if p.dim() > 1:
-                nn.init.xavier_uniform_(p)
+
     def forward(self, flatten_multiscale, flatten_multiscale_pos,
                 text_feats=None, text_pad_masks=None,
                 amr_feats=None, amr_pad_masks=None):
@@ -419,13 +414,6 @@ class Visual_AMRText_SeqSeq(nn.Module):
             self.sin_text_pos = build_position_encoding(position_embedding_name='1d')
         elif 'refer_sin' in self.text_pos_type:
             self.amr_refer_sin_pos = build_position_encoding(position_embedding_name='1d')
-        self._reset_parameters()
-
-    def _reset_parameters(self):
-        for p in self.parameters():
-            if p.dim() > 1:
-                nn.init.xavier_uniform_(p)
-        
 
     def amr_positional_encoding(self, g: dgl.DGLGraph, pos_enc_dim):
         """
@@ -474,8 +462,8 @@ class Visual_AMRText_SeqSeq(nn.Module):
                 nx_graph = tg_util.to_networkx(amr)
                 all_lengths = dict(nx.single_target_shortest_path_length(nx_graph, 0)) # 0, 1, 2, 3
                 max_length = max(list(all_lengths.values()))
-
-                pos_lengths = torch.tensor([all_lengths[idx] for idx in range(num_nodes)], dtype=torch.int64).to(amr_token_feats.device)
+                foo_pad_mask = amr_token_feats.new_zeros([1, max_length])
+                pos = self.amr_refer_sin_pos(foo_pad_mask, hidden_dim=amr_token_feats.shape[-1]).permute(2, 1, 0) # 1 s -> 1 c s
                 pos = self.depth_amr_pos(pos_lengths)
                 amr_poses[btch_idx][:num_nodes] += pos            
         return amr_poses
@@ -935,15 +923,7 @@ class perFrameMultiscale_VideoQuery_Text_v1(nn.Module):
                                                     dropout=fusion_dot['dropout'])
         # fpn
         self.fpn = Fpn2D_multiple(dim=fpn['d_model'],
-                                  cascaded_scales=fpn['cascaded_scales'])
-
-        self._reset_parameters()
-
-    def _reset_parameters(self):
-        for p in self.parameters():
-            if p.dim() > 1:
-                nn.init.xavier_uniform_(p)
-        
+                                  cascaded_scales=fpn['cascaded_scales'])      
     def proj_query_feats(self, multiscale_feats, mask_feats, video_queries):
         # list[bt c h w]
         # b t c h w
@@ -1047,14 +1027,7 @@ class perFrameMultiscale_VideoQuery_Text_v2(nn.Module):
         # fpn
         self.fpn = Fpn2D_multiple(dim=fpn['d_model'],
                                   cascaded_scales=fpn['cascaded_scales'])
-
-        self._reset_parameters()
-
-    def _reset_parameters(self):
-        for p in self.parameters():
-            if p.dim() > 1:
-                nn.init.xavier_uniform_(p)
-        
+       
     def proj_query_feats(self, multiscale_feats, mask_feats, video_queries):
         # list[bt c h w]
         # b t c h w

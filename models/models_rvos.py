@@ -3685,6 +3685,10 @@ class AMR_Grounding_2DObj(nn.Module):
             assert len(self.reason_2d_layer_if_reason) == self.obj_decoder_num_layers
 
         elif mode == 'rios之后rvos' or mode == '只训练rvos' or mode == 'joint':
+            self.reason_2d_choose = reason_module['2d_choose_who']
+            self.reason_2d_layer_if_reason = reason_module['2d_layer_if_reason'] # obj_decoder的每层是否reason
+            assert len(self.reason_2d_layer_if_reason) == self.obj_decoder_num_layers
+            
             from .layer_temporal_decoder import temporal_decoder_entrypoint
             create_temporal_decoder = temporal_decoder_entrypoint(temporal_decoder['name'])
             self.temporal_decoder = create_temporal_decoder(temporal_decoder, pt_dir)
@@ -4072,7 +4076,7 @@ class AMR_Grounding_2DObj(nn.Module):
             samples = nested_tensor_from_videos_list_with_stride(samples, max_stride=self.max_stride)
         T, batch_size, _, H, W = samples.tensors.shape
 
-        new_targets = self.rvos_targets_handler(targets, pad_h=H, pad_W=W)
+        new_targets = self.rvos_targets_handler(targets, pad_T=T, pad_H=H, pad_W=W)
         model_outs = self.model_outputs(samples, text_queries, auxiliary) 
         # 可能会有object decoder的loss
         loss_value_dict = self.temporal_decoder_loss(model_outs, new_targets)
@@ -4089,7 +4093,7 @@ class AMR_Grounding_2DObj(nn.Module):
         return loss_dict_unscaled, loss_dict_scaled, grad_total_norm 
 
     @torch.no_grad()
-    def sample_rvos(self, samples, text_queries, auxiliary, targets, visualize=False):
+    def ssample_rvos(self, samples, text_queries, auxiliary, targets, visualize=False):
         if not isinstance(samples, NestedTensor):
             samples = nested_tensor_from_videos_list_with_stride(samples, max_stride=self.max_stride)
         T, batch_size, _, H, W = samples.tensors.shape

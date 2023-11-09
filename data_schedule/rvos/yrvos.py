@@ -748,14 +748,14 @@ class YRVOS_Dataset(DatasetWithAux):
 
     def __getitem__(self, sample_idx):
         if self.split == 'train' or self.split == 'validate':
-            video_id, window_frames, exp_id = self.samples[sample_idx]['video_id'], self.samples[sample_idx]['window'], self.samples[sample_idx]['exp_id']
-
+            video_id, window_frames, exp_id = self.samples[sample_idx]['video_id'], \
+                                            self.samples[sample_idx]['window'], self.samples[sample_idx]['exp_id']
             all_exps_dict = self.video_to_texts[video_id]['expressions'] # exp_id : {exp, obj_id}
             all_objs_dict = self.video_to_objects[video_id]['objects'] # obj_id : {category:name, frames,}
             text_query = all_exps_dict[exp_id]['exp']
             text_query = yrvos_normalize_text(text_query)
 
-            vframes = [Image.open(os.path.join(self.video_root, video_id, f'{f}.jpg')) for f in window_frames]
+            vframes = [Image.open(os.path.join(self.video_root, video_id, f'{f}.jpg'),) for f in window_frames]
             width, height = vframes[0].size
             # t h w
             all_objects_masks = torch.stack([torch.from_numpy(np.array(Image.open(os.path.join(self.mask_ann_root, video_id, f'{f}.png')))) for f in window_frames], dim=0) #
@@ -767,7 +767,7 @@ class YRVOS_Dataset(DatasetWithAux):
             masks_by_object = [] 
             obj_classes_by_object = []
             for obj_id in appear_obj_ids:
-                masks_by_object.append(all_objects_masks == obj_id) # t h w
+                masks_by_object.append(all_objects_masks == obj_id) # t h w, uint8
                 obj_classes_by_object.append(self.catname_to_id[all_objs_dict[str(obj_id)]["category"]])
                 obj_exps = [value['exp'] for key, value in all_exps_dict.items() if int(value['obj_id']) == obj_id]
                 if len(obj_exps) == 0:
@@ -795,7 +795,7 @@ class YRVOS_Dataset(DatasetWithAux):
                 num_texts = len(annotated_exps_by_object[idx])
                 annotated_exps_by_object[idx] = flatten_texts[cnt:(cnt+num_texts)]
                 cnt += num_texts
-            assert cnt == sum([len(ttt) for ttt in annotated_exps_by_object])
+            assert (cnt - 1) == sum([len(ttt) for ttt in annotated_exps_by_object]) 
                 
             return vframes, text_query,\
                   self.get_aux(sample_idx, annotated_exps_by_object, video_auxid=None, text_auxid=text_query), targets
@@ -824,15 +824,11 @@ class YRVOS_Dataset(DatasetWithAux):
         aux = {}
         aux['sample_idx'] = item_idx
         aux['exist_queries'] = exist_queries
-        aux.extend(self.get_text_aux(text_auxid))
-        aux.extend(self.get_video_aux(video_auxid))
+        aux.update(self.get_text_aux(text_auxid, exist_queries))
+        aux.update(self.get_video_aux(video_auxid))
         return aux
-
     def __len__(self):
         return len(self.samples)
-
-
-
 class Collator(CollatorWithAux):
     def __init__(self, split, 
                  text_aux_version,
@@ -863,4 +859,3 @@ class Collator(CollatorWithAux):
             batch_data['targets'] = meta_or_target
     
         return batch_data
-

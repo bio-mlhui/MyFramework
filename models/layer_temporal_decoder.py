@@ -211,6 +211,7 @@ class MLP(nn.Module):
 
 import copy
 from models.transformer import _get_clones
+from models.layers_unimodal_attention import zero_module
 
 class VITA(nn.Module):
     def __init__(
@@ -310,7 +311,6 @@ class VITA(nn.Module):
         # learnable query features
         self.query_feat = nn.Embedding(num_queries, hidden_dim)
         # self.fq_pos = nn.Embedding(num_frame_queries, hidden_dim)
-        # learnable query p.e.
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
 
         self.input_proj_dec = nn.Linear(hidden_dim, hidden_dim)
@@ -322,10 +322,9 @@ class VITA(nn.Module):
         self.mask_threshold=0.5
 
     def _reset_parameters(self):
-        for p in self.parameters():
-            if p.dim() > 1:
-                nn.init.xavier_uniform_(p)
         weight_init.c2_xavier_fill(self.vita_mask_features)
+        zero_module(self.query_embed)
+        zero_module(self.query_feat)
         
     def hack_fusion(self, 
                     fusion_module,

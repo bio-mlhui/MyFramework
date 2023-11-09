@@ -1908,8 +1908,6 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
         self._reset_parameters()
 
         # temporal的参数
-
-
     def _reset_parameters(self):
         for p in self.parameters():
             if p.dim() > 1:
@@ -1918,6 +1916,11 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
         glorot(self.context_1)
         glorot(self.ref_1)
         glorot(self.ref_2)
+
+        # nn.init.kaiming_uniform_(self.context_1, a=math.sqrt(5))
+        # nn.init.kaiming_uniform_(self.context_2, a=math.sqrt(5))
+        # nn.init.kaiming_uniform_(self.ref_1, a=math.sqrt(5))
+        # nn.init.kaiming_uniform_(self.ref_2, a=math.sqrt(5))
 
     def batching_graph(self, 
                        amrs=None,
@@ -2293,7 +2296,7 @@ class Spatial_Temporal_Grounding_v2(geo_nn.MessagePassing):
                                         )
         if E == 0:
             scores = scores + self.context_2.sum() * 0. + self.context_1.sum() * 0.
-            
+
         return scores # V nq
     
     def message(self, 
