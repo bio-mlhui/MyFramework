@@ -3846,7 +3846,7 @@ class AMR_Grounding_2DObj(nn.Module):
             # l b nq c, l b t nqf c, l b nq T nqf
             # l b t nq h w,
             temporal_queries_by_layer, frame_queries_by_layer, cross_attn_weights_by_layer,\
-              temporal_pred_masks_by_layer = temporal_decoder_output['video_queries'], temporal_decoder_output['frame_queries'], \
+              temporal_pred_masks_by_layer = temporal_decoder_output['temporal_queries'], temporal_decoder_output['frame_queries'], \
                                                                 temporal_decoder_output['cross_attn_weights'],\
                                                                 temporal_decoder_output['pred_masks']
             grounding_score_by_layer = []

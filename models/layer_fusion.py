@@ -418,6 +418,14 @@ class Visual_AMRText_SeqSeq(nn.Module):
         elif 'sin' in self.text_pos_type:
             self.sin_text_pos = build_position_encoding(position_embedding_name='1d')
 
+        self._reset_parameters()
+
+    def _reset_parameters(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+        
+
     def amr_positional_encoding(self, g: dgl.DGLGraph, pos_enc_dim):
         """
             Graph positional encoding v/ Laplacian eigenvectors

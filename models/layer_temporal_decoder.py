@@ -7,6 +7,7 @@ from torch.nn import functional as F
 
 from detectron2.config import configurable
 from detectron2.layers import Conv2d
+from einops import repeat, rearrange
 
 _temporal_decoder_entrypoints = {}
 def register_temporal_decoder(fn):
@@ -217,6 +218,7 @@ class VITA(nn.Module):
         in_channels,
         hidden_dim,
         num_queries: int,
+        num_frame_queries: int,
         enc_layers: int,
         dec_layers: int,
         enc_window_size: int,
@@ -306,6 +308,7 @@ class VITA(nn.Module):
         self.num_queries = num_queries
         # learnable query features
         self.query_feat = nn.Embedding(num_queries, hidden_dim)
+        self.fq_pos = nn.Embedding(num_frame_queries, hidden_dim)
         # learnable query p.e.
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
 
@@ -336,57 +339,64 @@ class VITA(nn.Module):
 
 
     def forward(self,
-                frame_query,
+                frame_query_by_layer,
+                mask_features,
                 amrs=None, 
                 amr_token_feats=None, 
                 amr_token_seg_ids=None,
                 text_feats=None, 
                 text_pad_masks=None):
-        if not self.training:
-            frame_query = frame_query[[-1]]
-        if self.early_fusion is not None:
-            frame_query, amr_token_feats, text_feats = self.fusion_module[0](
-                                                frame_queries=frame_query,
-                                                is_video_frame_query=True,
-                                                amrs=amrs, 
-                                                amr_token_feats=amr_token_feats,
-                                                amr_token_seg_ids=amr_token_seg_ids, 
-                                                text_feats=text_feats, 
-                                                text_pad_masks=text_pad_masks)
-        L, BT, fQ, C = frame_query.shape
-        B = BT // self.num_frames if self.training else 1
-        T = self.num_frames if self.training else BT // B
+        
+        # 只用最后一层
+        frame_query = frame_query_by_layer[-1] # bt nq c
+        
+        B = len(amrs)
+        BT, nqf, C = frame_query.shape
+        T = BT // B
+        if self.training:
+            assert T == self.num_frames
 
-        frame_query = frame_query.reshape(L*B, T, fQ, C) # b t nqf c
-        frame_query = frame_query.permute(1, 2, 0, 3).contiguous() # t nqf b c
         frame_query = self.input_proj_dec(frame_query)
+        frame_query = rearrange(frame_query, '(b t) nq c -> b t nq c',b=B, t=T)
+        if self.early_fusion is not None:
+            frame_query, amr_token_feats, text_feats = self.early_fusion[0](
+                                                                frame_queries=frame_query,
+                                                                is_video_frame_query=True,
+                                                                amrs=amrs, 
+                                                                amr_token_feats=amr_token_feats,
+                                                                amr_token_seg_ids=amr_token_seg_ids, 
+                                                                text_feats=text_feats, 
+                                                                text_pad_masks=text_pad_masks)
+
+        frame_query = frame_query.permute(1, 2, 0, 3).contiguous() # t nq b c
 
         if self.window_size > 0:
             pad = int(ceil(T / self.window_size)) * self.window_size - T # 让window能
             _T = pad + T
             frame_query = F.pad(frame_query, (0,0,0,0,0,0,0,pad))  # t_pad
-            enc_mask = frame_query.new_ones(L*B, _T).bool()        # b t_pad
+            enc_mask = frame_query.new_ones(B, _T).bool()        # b t_pad
             enc_mask[:, :T] = False
         else:
             enc_mask = None
 
-        frame_query = self.encode_frame_query(frame_query, enc_mask,
-                                              text_feats=text_feats, text_pad_masks=text_pad_masks,
-                                            amr_feats=amr_feats, amr_pad_masks=amr_pad_masks,)
+        # t nq b c
+        frame_query = self.encode_frame_query(frame_query, 
+                                              enc_mask,
+
+                                              amrs=amrs, 
+                                            amr_token_feats=amr_token_feats,
+                                            amr_token_seg_ids=amr_token_seg_ids, 
+                                            text_feats=text_feats, 
+                                            text_pad_masks=text_pad_masks)
         frame_query = frame_query[:T].flatten(0,1)              # TfQ, LB, C
 
-        if self.use_sim:
-            pred_fq_embed = self.sim_embed_frame(frame_query)   # TfQ, LB, C
-            pred_fq_embed = pred_fq_embed.transpose(0, 1).reshape(L, B, T, fQ, C)
-        else:
-            pred_fq_embed = None
-
-        src = self.src_embed(frame_query)   # TfQ, LB, C
-        dec_pos = self.fq_pos.weight[None, :, None, :].repeat(T, 1, L*B, 1).flatten(0, 1) # TfQ, LB, C
+        src = frame_query   # TfQ, LB, C
+        dec_pos = self.fq_pos.weight[None, :, None, :].repeat(T, 1, B, 1).flatten(0, 1) # TfQ, LB, C
 
         # QxNxC
-        query_embed = self.query_embed.weight.unsqueeze(1).repeat(1, L*B, 1) # cQ, LB, C
-        output = self.query_feat.weight.unsqueeze(1).repeat(1, L*B, 1) # cQ, LB, C
+        query_embed = self.query_embed.weight.unsqueeze(1).repeat(1, B, 1) # cQ, LB, C
+        output = self.query_feat.weight.unsqueeze(1).repeat(1, B, 1) # cQ, LB, C
+        mask_features = self.vita_mask_features(mask_features) # bt c h w
 
         decoder_outputs = []
         for i in range(self.num_layers):
@@ -409,38 +419,23 @@ class VITA(nn.Module):
                 output
             )
 
-            if (self.training and self.aux_loss) or (i == self.num_layers - 1):
-                dec_out = self.decoder_norm(output) # cQ, LB, C
-                dec_out = dec_out.transpose(0, 1)   # LB, cQ, C
-                decoder_outputs.append(dec_out.view(L, B, self.num_queries, C))
+            dec_out = self.decoder_norm(output) # cQ, LB, C
+            decoder_outputs.append(dec_out.transpose(0, 1))
 
-        decoder_outputs = torch.stack(decoder_outputs, dim=0)   # D, L, B, cQ, C
+        decoder_outputs = torch.stack(decoder_outputs, dim=0)   # l b nq c
 
-        pred_cls = self.class_embed(decoder_outputs)
-        pred_mask_embed = self.mask_embed(decoder_outputs)
-        if self.use_sim and self.sim_use_clip:
-            pred_cq_embed = self.sim_embed_clip(decoder_outputs)
-        else:
-            pred_cq_embed = [None] * self.num_layers
+        pred_mask_embed = self.mask_embed(decoder_outputs) # b t c h w
+
+        pred_masks = torch.einsum('lbnc,btchw->lbnthw', decoder_outputs, pred_mask_embed)
 
         out = {
-            'video_queries': decoder_outputs[-1], # L, b nq c
-            'pred_logits': pred_cls[-1],
-            'pred_mask_embed': pred_mask_embed[-1],
-            'pred_fq_embed': pred_fq_embed,
-            'pred_cq_embed': pred_cq_embed[-1],
-            'aux_outputs': self._set_aux_loss(
-                pred_cls, pred_mask_embed, pred_cq_embed, pred_fq_embed
-            )
+            'temporal_queries': decoder_outputs, # L, b nq c
+            'pred_masks': pred_masks,
+            'frame_query_memory':rearrange(src, '(t nqf) b c -> b t nqf c',t=T,nq=nqf),
+            'cross_attn_weights': None,
+            
         }
-        return out
-
-    @torch.jit.unused
-    def _set_aux_loss(
-        self, outputs_cls, outputs_mask_embed, outputs_cq_embed, outputs_fq_embed
-    ):
-        return [{"pred_logits": a, "pred_mask_embed": b, "pred_cq_embed": c, "pred_fq_embed": outputs_fq_embed}
-                for a, b, c in zip(outputs_cls[:-1], outputs_mask_embed[:-1], outputs_cq_embed[:-1])]
+        return out, amr_token_feats, text_feats 
 
     def encode_frame_query(self, frame_query, attn_mask,
                            text_feats=None, text_pad_masks=None,
