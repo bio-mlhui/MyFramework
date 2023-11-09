@@ -375,6 +375,7 @@ from torch_geometric.data import Data
 import dgl
 import torch_geometric.utils as tg_util
 import networkx as nx
+from models.layers_unimodal_attention import zero_module
 # multiscale + text
 import numpy as np
 class Visual_AMRText_SeqSeq(nn.Module):
@@ -408,8 +409,10 @@ class Visual_AMRText_SeqSeq(nn.Module):
         if 'refer' in amr_pos_type:
             # 最大深度
             self.depth_amr_pos = nn.Embedding(100, embedding_dim=d_model)
+            zero_module(self.depth_amr_pos)
         if 'learned' in text_pos_type:
             self.lrn_text_pos = nn.Embedding(512, embedding_dim=512)
+            zero_module(self.lrn_text_pos)
         elif 'sin' in self.text_pos_type:
             self.sin_text_pos = build_position_encoding(position_embedding_name='1d')
         elif 'refer_sin' in self.text_pos_type:

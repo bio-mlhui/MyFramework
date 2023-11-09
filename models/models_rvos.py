@@ -3642,8 +3642,11 @@ class AMR_Grounding_2DObj(nn.Module):
         if amrbart_wordEmbedding_freeze:
             for p in self.amrbart_wordEmbedding.parameters():
                 p.requires_grad_(False) 
-        assert amrtext_wordEmbedding_proj.pop('name') == 'FeatureResizer'
-        self.amrtext_wordEmbedding_proj = FeatureResizer(**amrtext_wordEmbedding_proj)
+        amr_proj_name = amrtext_wordEmbedding_proj.pop('name')
+        if amr_proj_name == 'FeatureResizer':
+            self.amrtext_wordEmbedding_proj = FeatureResizer(**amrtext_wordEmbedding_proj)
+        elif amr_proj_name == 'linear':
+            self.amrtext_wordEmbedding_proj = nn.Linear(**amrtext_wordEmbedding_proj)
         # self.amrtext_wordEmbedding_3c_to_c = nn.Linear(1024 * 3, 1024)
 
         self.register_buffer("pixel_mean", torch.Tensor(pixel_mean).view(-1, 1, 1), False)
