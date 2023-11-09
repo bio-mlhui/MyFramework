@@ -417,7 +417,8 @@ class Visual_AMRText_SeqSeq(nn.Module):
             self.lrn_text_pos = nn.Embedding(512, embedding_dim=512)
         elif 'sin' in self.text_pos_type:
             self.sin_text_pos = build_position_encoding(position_embedding_name='1d')
-
+        elif 'refer_sin' in self.text_pos_type:
+            self.amr_refer_sin_pos = build_position_encoding(position_embedding_name='1d')
         self._reset_parameters()
 
     def _reset_parameters(self):
@@ -467,6 +468,16 @@ class Visual_AMRText_SeqSeq(nn.Module):
                 pos_lengths = torch.tensor([all_lengths[idx] for idx in range(num_nodes)], dtype=torch.int64).to(amr_token_feats.device)
                 pos = self.depth_amr_pos(pos_lengths)
                 amr_poses[btch_idx][:num_nodes] += pos
+        if 'refer_sin' in self.amr_pos_type:
+            for btch_idx, amr in enumerate(amrs):
+                num_nodes = amr.num_nodes
+                nx_graph = tg_util.to_networkx(amr)
+                all_lengths = dict(nx.single_target_shortest_path_length(nx_graph, 0)) # 0, 1, 2, 3
+                max_length = max(list(all_lengths.values()))
+
+                pos_lengths = torch.tensor([all_lengths[idx] for idx in range(num_nodes)], dtype=torch.int64).to(amr_token_feats.device)
+                pos = self.depth_amr_pos(pos_lengths)
+                amr_poses[btch_idx][:num_nodes] += pos            
         return amr_poses
 
     def get_text_poses(self, text_feats=None, text_pad_masks=None):
@@ -480,7 +491,8 @@ class Visual_AMRText_SeqSeq(nn.Module):
     def forward_video_multiscale(self,
                 multiscale_feats, multiscale_poses, multiscale_is_flattened,
                 amrs, amr_token_feats, amr_token_seg_ids,
-                text_feats=None, text_pad_masks=None):
+                text_feats=None, text_pad_masks=None,
+                amr_text_add_pos=True):
         B = len(amrs)
         if multiscale_is_flattened:
             # bt \sigmaHE c
@@ -515,7 +527,8 @@ class Visual_AMRText_SeqSeq(nn.Module):
             
             memory_poses = torch.cat([memory_poses, repeat(text_poses, 'b s c -> (b t) s c', t=T)])
         
-        memory = memory + memory_poses # bt s c
+        if amr_text_add_pos:
+            memory = memory + memory_poses # bt s c
 
         if self.transform_amr_text:
             memory, multiscale_feats = self.multiscale_text_module(amr_feats=memory,
@@ -548,11 +561,11 @@ class Visual_AMRText_SeqSeq(nn.Module):
             # bt -> b
             return multiscale_feats, amr_token_feats, text_feats
 
-
     def forward_video_frameQuery(self,
                 frame_queries, # b t nq c
                 amrs, amr_token_feats, amr_token_seg_ids,
-                text_feats=None, text_pad_masks=None):
+                text_feats=None, text_pad_masks=None,
+                amr_text_add_pos=True):
 
         B, T, nq, _ = frame_queries.shape
 
@@ -569,7 +582,9 @@ class Visual_AMRText_SeqSeq(nn.Module):
             memory_pad_masks = torch.cat([memory_pad_masks, text_pad_masks], dim=1)
             memory_poses = torch.cat([memory_poses, text_poses])
         
-        memory = memory + memory_poses # b s c
+        if amr_text_add_pos:
+            memory = memory + memory_poses # b s c
+        
         frame_queries = frame_queries.flatten(1, 2) # b tnq c
         if self.transform_amr_text:
             memory, frame_queries = self.query_text_module(memory=memory,
@@ -599,7 +614,8 @@ class Visual_AMRText_SeqSeq(nn.Module):
     def forward_image_multiscale(self,
                 multiscale_feats, multiscale_poses, multiscale_is_flattened,
                 amrs, amr_token_feats, amr_token_seg_ids,
-                text_feats=None, text_pad_masks=None): # 假设multiscale肯定转换
+                text_feats=None, text_pad_masks=None,
+                amr_text_add_pos=True): # 假设multiscale肯定转换
         B = len(amrs)
         if multiscale_is_flattened:
             # b \sigmaHE c
@@ -625,7 +641,8 @@ class Visual_AMRText_SeqSeq(nn.Module):
             memory_pad_masks = torch.cat([memory_pad_masks, text_pad_masks], dim=1)
             memory_poses = torch.cat([memory_poses, text_poses], dim=1)
         
-        memory = memory + memory_poses # b s c
+        if amr_text_add_pos:
+            memory = memory + memory_poses # b s c
 
         if self.transform_amr_text:
             memory, multiscale_feats = self.multiscale_text_module(amr_feats=memory,
@@ -657,14 +674,13 @@ class Visual_AMRText_SeqSeq(nn.Module):
             return multiscale_feats, amr_token_feats, text_feats
 
 
-
     def forward(self,
-                amrs, amr_token_feats, amr_token_seg_ids,
-                is_image_multiscale=False,
-                is_video_multiscale=False,
-                is_video_frame_query=False,
+                amrs=None, amr_token_feats=None, amr_token_seg_ids=None,
+                is_image_multiscale=None,
+                is_video_multiscale=None,
+                is_video_frame_query=None,
                 text_feats=None, text_pad_masks=None,
-
+                amr_text_add_pos=None,
                 frame_queries=None, # b t nq c
                 multiscale_feats=None, multiscale_poses=None, multiscale_is_flattened=None,
                 ):
@@ -676,6 +692,7 @@ class Visual_AMRText_SeqSeq(nn.Module):
                                             amr_token_feats=amr_token_feats, 
                                             amr_token_seg_ids=amr_token_seg_ids, 
                                             text_feats=text_feats, 
+                                            amr_text_add_pos=amr_text_add_pos,
                                             text_pad_masks=text_pad_masks)
         elif is_image_multiscale:
             return self.forward_image_multiscale(multiscale_feats=multiscale_feats,
@@ -685,6 +702,7 @@ class Visual_AMRText_SeqSeq(nn.Module):
                                             amr_token_feats=amr_token_feats, 
                                             amr_token_seg_ids=amr_token_seg_ids, 
                                             text_feats=text_feats, 
+                                            amr_text_add_pos=amr_text_add_pos,
                                             text_pad_masks=text_pad_masks)
         elif is_video_frame_query:
             return self.forward_video_frameQuery(frame_queries=frame_queries,
@@ -692,6 +710,7 @@ class Visual_AMRText_SeqSeq(nn.Module):
                                             amr_token_feats=amr_token_feats, 
                                             amr_token_seg_ids=amr_token_seg_ids, 
                                             text_feats=text_feats, 
+                                            amr_text_add_pos=amr_text_add_pos,
                                             text_pad_masks=text_pad_masks)
         pass
 

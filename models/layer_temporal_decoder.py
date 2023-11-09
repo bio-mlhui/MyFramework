@@ -106,14 +106,14 @@ class CrossAttentionLayer(nn.Module):
                      memory_key_padding_mask: Optional[Tensor] = None,
                      pos: Optional[Tensor] = None,
                      query_pos: Optional[Tensor] = None):
-        tgt2 = self.multihead_attn(query=self.with_pos_embed(tgt, query_pos),
+        tgt2, cross_weight = self.multihead_attn(query=self.with_pos_embed(tgt, query_pos),
                                    key=self.with_pos_embed(memory, pos),
                                    value=memory, attn_mask=memory_mask,
-                                   key_padding_mask=memory_key_padding_mask)[0]
+                                   key_padding_mask=memory_key_padding_mask)
         tgt = tgt + self.dropout(tgt2)
         tgt = self.norm(tgt)
         
-        return tgt
+        return tgt, cross_weight
 
     def forward_pre(self, tgt, memory,
                     memory_mask: Optional[Tensor] = None,
@@ -121,13 +121,13 @@ class CrossAttentionLayer(nn.Module):
                     pos: Optional[Tensor] = None,
                     query_pos: Optional[Tensor] = None):
         tgt2 = self.norm(tgt)
-        tgt2 = self.multihead_attn(query=self.with_pos_embed(tgt2, query_pos),
+        tgt2, cross_weight = self.multihead_attn(query=self.with_pos_embed(tgt2, query_pos),
                                    key=self.with_pos_embed(memory, pos),
                                    value=memory, attn_mask=memory_mask,
-                                   key_padding_mask=memory_key_padding_mask)[0]
+                                   key_padding_mask=memory_key_padding_mask)
         tgt = tgt + self.dropout(tgt2)
 
-        return tgt
+        return tgt, cross_weight
 
     def forward(self, tgt, memory,
                 memory_mask: Optional[Tensor] = None,
@@ -215,22 +215,25 @@ from models.transformer import _get_clones
 class VITA(nn.Module):
     def __init__(
         self,
-        in_channels,
         hidden_dim,
         num_queries: int,
         num_frame_queries: int,
         enc_layers: int,
         dec_layers: int,
         enc_window_size: int,
-        num_frames: int,
+        training_clip_size: int,
+        order,
+        mask_feat_proj,
 
-        nheads: int,
-        dim_feedforward: int,
-        pre_norm: bool,
-        enforce_input_project: bool,
+        nheads: int = 8,
+        dim_feedforward: int = 2048,
+        pre_norm: bool = False,
+        enforce_input_project: bool = True,
 
     ):
         super().__init__()
+        assert enforce_input_project
+        self.order = order
         # define Transformer decoder here
         self.num_heads = nheads
         self.num_layers = dec_layers
@@ -238,7 +241,7 @@ class VITA(nn.Module):
         self.transformer_self_attention_layers = nn.ModuleList()
         self.transformer_cross_attention_layers = nn.ModuleList()
         self.transformer_ffn_layers = nn.ModuleList()
-        self.num_frames = num_frames
+        self.training_clip_size = training_clip_size
 
         self.enc_layers = enc_layers
         self.window_size = enc_window_size
@@ -294,21 +297,19 @@ class VITA(nn.Module):
                 )
             )
 
-        self.vita_mask_features = Conv2d(
-            hidden_dim,
-            hidden_dim,
-            kernel_size=1,
-            stride=1,
-            padding=0,
-        )
-        weight_init.c2_xavier_fill(self.vita_mask_features)
+        self.mask_feat_proj_name = mask_feat_proj.pop('name')
+        if self.mask_feat_proj_name == 'conv2d':
+            self.vita_mask_features = Conv2d(**mask_feat_proj)
+        elif self.mask_feat_proj_name == 'conv3d':
+            raise NotImplementedError()
+            self.vita_mask_features = nn.Conv3d(**mask_feat_proj)
 
         self.decoder_norm = nn.LayerNorm(hidden_dim)
 
         self.num_queries = num_queries
         # learnable query features
         self.query_feat = nn.Embedding(num_queries, hidden_dim)
-        self.fq_pos = nn.Embedding(num_frame_queries, hidden_dim)
+        # self.fq_pos = nn.Embedding(num_frame_queries, hidden_dim)
         # learnable query p.e.
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
 
@@ -316,6 +317,16 @@ class VITA(nn.Module):
 
         self.mask_embed = MLP(hidden_dim, hidden_dim, hidden_dim, 3)
 
+        self._reset_parameters()
+        self.mask_out_stride = 4
+        self.mask_threshold=0.5
+
+    def _reset_parameters(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+        weight_init.c2_xavier_fill(self.vita_mask_features)
+        
     def hack_fusion(self, 
                     fusion_module,
                     early_fusion,
@@ -338,7 +349,7 @@ class VITA(nn.Module):
                 self.layer_fusion_modules = [fusion_module] * self.enc_layers
 
 
-    def forward(self,
+    def forward_cross_self_lln(self,
                 frame_query_by_layer,
                 mask_features,
                 amrs=None, 
@@ -346,18 +357,14 @@ class VITA(nn.Module):
                 amr_token_seg_ids=None,
                 text_feats=None, 
                 text_pad_masks=None):
-        
+        # list[b t nq c]
         # 只用最后一层
-        frame_query = frame_query_by_layer[-1] # bt nq c
-        
-        B = len(amrs)
-        BT, nqf, C = frame_query.shape
-        T = BT // B
+        frame_query = frame_query_by_layer[-1] # b t nq c
+        B, T, nqf, _ = frame_query.shape
         if self.training:
-            assert T == self.num_frames
-
+            assert T == self.training_clip_size
         frame_query = self.input_proj_dec(frame_query)
-        frame_query = rearrange(frame_query, '(b t) nq c -> b t nq c',b=B, t=T)
+
         if self.early_fusion is not None:
             frame_query, amr_token_feats, text_feats = self.early_fusion[0](
                                                                 frame_queries=frame_query,
@@ -367,7 +374,7 @@ class VITA(nn.Module):
                                                                 amr_token_seg_ids=amr_token_seg_ids, 
                                                                 text_feats=text_feats, 
                                                                 text_pad_masks=text_pad_masks)
-
+        # b t nq c -> t nq b c
         frame_query = frame_query.permute(1, 2, 0, 3).contiguous() # t nq b c
 
         if self.window_size > 0:
@@ -388,20 +395,122 @@ class VITA(nn.Module):
                                             amr_token_seg_ids=amr_token_seg_ids, 
                                             text_feats=text_feats, 
                                             text_pad_masks=text_pad_masks)
-        frame_query = frame_query[:T].flatten(0,1)              # TfQ, LB, C
+        frame_query = frame_query[:T].flatten(0,1)              # tnq b c
 
-        src = frame_query   # TfQ, LB, C
-        dec_pos = self.fq_pos.weight[None, :, None, :].repeat(T, 1, B, 1).flatten(0, 1) # TfQ, LB, C
+        src = frame_query   # tnq b c
+        # dec_pos = self.fq_pos.weight[None, :, None, :].repeat(T, 1, B, 1).flatten(0, 1) # t_nqf b c
 
-        # QxNxC
-        query_embed = self.query_embed.weight.unsqueeze(1).repeat(1, B, 1) # cQ, LB, C
-        output = self.query_feat.weight.unsqueeze(1).repeat(1, B, 1) # cQ, LB, C
-        mask_features = self.vita_mask_features(mask_features) # bt c h w
+        # nq b c
+        query_embed = self.query_embed.weight.unsqueeze(1).repeat(1, B, 1) 
+        output = self.query_feat.weight.unsqueeze(1).repeat(1, B, 1)
+
+        mask_features = self.vita_mask_features(mask_features.flatten(0, 1)) # b t c h w
+        mask_features = rearrange('(b t) c h w -> b t c h w',b=B,t=T)
 
         decoder_outputs = []
+        cross_weight_by_layer = []
+        decoder_outputs.append(self.decoder_norm(output).transpose(0, 1)) # b nq c
         for i in range(self.num_layers):
             # attention: cross-attention first
-            output = self.transformer_cross_attention_layers[i](
+            output, cross_weight = self.transformer_cross_attention_layers[i](
+                output, src,
+                memory_mask=None,
+                memory_key_padding_mask=None,
+                pos=None, query_pos=query_embed
+            )
+
+            output = self.transformer_self_attention_layers[i](
+                output, tgt_mask=None,
+                tgt_key_padding_mask=None,
+                query_pos=query_embed
+            )
+
+            # FFN
+            output = self.transformer_ffn_layers[i](
+                output
+            )
+
+            cross_weight_by_layer.append(cross_weight)
+            dec_out = self.decoder_norm(output) # nq b c
+            decoder_outputs.append(dec_out.transpose(0, 1))
+
+        pred_mask_embed = self.mask_embed(decoder_outputs) # l b nq c
+
+        pred_masks_by_layer = [torch.einsum('bnc,btchw->btnhw', dec_o, pred_mask_embed) for dec_o in decoder_outputs]
+        # l b n t h
+        out = {
+            'temporal_queries': decoder_outputs, # list[b nq c]
+            'pred_masks': pred_masks_by_layer, #list[b t nq h w]
+            'frame_query_memory':rearrange(src, '(t nqf) b c -> b t nqf c',t=T,nq=nqf),
+            'cross_attn_weights': cross_weight_by_layer,
+            
+        }
+        return out, amr_token_feats, text_feats 
+
+    def forward_self_lln_cross(self,
+                frame_query_by_layer,
+                mask_features,
+                amrs=None, 
+                amr_token_feats=None, 
+                amr_token_seg_ids=None,
+                text_feats=None, 
+                text_pad_masks=None):
+        # list[b t nq c]
+        # 只用最后一层
+        frame_query = frame_query_by_layer[-1] # b t nq c
+        B, T, nqf, _ = frame_query.shape
+        if self.training:
+            assert T == self.training_clip_size
+        frame_query = self.input_proj_dec(frame_query)
+
+        if self.early_fusion is not None:
+            frame_query, amr_token_feats, text_feats = self.early_fusion[0](
+                                                                frame_queries=frame_query,
+                                                                is_video_frame_query=True,
+                                                                amrs=amrs, 
+                                                                amr_token_feats=amr_token_feats,
+                                                                amr_token_seg_ids=amr_token_seg_ids, 
+                                                                text_feats=text_feats, 
+                                                                text_pad_masks=text_pad_masks)
+        # b t nq c -> t nq b c
+        frame_query = frame_query.permute(1, 2, 0, 3).contiguous() # t nq b c
+
+        if self.window_size > 0:
+            pad = int(ceil(T / self.window_size)) * self.window_size - T # 让window能
+            _T = pad + T
+            frame_query = F.pad(frame_query, (0,0,0,0,0,0,0,pad))  # t_pad
+            enc_mask = frame_query.new_ones(B, _T).bool()        # b t_pad
+            enc_mask[:, :T] = False
+        else:
+            enc_mask = None
+
+        # t nq b c
+        frame_query = self.encode_frame_query(frame_query, 
+                                              enc_mask,
+
+                                              amrs=amrs, 
+                                            amr_token_feats=amr_token_feats,
+                                            amr_token_seg_ids=amr_token_seg_ids, 
+                                            text_feats=text_feats, 
+                                            text_pad_masks=text_pad_masks)
+        frame_query = frame_query[:T].flatten(0,1)              # tnq b c
+
+        src = frame_query   # tnq b c
+        dec_pos = self.fq_pos.weight[None, :, None, :].repeat(T, 1, B, 1).flatten(0, 1) # t_nqf b c
+
+        # nq b c
+        query_embed = self.query_embed.weight.unsqueeze(1).repeat(1, B, 1) 
+        output = self.query_feat.weight.unsqueeze(1).repeat(1, B, 1)
+
+        mask_features = self.vita_mask_features(mask_features.flatten(0, 1)) # b t c h w
+        mask_features = rearrange('(b t) c h w -> b t c h w',b=B,t=T)
+
+        decoder_outputs = []
+        cross_weight_by_layer = []
+        decoder_outputs.append(self.decoder_norm(output).transpose(0, 1)) # b nq c
+        for i in range(self.num_layers):
+            # attention: cross-attention first
+            output, cross_weight = self.transformer_cross_attention_layers[i](
                 output, src,
                 memory_mask=None,
                 memory_key_padding_mask=None,
@@ -419,23 +528,48 @@ class VITA(nn.Module):
                 output
             )
 
-            dec_out = self.decoder_norm(output) # cQ, LB, C
+            cross_weight_by_layer.append(cross_weight)
+            dec_out = self.decoder_norm(output) # nq b c
             decoder_outputs.append(dec_out.transpose(0, 1))
 
-        decoder_outputs = torch.stack(decoder_outputs, dim=0)   # l b nq c
+        pred_mask_embed = self.mask_embed(decoder_outputs) # l b nq c
 
-        pred_mask_embed = self.mask_embed(decoder_outputs) # b t c h w
-
-        pred_masks = torch.einsum('lbnc,btchw->lbnthw', decoder_outputs, pred_mask_embed)
-
+        pred_masks_by_layer = [torch.einsum('bnc,btchw->btnhw', dec_o, pred_mask_embed) for dec_o in decoder_outputs]
+        # l b n t h
         out = {
-            'temporal_queries': decoder_outputs, # L, b nq c
-            'pred_masks': pred_masks,
+            'temporal_queries': decoder_outputs, # list[b nq c]
+            'pred_masks': pred_masks_by_layer, #list[b t nq h w]
             'frame_query_memory':rearrange(src, '(t nqf) b c -> b t nqf c',t=T,nq=nqf),
-            'cross_attn_weights': None,
+            'cross_attn_weights': cross_weight_by_layer,
             
         }
         return out, amr_token_feats, text_feats 
+
+
+    def forward(self,
+                frame_query_by_layer,
+                mask_features,
+                amrs=None, 
+                amr_token_feats=None, 
+                amr_token_seg_ids=None,
+                text_feats=None, 
+                text_pad_masks=None):
+        if self.order == 'cross_self_lln':
+            return self.forward_cross_self_lln(frame_query_by_layer=frame_query_by_layer,
+                                                mask_features=mask_features,
+                                                amrs=amrs, 
+                                                amr_token_feats=amr_token_feats, 
+                                                amr_token_seg_ids=amr_token_seg_ids,
+                                                text_feats=text_feats, 
+                                                text_pad_masks=text_pad_masks)
+        elif self.order == 'self_lln_cross':
+            return self.forward_self_lln_cross(frame_query_by_layer=frame_query_by_layer,
+                                                mask_features=mask_features,
+                                                amrs=amrs, 
+                                                amr_token_feats=amr_token_feats, 
+                                                amr_token_seg_ids=amr_token_seg_ids,
+                                                text_feats=text_feats, 
+                                                text_pad_masks=text_pad_masks)
 
     def encode_frame_query(self, frame_query, attn_mask,
                            text_feats=None, text_pad_masks=None,
@@ -525,9 +659,13 @@ class VITA(nn.Module):
     
 @register_temporal_decoder
 def vita(configs, pt_dir):
-    return VITA(in_channels=configs['in_channels'],
-                aux_loss=configs['aux_loss'],
-                hidden_dim=configs['hidden_dim'],
-                num_frame_queries=configs['num_frame_queries'],
-                num_queries=configs['num_queries'])
+    return VITA(hidden_dim=configs['d_model'],
+                num_frame_queries=configs['n_fqueries'],
+                num_queries=configs['nqueries'],
+                enc_layers=configs['enc_layers'],
+                dec_layers=configs['dec_layers'],
+                enc_window_size=configs['swin_window'],
+                training_clip_size=configs['training_clip_size'],
+                order=configs['order'],
+                mask_feat_proj=configs['mask_feat_proj'])
 

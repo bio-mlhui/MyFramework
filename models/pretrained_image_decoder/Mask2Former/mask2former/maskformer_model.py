@@ -570,6 +570,7 @@ from detectron2.config import get_cfg
 from . import add_maskformer2_config
 import os
 import logging
+from detectron2.checkpoint import DetectionCheckpointer
 @register_pt_obj_2d_decoder
 def mask2former(configs, pt_dir, work_dir):
     cfg = get_cfg()
@@ -579,8 +580,12 @@ def mask2former(configs, pt_dir, work_dir):
     cfg.freeze()
     model:torch.nn.Module = MaskFormer_fusionText(cfg)
     if configs["imgseg_pt_file_name"] is not None:
-        checkpoint = torch.load(os.path.join(pt_dir, f'{configs["imgseg_pt_file_name"]}'), map_location='cpu')['model']
-        model.load_state_dict(checkpoint, strict=True)
+        try:
+            checkpoint = torch.load(os.path.join(pt_dir, f'{configs["imgseg_pt_file_name"]}'), map_location='cpu')['model']
+            model.load_state_dict(checkpoint, strict=True)
+        except:
+            DetectionCheckpointer(model).load(os.path.join(pt_dir, f'{configs["imgseg_pt_file_name"]}')) 
+        
         logging.info('mask2former load了一个image segmentation的模型权重')
         print('mask2former load了一个image segmentation的模型权重')
     if configs['freeze_bb']:

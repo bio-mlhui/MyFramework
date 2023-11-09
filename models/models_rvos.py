@@ -3670,9 +3670,11 @@ class AMR_Grounding_2DObj(nn.Module):
         # hack obj decoder fusion
         self.obj_decoder.sem_seg_head.pixel_decoder.hack_fusion(fusion_module=self.fusion_module,
                                                                 early_fusion=fusion['deform_early'],
-                                                                early_fusion_deep_copy=fusion['deform_early_dcopy'], 
+                                                                early_fusion_deep_copy=fusion['deform_early_dcopy'],
+                                                                early_add_pos=fusion['deform_add_pos'] if 'deform_add_pos' in fusion else True,
                                                                 encoder_layer_ref_self=fusion['deform_layer'],
-                                                                encoder_layer_deep_copy=fusion['deform_layer_dcopy'])
+                                                                encoder_layer_deep_copy=fusion['deform_layer_dcopy'],
+                                                                encoder_layer_add_pos=fusion['deform_layer_add_pos'] if 'deform_layer_add_pos' in fusion else True)
         from .layer_graph import graphLayer_entrypoint
         create_reason_module = graphLayer_entrypoint(reason_module['graph']['name'])
         self.reason_module = create_reason_module(reason_module['graph'])
@@ -3686,7 +3688,7 @@ class AMR_Grounding_2DObj(nn.Module):
             from .layer_temporal_decoder import temporal_decoder_entrypoint
             create_temporal_decoder = temporal_decoder_entrypoint(temporal_decoder['name'])
             self.temporal_decoder = create_temporal_decoder(temporal_decoder, pt_dir)
-            self.temporal_decoder_num_layers = self.temporal_decoder.num_layers + 1
+            self.temporal_decoder_num_layers = self.temporal_decoder.num_layers
             self.temporal_decoder_mask_out_stride = self.temporal_decoder.mask_out_stride
             self.temporal_decoder_mask_threshold = self.temporal_decoder.mask_threshold
 
@@ -3811,16 +3813,16 @@ class AMR_Grounding_2DObj(nn.Module):
             return {'objdecoder': {'pred_masks': pred_masks_by_layer,}}
         elif self.mode == '只训练rios':  
             grounding_score_by_layer = []
-            for layer_idx, obj_queries in enumerate(obj_queries_by_layer):
+            for layer_idx, obj_queries in enumerate(obj_queries_by_layer): 
                 if self.reason_2d_layer_if_reason[layer_idx]:
                     grounding_score = self.reason_module(obj_queries=obj_queries, 
-                                                             amrs=amrs,
-                                                             amr_token_feats=amr_token_feats,
-                                                             amr_token_seg_ids=amr_token_seg_ids,
-                                                             node_alignments=node_alignments,
-                                                             text_feats=text_feats,
-                                                             is_2d=True,
-                                                             text_pad_masks=text_pad_masks) # list[vi nq]
+                                                        amrs=amrs,
+                                                        amr_token_feats=amr_token_feats,
+                                                        amr_token_seg_ids=amr_token_seg_ids,
+                                                        node_alignments=node_alignments,
+                                                        text_feats=text_feats,
+                                                        is_2d=True,
+                                                        text_pad_masks=text_pad_masks) # list[vi nq]
                     if self.reason_2d_choose == '第一个':
                         grounding_score = torch.stack([lg[0] for lg in grounding_score], dim=0)
                     else:
@@ -3832,19 +3834,19 @@ class AMR_Grounding_2DObj(nn.Module):
                                    'reason_2d': grounding_score_by_layer} ,} # list[b nq h w], num_layers
 
         elif self.mode == '只训练rvos' or self.mode == 'rios之后rvos' or self.mode == 'joint': 
-            frame_queries = obj_queries_by_layer[-1] # b t nq c
             #可能会有2d的loss计算
+            obj_queries_by_layer = [rearrange(obj_q, '(b t) nq c -> b t nq c',b=batch_size,t=nf) for obj_q in obj_queries_by_layer]
+            mask_features = rearrange(mask_features, '(b t) c h w -> b t c h w',b=batch_size,t=nf)
+            temporal_decoder_output, amr_token_feats, text_feats = self.temporal_decoder(frame_query_by_layer=obj_queries_by_layer, # list[b t nq c]
+                                                                                        mask_features=mask_features, # bt c h w
 
-            temporal_decoder_output, amr_token_feats, text_feats = self.temporal_decoder(frame_queries=frame_queries,
-                                                                        mask_features=mask_features,
-
-                                                                        amrs=amrs, 
-                                                                        amr_token_feats=amr_token_feats,
-                                                                        amr_token_seg_ids=amr_token_seg_ids, 
-                                                                        text_feats=text_feats, 
-                                                                        text_pad_masks=text_pad_masks)
-            # l b nq c, l b t nqf c, l b nq T nqf
-            # l b t nq h w,
+                                                                                        amrs=amrs, 
+                                                                                        amr_token_feats=amr_token_feats,
+                                                                                        amr_token_seg_ids=amr_token_seg_ids, 
+                                                                                        text_feats=text_feats, 
+                                                                                        text_pad_masks=text_pad_masks)
+            # list[b nq c], list[b t nqf c], list[b nq T nqf]
+            # list[b t nq h w]
             temporal_queries_by_layer, frame_queries_by_layer, cross_attn_weights_by_layer,\
               temporal_pred_masks_by_layer = temporal_decoder_output['temporal_queries'], temporal_decoder_output['frame_queries'], \
                                                                 temporal_decoder_output['cross_attn_weights'],\

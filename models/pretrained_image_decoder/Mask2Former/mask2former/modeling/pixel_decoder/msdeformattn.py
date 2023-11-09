@@ -368,7 +368,7 @@ class MSDeformAttnTransformerEncoder_fusionText(nn.Module):
         
         self.fusion_rel_self = None # 'before', 'after', None
         self.fusion_modules = None # hack
-
+        self.fusion_add_pos = None
     @staticmethod
     def get_reference_points(spatial_shapes, valid_ratios, device):
         reference_points_list = []
@@ -395,6 +395,7 @@ class MSDeformAttnTransformerEncoder_fusionText(nn.Module):
                                                                 multiscale_is_flattened=True,
                                                                 is_image_multiscale=True,
                                                                 amrs=amrs, 
+                                                                amr_text_add_pos=self.fusion_add_pos,
                                                                 amr_token_feats=amr_token_feats,
                                                                 amr_token_seg_ids=amr_token_seg_ids, 
                                                                 text_feats=text_feats, 
@@ -413,6 +414,7 @@ class MSDeformAttnTransformerEncoder_fusionText(nn.Module):
                                                                 multiscale_is_flattened=True,
                                                                 is_image_multiscale=True,
                                                                 amrs=amrs, 
+                                                                amr_text_add_pos=self.fusion_add_pos,
                                                                 amr_token_feats=amr_token_feats,
                                                                 amr_token_seg_ids=amr_token_seg_ids, 
                                                                 text_feats=text_feats, 
@@ -599,6 +601,7 @@ class MSDeformAttnPixelDecoder_fusionText(nn.Module):
             nn.init.constant_(proj[0].bias, 0)
 
         self.fusion_module = None
+        self.if_add_pos = None
         self.transformer = MSDeformAttnTransformerEncoderOnly_fusionText(
             d_model=conv_dim,
             dropout=transformer_dropout,
@@ -665,9 +668,11 @@ class MSDeformAttnPixelDecoder_fusionText(nn.Module):
     def hack_fusion(self, 
                     fusion_module,
                     early_fusion,
-                    early_fusion_deep_copy, 
+                    early_fusion_deep_copy,
                     encoder_layer_ref_self,
-                    encoder_layer_deep_copy,):
+                    encoder_layer_deep_copy,
+                    early_add_pos=True,
+                    encoder_layer_add_pos =True,):
         if early_fusion:
             if early_fusion_deep_copy:
                 self.fusion_module = nn.ModuleList([copy.deepcopy(fusion_module)])
@@ -675,8 +680,9 @@ class MSDeformAttnPixelDecoder_fusionText(nn.Module):
                 self.fusion_module = [fusion_module] # do not save in checkpoint
         else:
             self.fusion_module = [None]
-
+        self.fusion_add_pos = early_add_pos
         self.transformer.encoder.fusion_rel_self = encoder_layer_ref_self
+        self.transformer.encoder.fusion_add_pos = encoder_layer_add_pos
         if encoder_layer_ref_self is not None:
             if encoder_layer_deep_copy:
                 self.transformer.encoder.fusion_modules = _get_clones(fusion_module, self.transformer.encoder.num_layers)
@@ -724,6 +730,7 @@ class MSDeformAttnPixelDecoder_fusionText(nn.Module):
                                                             multiscale_is_flattened=False,
                                                             is_image_multiscale=True,
                                                             amrs=amrs, 
+                                                            amr_text_add_pos=self.fusion_add_pos,
                                                             amr_token_feats=amr_token_feats,
                                                             amr_token_seg_ids=amr_token_seg_ids, 
                                                             text_feats=text_feats, 
