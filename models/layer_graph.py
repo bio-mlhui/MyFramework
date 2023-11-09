@@ -1893,9 +1893,10 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
 
         self.node_linear = nn.Linear(d_model, self.head_dim * self.nheads, bias=False)
         self.edge_linear = nn.Linear(d_model, self.head_dim * self.nheads, bias=False)
-        if obj_query_proj.pop('name') == 'FeatureResizer':
+        obj_query_proj_name = obj_query_proj.pop('name')
+        if  obj_query_proj_name == 'FeatureResizer':
             self.obj_query_proj = FeatureResizer(**obj_query_proj)
-        elif obj_query_proj.pop('name') == 'linear':
+        elif obj_query_proj_name == 'linear':
             self.obj_query_proj = nn.Linear(**obj_query_proj)
         else:
             raise ValueError()
