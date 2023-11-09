@@ -1883,7 +1883,9 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
                  nheads,
                  flow='source_to_target',
                  score_aggr='sum',
-                 obj_query_proj=None
+                 obj_query_proj=None,
+                 temp_query_proj=None,
+                 frame_query_proj=None
                  ):
         super().__init__(aggr=None,
                          flow=flow,)
@@ -1899,13 +1901,29 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
         elif obj_query_proj_name == 'linear':
             self.obj_query_proj = nn.Linear(**obj_query_proj)
         else:
-            raise ValueError()
-                
+            raise ValueError()         
         self.context_2 = nn.Parameter(torch.zeros([1, self.nheads, 2*self.head_dim, self.head_dim])) # 1 h 2c c
         self.context_1 = nn.Parameter(torch.zeros([1, self.nheads, self.head_dim, 1])) # 1 h c 1
 
         self.ref_2 = nn.Parameter(torch.zeros([1, self.nheads, self.head_dim, self.head_dim])) # 1 h c c
         self.ref_1 = nn.Parameter(torch.zeros([1, self.nheads, self.head_dim, 1])) # 1 h c 1
+
+        if temp_query_proj is not None:
+            temp_query_proj_name = temp_query_proj.pop('name')
+            if  temp_query_proj_name == 'FeatureResizer':
+                self.temp_query_proj = FeatureResizer(**temp_query_proj)
+            elif temp_query_proj_name == 'linear':
+                self.temp_query_proj = nn.Linear(**temp_query_proj)
+            else:
+                raise ValueError()
+        if frame_query_proj is not None:
+            frame_query_proj_name = frame_query_proj.pop('name')
+            if  frame_query_proj_name == 'FeatureResizer':
+                self.frame_query_proj = FeatureResizer(**frame_query_proj)
+            elif frame_query_proj_name == 'linear':
+                self.frame_query_proj = nn.Linear(**frame_query_proj)
+            else:
+                raise ValueError()   
         self._reset_parameters()
 
         # temporal的参数
@@ -1976,15 +1994,13 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
             edge_mem = torch.stack([tensor[bid] for bid in edges_batch_ids], dim=0) 
 
         return node_mem, edge_mem
-    
-    def forward(self,
-                 obj_queries=None,
-                 is_2d=True,
-                amrs=None, 
-                amr_token_feats=None,
-                amr_token_seg_ids=None, 
-                node_alignments=None,
-                text_feats=None, text_pad_masks=None):
+
+    def forward_2d(self,obj_queries=None,
+                    amrs=None, 
+                    amr_token_feats=None,
+                    amr_token_seg_ids=None, 
+                    node_alignments=None,
+                    text_feats=None, text_pad_masks=None):
         batch_size = obj_queries.shape[0]
 
         nodes_batch_ids, edges_batch_ids,\
@@ -2003,7 +2019,7 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
             node_feats = node_feats + zero_foo
         node_obj_queries, edge_obj_queries = self.batching_memory(obj_queries, nodes_batch_ids, edges_batch_ids)
 
-        grounding_score = self.reason(node_feats=node_feats, 
+        grounding_score = self.reason_2d(node_feats=node_feats, 
                                       edge_feats=edge_feats,
                                       node_obj_queries=node_obj_queries, 
                                       edge_obj_queries=edge_obj_queries,
@@ -2014,8 +2030,8 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
             g_score_by_batch.append(bch_node_score) # vi nq
 
         return g_score_by_batch
-        
-    def reason(self, 
+
+    def reason_2d(self, 
                 node_feats=None, 
                 edge_feats=None, 
                 edge_index=None,
@@ -2045,18 +2061,18 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
                 scores = self.propagate(edge_index[:, order_eid], 
                                         size=None,
                                         x=scores, # V nq
+                                        is_2d=True, is_3d=False,
                                         edge_attr=edge_feats[order_eid, :].clone(), # E hc
                                         node_obj_query=node_obj_queries.flatten(1), # V h_nq_c
                                         )
         if E == 0:
             scores = scores + self.context_2.sum() * 0. + self.context_1.sum() * 0.
         return scores # V nq
-    
-    def message(self, 
-                edge_attr,  # E hc
-                x_j,   # E nq
-                node_obj_query_j, # E h_nq_c
-                node_obj_query_i,) -> Tensor: # E h_nq_c
+
+    def message_2d(self,edge_attr=None,  # E hc
+                    x_j=None,   # E nq
+                    node_obj_query_j=None, # E h_nq_c
+                    node_obj_query_i=None):
         edge_attr = rearrange(edge_attr, 'E (h c) -> E h c', h=self.nheads)
         x_j = repeat(x_j, 'E nq -> E h nq', h=self.nheads)
         nq = x_j.shape[-1]
@@ -2076,8 +2092,129 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
         # E h nq c @ 1 h c 1 -> E h nq 1 -> E h nq
         context_score = (context_score @ self.context_1).squeeze(-1)
 
-        return context_score.mean(1) # E nq
+        return context_score.mean(1) # E nq   
+
+    def forward_3d(self,
+                 temporal_queries=None,  # b nq c
+                 frame_queries=None,  # b T nqf c
+                 cross_attn_weights=None, # b nq T nqf
+
+                amrs=None, 
+                amr_token_feats=None,
+                amr_token_seg_ids=None, 
+                node_alignments=None,
+                text_feats=None, 
+                text_pad_masks=None):
+
+        nodes_batch_ids, edges_batch_ids,\
+            node_seg_ids, edges_seg_ids, \
+            edge_index, \
+            node_feats, edge_feats,= self.batching_graph(amrs=amrs,
+                                                amr_token_feats=amr_token_feats,
+                                                amr_seg_ids=amr_token_seg_ids,)
+        
+        batch_size, nq, _, = temporal_queries.shape
+
+        node_temp_queries, edge_temp_queries = self.batching_memory(temporal_queries, nodes_batch_ids, edges_batch_ids)
+        
+        grounding_score = self.reason_3d(node_feats=node_feats, edge_feats=edge_feats,edge_index=edge_index,
+                                    node_temp_queries=node_temp_queries, edge_temp_queries=edge_temp_queries,) # V nq
+        g_score_by_batch = [] # list[vi nq]
+        for bch_idx in range(batch_size):
+            bch_node_score = torch.stack([grounding_score[idx] for idx, batch_id in enumerate(nodes_batch_ids) if batch_id == bch_idx], dim=0)
+            g_score_by_batch.append(bch_node_score) # vi nq
+        
+        return g_score_by_batch
+   
+    def reason_3d(self, 
+                node_feats=None, edge_feats=None,edge_index=None, # V c
+                node_temp_queries=None, edge_temp_queries=None, # V nq c
+                ):
+        
+        V, E, device, dtype = node_feats.shape[0], edge_feats.shape[0], node_feats.device, node_feats.dtype
+
+        node_temp_queries = self.temp_query_proj(node_temp_queries)
+        node_feats = self.node_linear(node_feats)
+        edge_feats = self.edge_linear(edge_feats)
+        
+        # V h nq c @ 1 h c c -> V h nq c
+        # V h nq c * V h 1 c -> V h nq c
+         # V h nq c @ 1 h c 1 -> V h nq 1
+        node_temp_queries = rearrange(node_temp_queries, 'V nq (h c) -> V h nq c',h=self.nheads)
+        node_feats = rearrange(node_feats, 'V (h c) -> V h c',h=self.nheads)
+        ref_score = (node_temp_queries @ self.ref_2) * (node_feats.unsqueeze(-2))
+        ref_score = ref_score / ref_score.norm(dim=-1, keepdim=True)
+        scores = ref_score @ self.ref_1
+        scores = scores.mean(1).squeeze(-1) # V nq
+
+        dgl_graph = dgl.graph((edge_index[0, :], edge_index[1, :]), num_nodes=V)
+        traversal_order = dgl.topological_nodes_generator(dgl_graph)
+        for idx, frontier_nodes in enumerate(traversal_order):
+            frontier_nodes = frontier_nodes.to(device)
+            src, tgt, order_eid =  dgl_graph.in_edges(frontier_nodes, form='all')
+            if idx == 0:
+                assert len(src) == 0 and len(tgt) == 0 and len(order_eid) == 0
+            else:
+                # V nq
+                scores = self.propagate(edge_index[:, order_eid], 
+                                        size=None,
+                                        x=scores, # V nq
+                                        edge_attr=edge_feats[order_eid, :], # E hc
+                                        node_temp_query=node_temp_queries.flatten(1), # V h_nq_c
+                                        is_2d=False, is_3d=True
+                                        )
+        return scores # V nq
     
+
+    def message_3d(self, 
+                edge_attr,  # E hc
+                x_j,   # E nq
+                node_temp_query_j=None, node_temp_query_i=None,
+                node_frame_query_j=None, node_frame_query_i=None,
+                node_cross_attn_j=None, edge_cross_attn_i=None,):
+        edge_attr = rearrange(edge_attr, 'E (h c) -> E h c', h=self.nheads)
+        x_j = repeat(x_j, 'E nq -> E h nq', h=self.nheads)
+        nq = x_j.shape[-1]
+        node_temp_query_j = rearrange(node_temp_query_j, 'E (h nq c) -> E h nq c',nq=nq,h=self.nheads)
+        node_temp_query_i = rearrange(node_temp_query_i, 'E (h nq c) -> E h nq c',nq=nq,h=self.nheads)
+
+        # E h 1 nq @ E h nq c -> E h 1 c
+        soft_attn_j = x_j.softmax(-1).unsqueeze(2)
+        context_feat_j = soft_attn_j @ node_temp_query_j
+        context_feat_j = context_feat_j.repeat(1,1, nq, 1) # E h nq c
+        cat_feat = torch.cat([context_feat_j, node_temp_query_i], dim=-1) # E h nq 2c
+
+        # E h nq 2c @ 1 h 2c c -> E h nq c
+        # E h nq c * E h 1 c -> E h nq c
+        context_score = (cat_feat @ self.context_2) * (edge_attr.unsqueeze(-2))
+        context_score = context_score / context_score.norm(dim=-1, keepdim=True)
+        # E h nq c @ 1 h c 1 -> E h nq 1 -> E h nq
+        context_score = (context_score @ self.context_1).squeeze(-1)
+
+        return context_score.mean(1) # E nq         
+
+    def message(self, 
+                is_2d=True,
+                is_3d=False,
+                edge_attr=None,  # E hc
+                x_j=None,   # E nq
+                node_obj_query_j=None, # E h_nq_c
+                node_obj_query_i=None,
+
+                node_temp_query_j=None, node_temp_query_i=None,
+                node_frame_query_j=None, node_frame_query_i=None,
+                node_cross_attn_j=None, edge_cross_attn_i=None,
+
+                ) -> Tensor: # E h_nq_c
+        if is_2d:
+            return self.message_2d(edge_attr=edge_attr, x_j=x_j, node_obj_query_j=node_obj_query_j,
+                                   node_obj_query_i=node_obj_query_i)
+        if is_3d:
+            return self.message_3d(edge_attr=edge_attr,x_j=x_j, 
+                                    node_temp_query_j=node_temp_query_j, node_temp_query_i=node_temp_query_i,
+                                    node_frame_query_j=node_frame_query_j, node_frame_query_i=node_frame_query_i,
+                                    node_cross_attn_j=node_cross_attn_j, edge_cross_attn_i=edge_cross_attn_i)
+        
     def aggregate(self, 
                   inputs, # E nq
                   x, # V nq
@@ -2106,13 +2243,55 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
         else:
             raise ValueError()
 
+
+    def forward(self,
+                is_2d=True,
+                is_3d=False,
+
+                obj_queries=None,
+
+                temporal_queries=None,  # b nq c
+                frame_queries=None,  # b T nqf c
+                cross_attn_weights=None, # b nq T nqf
+
+                amrs=None, 
+                amr_token_feats=None,
+                amr_token_seg_ids=None, 
+                node_alignments=None,
+                text_feats=None, text_pad_masks=None):
+        
+        assert is_2d or is_3d
+        assert not(is_2d and is_3d)
+        if is_2d:
+            return self.forward_2d(obj_queries=obj_queries,
+                                   amrs=amrs, 
+                                    amr_token_feats=amr_token_feats,
+                                    amr_token_seg_ids=amr_token_seg_ids, 
+                                    node_alignments=node_alignments,
+                                    text_feats=text_feats, 
+                                    text_pad_masks=text_pad_masks)
+        if is_3d:
+            return self.forward_3d(temporal_queries=temporal_queries,  # b nq c
+                                    frame_queries=frame_queries,  # b T nqf c
+                                    cross_attn_weights=cross_attn_weights, # b nq T nqf
+                                    amrs=amrs, 
+                                    amr_token_feats=amr_token_feats,
+                                    amr_token_seg_ids=amr_token_seg_ids, 
+                                    node_alignments=node_alignments,
+                                    text_feats=text_feats, 
+                                    text_pad_masks=text_pad_masks)
+
+
+
 @register_graphLayer
 def spatial_temporal_grounding_v1(configs):
     return Spatial_Temporal_Grounding_v1(d_model=configs['d_model'],
                         flow=configs['flow'],
                         score_aggr=configs['score_aggr'],
                         nheads=configs['nheads'],
-                        obj_query_proj=configs['obj_query_obj'])
+                        obj_query_proj=configs['obj_query_obj'],
+                        temp_query_proj=configs['temp_query_proj'] if 'temp_query_proj' in configs else None,
+                        frame_query_proj=configs['frame_query_proj'] if 'frame_query_proj' in configs else None)
 
 
 
