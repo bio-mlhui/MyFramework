@@ -185,7 +185,7 @@ def refcocog_schedule(configs, is_distributed, process_id, num_processes, just_d
     validate_metrics = configs['validate_metrics']
 
     if amr_are_used:
-        amr_legi_augs = ['fixsize', 'justnormalize', 'resize', 'hflip_fixsize', 'hflip_ResizeSmaller', "resizeSmaller"]
+        amr_legi_augs = ['fixsize', 'justnormalize', 'resize', 'hflip_fixsize', 'hflip_ResizeSmaller', "resizeSmaller", 'no']
         assert train_augmentation['name'] in amr_legi_augs
         assert validate_augmentation['name'] in amr_legi_augs
    
@@ -354,7 +354,7 @@ def refcoco_schedule(configs, is_distributed, process_id, num_processes, just_da
     validate_metrics = configs['validate_metrics']
 
     if amr_are_used:
-        amr_legi_augs = ['fixsize', 'justnormalize', 'resize', 'hflip_fixsize', 'hflip_ResizeSmaller', "resizeSmaller"]
+        amr_legi_augs = ['fixsize', 'justnormalize', 'resize', 'hflip_fixsize', 'hflip_ResizeSmaller', "resizeSmaller", 'no']
         assert train_augmentation['name'] in amr_legi_augs
         assert validate_augmentation['name'] in amr_legi_augs
    
@@ -523,7 +523,7 @@ def refcoco_plus_schedule(configs, is_distributed, process_id, num_processes, ju
     validate_metrics = configs['validate_metrics']
 
     if amr_are_used:
-        amr_legi_augs = ['fixsize', 'justnormalize', 'resize', 'hflip_fixsize', 'hflip_ResizeSmaller', "resizeSmaller"]
+        amr_legi_augs = ['fixsize', 'justnormalize', 'resize', 'hflip_fixsize', 'hflip_ResizeSmaller', "resizeSmaller", 'no']
         assert train_augmentation['name'] in amr_legi_augs
         assert validate_augmentation['name'] in amr_legi_augs
    
