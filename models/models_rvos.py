@@ -3865,30 +3865,30 @@ class AMR_Grounding_2DObj(nn.Module):
               temporal_pred_masks_by_layer = temporal_decoder_output['temporal_queries'], temporal_decoder_output['frame_queries'], \
                                                                 temporal_decoder_output['cross_attn_weights'],\
                                                                 temporal_decoder_output['pred_masks']
-            repeated_amrs = []
-            for idx in range(batch_size):
-                for _ in range(nf):
-                    repeated_amrs.append(copy.deepcopy(amrs[idx]))
-            spatial_grounding_score = self.reason_module(obj_queries=frame_queries_memory.flatten(0, 1), # bt nq c 
-                                                        amrs=repeated_amrs,
-                                                        amr_token_feats=repeat(amr_token_feats, 'b s c -> (b t) s c', t=nf),
-                                                        amr_token_seg_ids=repeat(amr_token_seg_ids, 'b s -> (b t) s',t=nf),
-                                                        node_alignments=node_alignments,
-                                                        text_feats=repeat(text_feats, 'b s c -> (b t) s c', t=nf),
-                                                        is_2d=True, is_3d=False,
-                                                        text_pad_masks=repeat(text_pad_masks,'b s -> (b t) s', t=nf),
-                                                    ) # list[vi nqf], batch_size * T
-            # list[vi nqf], b * T -> list[list[vi nqf], T], b
-            spg_by_batch = []
-            for idx in range(batch_size):
-                spg_by_batch.append(spatial_grounding_score[idx*nf:(idx+1)*nf])
-            spg_scores = [torch.stack(sbb, dim=1) for sbb in spg_by_batch] # list[Vi T nqf]
+            # repeated_amrs = []
+            # for idx in range(batch_size):
+            #     for _ in range(nf):
+            #         repeated_amrs.append(copy.deepcopy(amrs[idx]))
+            # spatial_grounding_score = self.reason_module(obj_queries=frame_queries_memory.flatten(0, 1), # bt nq c 
+            #                                             amrs=repeated_amrs,
+            #                                             amr_token_feats=repeat(amr_token_feats, 'b s c -> (b t) s c', t=nf),
+            #                                             amr_token_seg_ids=repeat(amr_token_seg_ids, 'b s -> (b t) s',t=nf),
+            #                                             node_alignments=node_alignments,
+            #                                             text_feats=repeat(text_feats, 'b s c -> (b t) s c', t=nf),
+            #                                             is_2d=True, is_3d=False,
+            #                                             text_pad_masks=repeat(text_pad_masks,'b s -> (b t) s', t=nf),
+            #                                         ) # list[vi nqf], batch_size * T
+            # # list[vi nqf], b * T -> list[list[vi nqf], T], b
+            # spg_by_batch = []
+            # for idx in range(batch_size):
+            #     spg_by_batch.append(spatial_grounding_score[idx*nf:(idx+1)*nf])
+            # spg_scores = [torch.stack(sbb, dim=1) for sbb in spg_by_batch] # list[Vi T nqf]
             grounding_score_by_layer = []
             for layer_idx, (temporal_queries, cross_attn_weights) in enumerate(zip(temporal_queries_by_layer, cross_attn_weights_by_layer)):
                 if self.reason_3d_layer_if_reason[layer_idx]:
                     grounding_score = self.reason_module(temporal_queries=temporal_queries, 
                                                             frame_queries=frame_queries_memory,
-                                                            frame_queries_grounding_score=spg_scores,
+                                                            frame_queries_grounding_score=None,
                                                              cross_attn_weights=cross_attn_weights, 
                                                              is_3d=True, is_2d=False,
                                                              amrs=amrs,
