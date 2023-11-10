@@ -151,9 +151,9 @@ def test(loader, model, device, is_distributed, is_main_process, output_dir):
         shutil.rmtree(save_dir)
     os.makedirs(save_dir)
     for batch_dict in tqdm(loader):
-        samples = batch_dict['samples'].to(device)
+        samples = to_device(batch_dict['samples'], device)
         text_query = batch_dict['text_query']
-        meta_data = batch_dict['meta_data']
+        meta_data = to_device(batch_dict['meta_data'])
         
         batch_video_ids = meta_data['video_id']
         batch_frames = meta_data['all_frames']
@@ -819,7 +819,7 @@ class YRVOS_Dataset(DatasetWithAux):
             meta_data = {
                 'size': torch.tensor([len(vframes),  height, width]),
                 'orig_size': torch.tensor([len(vframes),  height, width]),
-                'has_ann': torch.ones(len(vframes)).bool(), # t
+                'has_ann': torch.ones(len(vframes)).bool(), # T
                 'video_id': video_id,
                 'all_frames': window_frames,
                 'exp_id': exp_id,
