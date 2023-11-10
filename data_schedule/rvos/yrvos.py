@@ -153,29 +153,31 @@ def test(loader, model, device, is_distributed, is_main_process, output_dir):
     for batch_dict in tqdm(loader):
         samples = to_device(batch_dict['samples'], device)
         text_query = batch_dict['text_query']
-        meta_data = to_device(batch_dict['meta_data'])
+        meta_data = to_device(batch_dict['meta'], device)
+        auxiliary = to_device(batch_dict['auxiliary'], device)
+        assert len(meta_data) == 1
+        batch_video_ids = [meta_data[i]['video_id'] for i in range(len(meta_data))]
+        batch_frames = [meta_data[i]['all_frames'] for i in range(len(meta_data))]
+        batch_exp_id = [meta_data[i]['exp_id'] for i in range(len(meta_data))]
         
-        batch_video_ids = meta_data['video_id']
-        batch_frames = meta_data['all_frames']
-        batch_exp_id = meta_data['exp_id']
-        
-        # list[n t h w], list[n t]
+        # list[n t' h w], list[n t']
         # ['query_pred_masks', 'query_pred_is_referred_prob',]]
-        preds = model.sample(samples, text_query, meta_data)
+        preds = model.sample(samples=samples, text_queries=text_query, auxiliary=auxiliary, targets=meta_data)
         
         
         for pred_masks, pred_refer_prob, video_id, all_frames, exp_id in zip(preds['query_pred_masks'], 
                                                                             preds['query_pred_is_referred_prob'],
                                                                             batch_video_ids, batch_frames, batch_exp_id):
-            # n t -> t
-            _, sort_idx = pred_refer_prob.argmax(dim=0)
+            # n t' -> t'
+            sort_idx = pred_refer_prob.argmax(dim=0) # 每一帧的最牛的query
             # t n h w, t -> list[h w], t -> t h w
             pred_masks = torch.stack([frame_pred[idx] for frame_pred, idx in zip(pred_masks.permute(1, 0, 2, 3), sort_idx)], dim=0)
 
             dir_path = os.path.join(save_dir, video_id, exp_id)
             os.makedirs(dir_path)
             for frame_mask, frame in zip(pred_masks, all_frames):
-                frame_mask = Image.fromarray((255 * frame_mask.numpy()))
+                frame_mask = frame_mask.to('cpu').float()
+                frame_mask = Image.fromarray((255 * frame_mask.numpy())).convert('L')
                 frame_mask.save(os.path.join(dir_path, f'{frame}.png'))
                 
     if is_distributed:
@@ -185,7 +187,7 @@ def test(loader, model, device, is_distributed, is_main_process, output_dir):
         zip_file_path = os.path.join(output_dir, f'submission')
         shutil.make_archive(zip_file_path, 'zip', root_dir=output_dir, base_dir='Annotations')
         print('a zip file was successfully created.')
-        shutil.rmtree(save_dir)  # remove the uncompressed annotations for memory efficiency
+        # shutil.rmtree(save_dir)  # remove the uncompressed annotations for memory efficiency
     if is_distributed:
         dist.barrier() 
     return {}
@@ -569,7 +571,7 @@ def youtube_schedule(configs, is_distributed, process_id, num_processes):
     pt_tokenizer_dir=configs['pt_tokenizer_dir']
     num_workers= configs['num_workers']
     test_batch_size= configs['test_batch_size']
-    
+    assert test_batch_size == 1
     # 如果每个sample的视频有大量的交集，那么模型可以通过记住一个sample的结果来分割另一个sample
     generate_traintest_params: dict = configs['generate_traintest_params']
     # 训练时额外的数据 
@@ -814,6 +816,7 @@ class YRVOS_Dataset(DatasetWithAux):
                                             self.samples[sample_idx]['window'], self.samples[sample_idx]['exp_id']          
             all_exps_dict = self.video_to_texts[video_id]["expressions"] # exp_id: exp
             text_query = all_exps_dict[exp_id]['exp']
+            text_query = yrvos_normalize_text(text_query)
             vframes = [Image.open(os.path.join(self.video_root, video_id, f'{f}.jpg')) for f in window_frames]
             width, height = vframes[0].size
             meta_data = {

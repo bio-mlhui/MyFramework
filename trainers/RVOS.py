@@ -132,7 +132,7 @@ class Trainer:
             
             epoch_header = f'Epoch[{self.epoch:{int(math.log10(self.total_epochs))+1}}/{self.total_epochs-1}]'
             debug_data_loding = False
-            debug_step_iteration = False
+            debug_step_iteration = True
             for idx, batch_dict in enumerate(self.train_loader):
                 if debug_data_loding:
                     continue
@@ -187,12 +187,12 @@ class Trainer:
                 
                 if (self.schedule_unit == 'step') and (self.scheduler is not None):
                     self.scheduler.step()
-            self.evaluate_ckpt()
-            # try:
-            #     self.evaluate_ckpt()
-            # except:
-            #     print('error happens in model sampling')
-            #     self.save_ckpt(None) # 先存下来
+            # self.evaluate_ckpt()
+            try:
+                self.evaluate_ckpt()
+            except:
+                print('error happens in model sampling')
+                self.save_ckpt(None) # 先存下来
             if self.distributed:
                 dist.barrier() 
 

@@ -4143,22 +4143,10 @@ class AMR_Grounding_2DObj(nn.Module):
         ann_number_by_batch = [f.int().sum() for f in perFrame_has_ann]
         perFrame_has_ann = torch.stack([F.pad(t.float(), pad=(0, T-len(t))).bool() for t in perFrame_has_ann], dim=0) # b T
         decoder_layer_preds = self.model_outputs(samples, text_queries, auxiliary)
-        # b nq T h w
-        out_mask_logits = decoder_layer_preds['objdecoder_objseg'].permute(0,2,1,3,4)
-        if self.is_pretraining_seg:
-            for idx in range(batch_size):
-                h, w = targets[idx]['masks'].shape[-2:]
-                # n t h w -> n t H W
-                targets[idx]['masks'] = F.pad(targets[idx]['masks'].float(), pad=(0, W-w, 0, H-h)).bool()
-            # list[n t h w]
-            tgt_masks = [targets[idx]['masks'] for idx in range(batch_size)]
-            for btc_idx in range(batch_size):
-                start = int(self.obj_decoder_mask_out_stride // 2)
-                im_h, im_w = tgt_masks[btc_idx].shape[-2:]
-                tgt_masks[btc_idx] = tgt_masks[btc_idx][:, :, start::self.obj_decoder_mask_out_stride, start::self.obj_decoder_mask_out_stride] 
-                assert tgt_masks[btc_idx].size(2) * self.obj_decoder_mask_out_stride == im_h
-                assert tgt_masks[btc_idx].size(3) * self.obj_decoder_mask_out_stride == im_w
-
+        # b nq T h w -> b T nq h w
+        out_mask_logits = decoder_layer_preds['temporal_decoder']['pred_masks'][-1].permute(0,2,1,3,4)
+        if self.mode == '测试rvos bound':
+            raise NotImplementedError()
             gt_referent_idx = [targets[idx]['referent_idx'] for idx in range(batch_size)] # list[int], b
             _, matching_result = self.obj_decoder_objseg_loss(out_mask_logits, perFrame_has_ann, tgt_masks)
             # list[t h w] -> b t h w
@@ -4167,24 +4155,22 @@ class AMR_Grounding_2DObj(nn.Module):
                                                                                                          perFrame_has_ann)], dim=0)
             out_mask_logits = out_mask_logits.flatten(0,1) # bt h w
         else:
-            refdecoder_layer_preds = self.get_decoder_preds(decoder_layer_preds)
-            ref_last_layer_preds = refdecoder_layer_preds[f'layer{self.decoder_trans_nlayers-1}_preds']
-            ref_last_layer_gscore = ref_last_layer_preds['grounding_score']  # b nq 
+            ref_last_layer_gscore = decoder_layer_preds['temporal_decoder']['reason_3d'][-1]  # b nq
             argmax_query_idx = ref_last_layer_gscore.argmax(-1)
             # b T h w
-            out_mask_logits = torch.stack([out_mask[max_query] for out_mask, max_query in zip(out_mask_logits, argmax_query_idx)], dim=0)
-            out_mask_logits = out_mask_logits.flatten(0,1)[perFrame_has_ann.flatten()]
-        # # # bt 1 h w
+            out_mask_logits = torch.stack([out_mask[:, max_query] for out_mask, max_query in zip(out_mask_logits, argmax_query_idx)], dim=0)
+            out_mask_logits = out_mask_logits.flatten(0,1)[perFrame_has_ann.flatten()] # bT -> bt' h w
+        # bt' 1 h w
         query_pred_masks = F.interpolate(out_mask_logits.unsqueeze(1), 
-                                         scale_factor=self.obj_decoder_mask_out_stride, mode="bilinear", align_corners=False)
-        query_pred_masks = (query_pred_masks.sigmoid() > self.obj_decoder_mask_threshold) 
+                                         scale_factor=self.temporal_decoder_mask_out_stride, mode="bilinear", align_corners=False)
+        query_pred_masks = (query_pred_masks.sigmoid() > self.temporal_decoder_mask_threshold) 
         # bt' 1
         query_pred_is_referred_prob = torch.ones([len(query_pred_masks)]).unsqueeze(1).to(query_pred_masks.device).float()
         
         size_original = [] #list[h,w], bt'
         size_after_aug = [] #list[h,w], bt'
         
-        # 保证没有temporal增强
+        # list[(h w)],batch -> list[(h w)], bt'
         for bth_idx in range(batch_size):
             size_original.extend([targets[bth_idx]['orig_size'][-2:].tolist()]*ann_number_by_batch[bth_idx])
             size_after_aug.extend([targets[bth_idx]['size'][-2:].tolist()]*ann_number_by_batch[bth_idx])
@@ -4194,14 +4180,14 @@ class AMR_Grounding_2DObj(nn.Module):
             f_pred_masks = f_pred_masks[:, :f_mask_h, :f_mask_w] 
             if (orig_size[0] != after_aug_size[0]) or (orig_size[1] != after_aug_size[1]):
                 # n h w -> 1 n h w -> n h w
-                f_pred_masks = F.interpolate(f_pred_masks.unsqueeze(0).float(), size=orig_size, mode="nearest")[0]
+                f_pred_masks = F.interpolate(f_pred_masks.unsqueeze(0).float(), size=orig_size, mode="nearest")[0].bool()
             processed_pred_masks.append(f_pred_masks) # n h w
             
         # list[n h w], bt -> list[n t' h w], b
         by_batch_preds = []
         by_batch_preds_probs = []
         cnt = 0
-        # bt n -> list[n], bt -> list[n t'], b
+        # bt' n -> list[n], bt' -> list[n t'], b
         query_pred_is_referred_prob = query_pred_is_referred_prob.split(1, dim=0)
         query_pred_is_referred_prob = [qq.squeeze(0) for qq in query_pred_is_referred_prob]
         for bth_idx in range(batch_size):
