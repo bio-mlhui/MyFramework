@@ -648,7 +648,7 @@ def youtube_schedule(configs, is_distributed, process_id, num_processes):
     assert len(test2_video_annotations.keys()) == 305
     assert len(set(list(test2_video_annotations.keys())) - set(list(test_video_annotations.keys()))) == 0
     test_video_ids = list(set(list(test_video_annotations.keys())) - set(list(test2_video_annotations.keys())))
-    test_video_to_texts = {test_video_annotations[key] for key in test_video_ids}
+    test_video_to_texts = {key:test_video_annotations[key] for key in test_video_ids}
     test_aug = video_aug_entrypoints(test_augmentation['name'])
     test_aug = create_train_aug(test_augmentation) 
     test_dataset = YRVOS_Dataset(root=root,
