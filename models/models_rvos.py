@@ -3849,17 +3849,8 @@ class AMR_Grounding_2DObj(nn.Module):
                                    'reason_2d': grounding_score_by_layer} ,} # list[b nq h w], num_layers
 
         elif self.mode == '只训练rvos' or self.mode == 'rios之后rvos' or self.mode == 'joint': 
-            spatial_grounding_score = self.reason_module(obj_queries=obj_queries, 
-                                                        amrs=amrs,
-                                                        amr_token_feats=amr_token_feats,
-                                                        amr_token_seg_ids=amr_token_seg_ids,
-                                                        node_alignments=node_alignments,
-                                                        text_feats=text_feats,
-                                                        is_2d=True, is_3d=False,
-                                                        text_pad_masks=text_pad_masks) # list[vi nqf], batch
             #可能会有2d的loss计算
             obj_queries_by_layer = [rearrange(obj_q, '(b t) nq c -> b t nq c',b=batch_size,t=nf) for obj_q in obj_queries_by_layer]
-            mask_features = rearrange(mask_features, '(b t) c h w -> b t c h w',b=batch_size,t=nf)
             temporal_decoder_output, amr_token_feats, text_feats = self.temporal_decoder(frame_query_by_layer=obj_queries_by_layer, # list[b t nq c]
                                                                                         mask_features=mask_features, # bt c h w
 
@@ -3874,11 +3865,30 @@ class AMR_Grounding_2DObj(nn.Module):
               temporal_pred_masks_by_layer = temporal_decoder_output['temporal_queries'], temporal_decoder_output['frame_queries'], \
                                                                 temporal_decoder_output['cross_attn_weights'],\
                                                                 temporal_decoder_output['pred_masks']
+            repeated_amrs = []
+            for idx in range(batch_size):
+                for _ in range(nf):
+                    repeated_amrs.append(copy.deepcopy(amrs[idx]))
+            spatial_grounding_score = self.reason_module(obj_queries=frame_queries_memory.flatten(0, 1), # bt nq c 
+                                                        amrs=repeated_amrs,
+                                                        amr_token_feats=repeat(amr_token_feats, 'b s c -> (b t) s c', t=nf),
+                                                        amr_token_seg_ids=repeat(amr_token_seg_ids, 'b s -> (b t) s',t=nf),
+                                                        node_alignments=node_alignments,
+                                                        text_feats=repeat(text_feats, 'b s c -> (b t) s c', t=nf),
+                                                        is_2d=True, is_3d=False,
+                                                        text_pad_masks=repeat(text_pad_masks,'b s -> (b t) s', t=nf),
+                                                    ) # list[vi nqf], batch_size * T
+            # list[vi nqf], b * T -> list[list[vi nqf], T], b
+            spg_by_batch = []
+            for idx in range(batch_size):
+                spg_by_batch.append(spatial_grounding_score[idx*nf:(idx+1)*nf])
+            spg_scores = [torch.stack(sbb, dim=1) for sbb in spg_by_batch] # list[Vi T nqf]
             grounding_score_by_layer = []
             for layer_idx, (temporal_queries, cross_attn_weights) in enumerate(zip(temporal_queries_by_layer, cross_attn_weights_by_layer)):
                 if self.reason_3d_layer_if_reason[layer_idx]:
                     grounding_score = self.reason_module(temporal_queries=temporal_queries, 
                                                             frame_queries=frame_queries_memory,
+                                                            frame_queries_grounding_score=spg_scores,
                                                              cross_attn_weights=cross_attn_weights, 
                                                              is_3d=True, is_2d=False,
                                                              amrs=amrs,
@@ -3895,12 +3905,10 @@ class AMR_Grounding_2DObj(nn.Module):
                     grounding_score_by_layer.append(grounding_score)
                 else:
                     grounding_score_by_layer.append(None)
-            return {'temporal_decoder': {'pred_masks': temporal_pred_masks_by_layer, # list[b nq h w]
+            return {'temporal_decoder': {'pred_masks': temporal_pred_masks_by_layer, # list[b nq t h w]
                                          'reason_3d': grounding_score_by_layer},
-                    'objdecoder': {'pred_masks': pred_masks_by_layer, # b nq h w
-                                   'reason_2d': grounding_score_by_layer} ,} # list[b nq h w], num_layers
-
-        
+                    'objdecoder': {'pred_masks': pred_masks_by_layer, # list[bt nq h w]
+                                   'reason_2d': [None] * len(pred_masks_by_layer)} ,} # list[None] / list[bt nq]
 
     def forward_rios(self, samples, text_queries, auxiliary, targets, visualize=False):
         # samples: list[3 h w] -> b 3 H W
@@ -4093,11 +4101,27 @@ class AMR_Grounding_2DObj(nn.Module):
         if not isinstance(samples, NestedTensor):
             samples = nested_tensor_from_videos_list_with_stride(samples, max_stride=self.max_stride)
         T, batch_size, _, H, W = samples.tensors.shape
-
-        new_targets = self.rvos_targets_handler(targets, pad_T=T, pad_H=H, pad_W=W)
+        
+        rvos_targets = self.rvos_targets_handler(targets, pad_T=T, pad_H=H, pad_W=W)
         model_outs = self.model_outputs(samples, text_queries, auxiliary) 
         # 可能会有object decoder的loss
-        loss_value_dict = self.temporal_decoder_loss(model_outs, new_targets)
+        loss_value_dict = self.temporal_decoder_loss(model_outs, rvos_targets)
+
+        video_rios_targets = self.video_rios_targets_handler(targets, pad_T=T, pad_H=H, pad_W=W)
+        has_ann = video_rios_targets['has_ann'] # bT
+        obj_pred_masks = model_outs['objdecoder']['pred_masks'] # list[bt nq h w]
+        obj_pred_masks = [opm[has_ann] for opm in obj_pred_masks]
+        model_outs['objdecoder']['pred_masks'] = obj_pred_masks
+
+        obj_gscores = model_outs['objdecoder']['reason_2d'] # list[bT nq/None]
+        new_obj_gscores = []
+        for og in obj_gscores:
+            if og is None:
+                new_obj_gscores.append(None)
+            else:
+                new_obj_gscores.append(og[has_ann]) # bt nq -> bt' nq
+        model_outs['objdecoder']['reason_2d'] = new_obj_gscores
+        loss_value_dict.update(self.objdecoder_loss(model_outs, video_rios_targets))
 
         loss = sum((loss_value_dict[k] * self.loss_weight[k] for k in loss_value_dict.keys()))
         if not math.isfinite(loss.item()):
@@ -4111,7 +4135,7 @@ class AMR_Grounding_2DObj(nn.Module):
         return loss_dict_unscaled, loss_dict_scaled, grad_total_norm 
 
     @torch.no_grad()
-    def ssample_rvos(self, samples, text_queries, auxiliary, targets, visualize=False):
+    def sample_rvos(self, samples, text_queries, auxiliary, targets, visualize=False):
         if not isinstance(samples, NestedTensor):
             samples = nested_tensor_from_videos_list_with_stride(samples, max_stride=self.max_stride)
         T, batch_size, _, H, W = samples.tensors.shape
@@ -4222,6 +4246,46 @@ class AMR_Grounding_2DObj(nn.Module):
             'has_ann': perFrame_has_ann
         }
 
+    def video_rios_targets_handler(self, targets, pad_T, pad_H, pad_W):
+        batch_size = len(targets)
+        tgt_masks = [] 
+        # list[ni t' h w] -> list[ni t' H W]
+        for idx in range(batch_size):
+            _, _, h, w = targets[idx]['masks'].shape # ni t' h w
+            tgt_masks.append(F.pad(targets[idx]['masks'].float(), pad=(0, pad_W-w, 0, pad_H-h)).bool())
+
+        for btc_idx in range(batch_size):
+            start = int(self.temporal_decoder_mask_out_stride // 2)
+            im_h, im_w = tgt_masks[btc_idx].shape[-2:]
+            tgt_masks[btc_idx] = tgt_masks[btc_idx][:, :, start::self.temporal_decoder_mask_out_stride, start::self.temporal_decoder_mask_out_stride] 
+            assert tgt_masks[btc_idx].size(2) * self.temporal_decoder_mask_out_stride == im_h
+            assert tgt_masks[btc_idx].size(3) * self.temporal_decoder_mask_out_stride == im_w
+            
+        # list[n h w], bt'
+        rep_tgt_masks = []
+        for btc_idx in range(batch_size):
+            t_m = tgt_masks[btc_idx].split(1, dim=1)
+            t_m = [tm.squeeze(1) for tm in t_m]
+            rep_tgt_masks.extend(t_m)
+        rep_is_valid = [rtm.flatten(1).any(-1) for rtm in rep_tgt_masks] # list[ni], bt'
+        num_anns_by_batch = [tm.shape[1] for tm in tgt_masks] # list[int]
+        gt_referent_idx = [targets[idx]['referent_idx'] for idx in range(batch_size)] # list[int], b
+        rep_gt_referent_idx = [] # list[int], bt'
+        for btc_idx in range(batch_size):
+            rep_gt_referent_idx.extend([gt_referent_idx[btc_idx]] * num_anns_by_batch[btc_idx])
+                
+
+        perFrame_has_ann = [t['has_ann'] for t in targets] # list[t_video_i]
+        # list[t_video_i] -> bT
+        perFrame_has_ann = torch.cat([F.pad(t.float(), pad=(0, pad_T-len(t))).bool() for t in perFrame_has_ann])
+
+        return {
+            'masks': rep_tgt_masks,
+            'gt_referent_idx': rep_gt_referent_idx,
+            'isvalid': rep_is_valid,
+            'has_ann': perFrame_has_ann
+        }
+
     def temporal_decoder_loss(self, model_outs, targets):
         loss_layer_weights = self.tasks['temporal_decoder']['loss_layer_weights']
         tgt_masks = targets['masks'] # list[ni t' H W]
@@ -4286,18 +4350,18 @@ class AMR_Grounding_2DObj(nn.Module):
         ]
 
     def temporal_decoder_masks_loss(self, out_mask_logits, targets, matching_indices, num_objs):
-        has_anntation = targets['has_ann'].bool() # list[T]
-        is_valid = targets['is_valid'].bool() # list[ni]
+        has_anntation = targets['has_ann'] # list[T]
+        is_valid = targets['is_valid'] # list[ni]
         # b nq T H W -> list[ni t' H W]
-        src_masks = [t[J][:, has_ann] for t, (J, _), has_ann in zip(out_mask_logits, matching_indices, has_anntation)]
+        src_masks = [t[J][:, has_ann.bool()] for t, (J, _), has_ann in zip(out_mask_logits, matching_indices, has_anntation)]
         
         # list[ni t' H W], b 
         tgt_masks = [t[J] for t, (_, J) in zip(targets['masks'], matching_indices)]
         
         # 每个视频可能有不同的annotation数量
         # list[ni] -> n_sigma
-        masks_losses = torch.cat([self.binary_cross_entropy_mask_loss(src_m[is_v], tgt_m[is_v]) for src_m, tgt_m, is_v in zip(src_masks, tgt_masks, is_valid)], dim=0)
-        dice_losses = torch.cat([self.dice_mask_loss(src_m[is_v], tgt_m[is_v]) for src_m, tgt_m, is_v in zip(src_masks, tgt_masks, is_valid)], dim=0)
+        masks_losses = torch.cat([self.binary_cross_entropy_mask_loss(src_m[is_v.bool()], tgt_m[is_v.bool()]) for src_m, tgt_m, is_v in zip(src_masks, tgt_masks, is_valid)], dim=0)
+        dice_losses = torch.cat([self.dice_mask_loss(src_m[is_v.bool()], tgt_m[is_v.bool()]) for src_m, tgt_m, is_v in zip(src_masks, tgt_masks, is_valid)], dim=0)
 
         losses = {
             "tempdecoder_mask": masks_losses.sum() / num_objs,
@@ -4328,8 +4392,8 @@ class AMR_Grounding_2DObj(nn.Module):
     def temporal_reason_loss(self, layer_gscore_output, targets, matching_indices, num_refs):
         # b nq
         referent_idx = targets['referent_idx'] # list[int], batch
-        is_valid = targets['is_valid'].bool() # list[ni]
-        ref_is_valid = torch.cat([is_v[ref_idx] for is_v, ref_idx in zip(is_valid, referent_idx)]) # b
+        is_valid = targets['is_valid'] # list[ni]
+        ref_is_valid = torch.tensor([is_v[ref_idx] for is_v, ref_idx in zip(is_valid, referent_idx)]).bool().to(self.device) # b
         match_as_gt_indices = [] # list[int], b
         for ref_idx, (src_idx, tgt_idx) in zip(referent_idx,  matching_indices): # b
             sel_idx = tgt_idx.tolist().index(ref_idx)

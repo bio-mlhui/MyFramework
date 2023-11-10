@@ -400,11 +400,11 @@ class VITA(nn.Module):
         mask_features = self.vita_mask_features(mask_features.flatten(0, 1)) # b t c h w
         mask_features = rearrange(mask_features, '(b t) c h w -> b t c h w',b=B,t=T)
 
-        pred_masks_by_layer = [torch.einsum('bnc,btchw->btnhw', mask_e, mask_features) for mask_e in mask_embeds]
+        pred_masks_by_layer = [torch.einsum('bnc,btchw->bnthw', mask_e, mask_features) for mask_e in mask_embeds]
         # l b n t h
         out = {
             'temporal_queries': decoder_outputs, # list[b nq c]
-            'pred_masks': pred_masks_by_layer, #list[b t nq h w]
+            'pred_masks': pred_masks_by_layer, #list[b nq t h w]
             'frame_queries':rearrange(src, '(t nqf) b c -> b t nqf c',t=T,nqf=nqf),
             'cross_attn_weights': cross_weight_by_layer, # b nq t s
             
@@ -446,14 +446,14 @@ class VITA(nn.Module):
             decoder_outputs.append(dec_out.transpose(0, 1))
 
         mask_embeds = [self.mask_embed(dec_o) for dec_o in decoder_outputs] # b nq c
-        mask_features = self.vita_mask_features(mask_features.flatten(0, 1)) # b t c h w
+        mask_features = self.vita_mask_features(mask_features) # b t c h w
         mask_features = rearrange(mask_features, '(b t) c h w -> b t c h w',b=B,t=T)
 
-        pred_masks_by_layer = [torch.einsum('bnc,btchw->btnhw', mask_e, mask_features) for mask_e in mask_embeds]
+        pred_masks_by_layer = [torch.einsum('bnc,btchw->bnthw', mask_e, mask_features) for mask_e in mask_embeds]
         # l b n t h
         out = {
             'temporal_queries': decoder_outputs, # list[b nq c]
-            'pred_masks': pred_masks_by_layer, #list[b t nq h w]
+            'pred_masks': pred_masks_by_layer, #list[b nq t h w]
             'frame_queries':rearrange(src, '(t nqf) b c -> b t nqf c',t=T,nqf=nqf),
             'cross_attn_weights': cross_weight_by_layer, # b nq t s
             
@@ -462,8 +462,8 @@ class VITA(nn.Module):
 
 
     def forward(self,
-                frame_query_by_layer,
-                mask_features,
+                frame_query_by_layer, # b t nq c
+                mask_features, # bt c h w
                 amrs=None, 
                 amr_token_feats=None, 
                 amr_token_seg_ids=None,

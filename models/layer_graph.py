@@ -2098,7 +2098,7 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
                  temporal_queries=None,  # b nq c
                  frame_queries=None,  # b T nqf c
                  cross_attn_weights=None, # b nq T nqf
-
+                frame_queries_grounding_score=None, # list[Vi T nqf]
                 amrs=None, 
                 amr_token_feats=None,
                 amr_token_seg_ids=None, 
@@ -2112,13 +2112,26 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
             node_feats, edge_feats,= self.batching_graph(amrs=amrs,
                                                 amr_token_feats=amr_token_feats,
                                                 amr_seg_ids=amr_token_seg_ids,)
-        
+        V, E = node_feats.shape[0], edge_feats.shape[0]
         batch_size, nq, _, = temporal_queries.shape
-
+        frame_queries = self.frame_query_proj(frame_queries)
+        temporal_queries = self.temp_query_proj(temporal_queries)
+        node_feats = self.node_linear(node_feats)
+        if E > 0:
+            edge_feats = self.edge_linear(edge_feats) 
+        else:
+            zero_foo = (self.edge_linear.weight * torch.zeros_like(self.edge_linear.weight)).sum()
+            node_feats = node_feats + zero_foo
+        node_frame_query_gscore = torch.cat(frame_queries_grounding_score, dim=0) # V T nqf
         node_temp_queries, edge_temp_queries = self.batching_memory(temporal_queries, nodes_batch_ids, edges_batch_ids)
-        
+        node_cross_attns, edge_cross_attns = self.batching_memory(cross_attn_weights, nodes_batch_ids, edges_batch_ids)
+        node_frame_queries, edge_frame_queries = self.batching_memory(frame_queries, nodes_batch_ids, edges_batch_ids)
         grounding_score = self.reason_3d(node_feats=node_feats, edge_feats=edge_feats,edge_index=edge_index,
-                                    node_temp_queries=node_temp_queries, edge_temp_queries=edge_temp_queries,) # V nq
+                                    node_temp_queries=node_temp_queries, edge_temp_queries=edge_temp_queries,
+                                    node_cross_attns=node_cross_attns, edge_cross_attns=edge_cross_attns,
+                                    node_frame_queries=node_frame_queries, edge_frame_queries=edge_frame_queries,
+                                    node_frame_query_gscore=node_frame_query_gscore                                   
+                                    ) # V nq
         g_score_by_batch = [] # list[vi nq]
         for bch_idx in range(batch_size):
             bch_node_score = torch.stack([grounding_score[idx] for idx, batch_id in enumerate(nodes_batch_ids) if batch_id == bch_idx], dim=0)
@@ -2129,6 +2142,9 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
     def reason_3d(self, 
                 node_feats=None, edge_feats=None,edge_index=None, # V c
                 node_temp_queries=None, edge_temp_queries=None, # V nq c
+                node_cross_attns=None, edge_cross_attns=None, # V nq T nqf
+                node_frame_queries=None, edge_frame_queries=None, # V T nqf c
+                node_frame_query_gscore=None # V T nqf
                 ):
         
         V, E, device, dtype = node_feats.shape[0], edge_feats.shape[0], node_feats.device, node_feats.dtype
@@ -2163,6 +2179,8 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
                                         node_temp_query=node_temp_queries.flatten(1), # V h_nq_c
                                         is_2d=False, is_3d=True
                                         )
+        if E == 0:
+            scores = scores + self.context_2.sum() * 0. + self.context_1.sum() * 0.
         return scores # V nq
     
 
@@ -2258,7 +2276,8 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
                 amr_token_feats=None,
                 amr_token_seg_ids=None, 
                 node_alignments=None,
-                text_feats=None, text_pad_masks=None):
+                text_feats=None, text_pad_masks=None,
+                frame_queries_grounding_score=None):
         
         assert is_2d or is_3d
         assert not(is_2d and is_3d)
@@ -2274,6 +2293,7 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
             return self.forward_3d(temporal_queries=temporal_queries,  # b nq c
                                     frame_queries=frame_queries,  # b T nqf c
                                     cross_attn_weights=cross_attn_weights, # b nq T nqf
+                                    frame_queries_grounding_score=frame_queries_grounding_score, # list[Vi T nqf]
                                     amrs=amrs, 
                                     amr_token_feats=amr_token_feats,
                                     amr_token_seg_ids=amr_token_seg_ids, 
