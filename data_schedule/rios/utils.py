@@ -99,7 +99,7 @@ class TrainRandomSampler_ByEpoch_Distributed(Sampler[T_co]):
             indices += (indices * math.ceil(padding_size / len(indices)))[:padding_size]
         assert len(indices) == self.total_size
 
-        indices = indices[118496:] + indices[0:118496]
+        indices = indices[119968:] + indices[0:119968]
         # subsample
         indices = indices[self.rank:self.total_size:self.num_replicas]
         assert len(indices) == self.num_samples
