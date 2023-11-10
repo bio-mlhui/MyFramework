@@ -4375,11 +4375,12 @@ class AMR_Grounding_2DObj(nn.Module):
         loss = 1 - (numerator + 1) / (denominator + 1)
         return loss
 
-    def temporal_reason_loss(self, layer_gscore_output, targets, matching_indices, num_refs):
+    def temporal_reason_loss(self, layer_gscore_output, targets, matching_indices, global_num_refs):
         # b nq
         referent_idx = targets['referent_idx'] # list[int], batch
         is_valid = targets['is_valid'] # list[ni]
         ref_is_valid = torch.tensor([is_v[ref_idx] for is_v, ref_idx in zip(is_valid, referent_idx)]).bool().to(self.device) # b
+        num_refs = (ref_is_valid.int().sum())
         match_as_gt_indices = [] # list[int], b
         for ref_idx, (src_idx, tgt_idx) in zip(referent_idx,  matching_indices): # b
             sel_idx = tgt_idx.tolist().index(ref_idx)
