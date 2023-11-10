@@ -218,6 +218,7 @@ class VITA(nn.Module):
         self,
         hidden_dim,
         num_queries: int,
+        num_classes: int,
         num_frame_queries: int,
         enc_layers: int,
         dec_layers: int,
@@ -308,7 +309,7 @@ class VITA(nn.Module):
             self.vita_mask_features = nn.Conv3d(**mask_feat_proj)
 
         self.decoder_norm = nn.LayerNorm(hidden_dim)
-
+        self.class_embed = nn.Linear(hidden_dim, num_classes + 1)
         self.num_queries = num_queries
         # learnable query features
         self.query_feat = nn.Embedding(num_queries, hidden_dim)
@@ -397,14 +398,16 @@ class VITA(nn.Module):
             decoder_outputs.append(dec_out.transpose(0, 1))
 
         mask_embeds = [self.mask_embed(dec_o) for dec_o in decoder_outputs] # b nq c
+        pred_cls = [self.class_embed(dec_o) for dec_o in decoder_outputs] # b nq class+1
         mask_features = self.vita_mask_features(mask_features) # b t c h w
         mask_features = rearrange(mask_features, '(b t) c h w -> b t c h w',b=B,t=T)
-
+        
         pred_masks_by_layer = [torch.einsum('bnc,btchw->bnthw', mask_e, mask_features) for mask_e in mask_embeds]
         # l b n t h
         out = {
             'temporal_queries': decoder_outputs, # list[b nq c]
             'pred_masks': pred_masks_by_layer, #list[b nq t h w]
+            'pred_logits': pred_cls, # list[b nq class+1]
             'frame_queries':rearrange(src, '(t nqf) b c -> b t nqf c',t=T,nqf=nqf),
             'cross_attn_weights': cross_weight_by_layer, # b nq t s
             
@@ -446,6 +449,7 @@ class VITA(nn.Module):
             decoder_outputs.append(dec_out.transpose(0, 1))
 
         mask_embeds = [self.mask_embed(dec_o) for dec_o in decoder_outputs] # b nq c
+        pred_cls = [self.class_embed(dec_o) for dec_o in decoder_outputs] # b nq class+1
         mask_features = self.vita_mask_features(mask_features) # b t c h w
         mask_features = rearrange(mask_features, '(b t) c h w -> b t c h w',b=B,t=T)
 
@@ -454,6 +458,7 @@ class VITA(nn.Module):
         out = {
             'temporal_queries': decoder_outputs, # list[b nq c]
             'pred_masks': pred_masks_by_layer, #list[b nq t h w]
+            'pred_logits': pred_cls, # list[b nq class+1]
             'frame_queries':rearrange(src, '(t nqf) b c -> b t nqf c',t=T,nqf=nqf),
             'cross_attn_weights': cross_weight_by_layer, # b nq t s
             
@@ -633,5 +638,6 @@ def vita(configs, pt_dir):
                 enc_window_size=configs['swin_window'],
                 training_clip_size=configs['training_clip_size'],
                 order=configs['order'],
-                mask_feat_proj=configs['mask_feat_proj'])
+                mask_feat_proj=configs['mask_feat_proj'],
+                num_classes=configs['num_classes'])
 
