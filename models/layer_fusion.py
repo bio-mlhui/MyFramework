@@ -476,7 +476,9 @@ class Visual_AMRText_SeqSeq(nn.Module):
                 all_lengths = dict(nx.single_target_shortest_path_length(nx_graph, 0)) # 0, 1, 2, 3
                 pos_lengths = torch.tensor([all_lengths[idx] for idx in range(num_nodes)], dtype=torch.int64).to(amr_token_feats.device)
                 pos = self.depth_amr_pos(pos_lengths)
-                amr_poses[btch_idx][:num_nodes] += pos
+                add_amr_poses = torch.zeros_like(amr_poses)
+                add_amr_poses[btch_idx][:num_nodes] = pos
+                amr_poses = amr_poses + add_amr_poses
         if 'refer_sin' in self.amr_pos_type:
             for btch_idx, amr in enumerate(amrs):
                 num_nodes = amr.num_nodes
