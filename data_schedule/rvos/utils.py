@@ -285,7 +285,6 @@ class DatasetWithAux(Dataset):
                 if edge_seg_id == -2:
                     # 把/边的dst的token改成src的token, dst的segid改成2, dst的alignment改成src的alignment
                     if not ((nodekey_to_segid[dst] == 1) and (nodekey_to_segid[src] == 2)):
-                        assert src == dst
                         nodekey_to_token[dst] = nodekey_to_token[src]
                         nodekey_to_segid[dst] = 2
                         nodekey_to_alignment[dst] = 0 # 瞎选的                       
