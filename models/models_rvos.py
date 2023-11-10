@@ -4392,8 +4392,8 @@ class AMR_Grounding_2DObj(nn.Module):
         # list[ni t' H W], b 
         tgt_masks = [t[J] for t, (_, J) in zip(targets['masks'], matching_indices)]
         
-        src_masks = torch.stack([sm.flatten(0, 1) for sm in src_masks],dim=0)# list[ni_t' h w]
-        tgt_masks = torch.stack([tm.flatten(0,1) for tm in tgt_masks],dim=0) # list[ni_t' h w]
+        src_masks = torch.cat([sm.flatten(0, 1) for sm in src_masks],dim=0)# list[ni_t' h w]
+        tgt_masks = torch.cat([tm.flatten(0,1) for tm in tgt_masks],dim=0) # list[ni_t' h w]
         tgt_masks = tgt_masks.to(src_masks)
         # 每个视频可能有不同的annotation数量
         # list[ni] -> n_sigma
