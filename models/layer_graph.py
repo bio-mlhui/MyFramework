@@ -1914,6 +1914,8 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
                 self.temp_query_proj = FeatureResizer(**temp_query_proj)
             elif temp_query_proj_name == 'linear':
                 self.temp_query_proj = nn.Linear(**temp_query_proj)
+            elif temp_query_proj_name == 'mlp':
+                self.temp_query_proj == MLP(d_model, d_model, d_model, 3)
             else:
                 raise ValueError()
         if frame_query_proj is not None:
