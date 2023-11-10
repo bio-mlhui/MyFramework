@@ -146,10 +146,14 @@ def show_dataset_information_and_validate(root):
 # static method
 def test(loader, model, device, is_distributed, is_main_process, output_dir):
     save_dir = os.path.join(output_dir, 'Annotations')
-    # video_id/exp_id/frame_idx.png
-    if os.path.exists(save_dir):
-        shutil.rmtree(save_dir)
-    os.makedirs(save_dir)
+    # 如果存在了annotation 目录，让主进程删除重新Make
+    if is_main_process:
+        if os.path.exists(save_dir):
+            shutil.rmtree(save_dir)
+        os.makedirs(save_dir)
+    if is_distributed:
+        dist.barrier()
+
     for batch_dict in tqdm(loader):
         samples = to_device(batch_dict['samples'], device)
         text_query = batch_dict['text_query']
@@ -174,10 +178,13 @@ def test(loader, model, device, is_distributed, is_main_process, output_dir):
             pred_masks = torch.stack([frame_pred[idx] for frame_pred, idx in zip(pred_masks.permute(1, 0, 2, 3), sort_idx)], dim=0)
 
             dir_path = os.path.join(save_dir, video_id, exp_id)
-            os.makedirs(dir_path)
+            os.makedirs(dir_path,exist_ok=True)
             for frame_mask, frame in zip(pred_masks, all_frames):
                 frame_mask = frame_mask.to('cpu').float()
                 frame_mask = Image.fromarray((255 * frame_mask.numpy())).convert('L')
+
+                # assert not os.path.exists(os.path.join(dir_path, f'{frame}.png'))
+
                 frame_mask.save(os.path.join(dir_path, f'{frame}.png'))
                 
     if is_distributed:

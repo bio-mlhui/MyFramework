@@ -491,7 +491,7 @@ class VITA(nn.Module):
         # b t nq c -> t nq b c
         frame_query = frame_query.permute(1, 2, 0, 3).contiguous() # t nq b c
 
-        if self.window_size < T:
+        if (self.window_size != 0) and self.window_size < T:
             pad = int(ceil(T / self.window_size)) * self.window_size - T # 让window能
             _T = pad + T
             frame_query = F.pad(frame_query, (0,0,0,0,0,0,0,pad))  # t_pad
