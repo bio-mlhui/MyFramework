@@ -99,7 +99,7 @@ class TrainRandomSampler_ByEpoch_Distributed(Sampler[T_co]):
         else:
             indices += (indices * math.ceil(padding_size / len(indices)))[:padding_size]
         assert len(indices) == self.total_size
-
+        indices = indices[492:] + indices[0:492]
         # subsample
         indices = indices[self.rank:self.total_size:self.num_replicas]
         assert len(indices) == self.num_samples
@@ -291,6 +291,12 @@ class DatasetWithAux(Dataset):
                     nodekey_to_alignment[dst] = nodekey_to_alignment[src]
                     # 忽略/边
                 else:
+                    # 有个concept既当concept又当value
+                    if src not in nodekey_to_idx or dst not in nodekey_to_idx:
+                        continue
+                        # for edge_source, edge_target in G.edges():
+                        #     if (src == edge_source) and (dst == edge_target) and \
+                        #         G.edges[(edge_source, edge_target)]['seg_id'] == -3:
                     edge_index.append([nodekey_to_idx[src], nodekey_to_idx[dst]])
                     edge_seg_ids.append(edge_seg_id)
                     edge_tokens.append(G[src][dst]['role'])

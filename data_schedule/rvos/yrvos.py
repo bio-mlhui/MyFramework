@@ -801,10 +801,11 @@ class YRVOS_Dataset(DatasetWithAux):
                   self.get_aux(sample_idx, annotated_exps_by_object, video_auxid=None, text_auxid=text_query), targets
             
         elif self.split == 'test': 
-            video_id, window_frames, exp_id = self.samples[sample_idx]            
+            video_id, window_frames, exp_id = self.samples[sample_idx]['video_id'], \
+                                            self.samples[sample_idx]['window'], self.samples[sample_idx]['exp_id']          
             all_exps_dict = self.video_to_texts[video_id]["expressions"] # exp_id: exp
             text_query = all_exps_dict[exp_id]['exp']
-            vframes = [Image.open(os.path.join(self.vframes_root, video_id, f'{f}.jpg')) for f in window_frames]
+            vframes = [Image.open(os.path.join(self.video_root, video_id, f'{f}.jpg')) for f in window_frames]
             width, height = vframes[0].size
             meta_data = {
                 'size': torch.tensor([len(vframes),  height, width]),
@@ -815,8 +816,9 @@ class YRVOS_Dataset(DatasetWithAux):
                 'exp_id': exp_id,
             }
             vframes, text_query, meta_data = self.augmentation(vframes, [text_query], meta_data)  # T(t 3 h w), list[none]
-            return vframes, text_query[0], \
-                self.get_aux(sample_idx, annotated_exps_by_object, video_auxid=None, text_auxid=text_query), meta_data
+            text_query = text_query[0]
+            return vframes, text_query, \
+                self.get_aux(sample_idx, None, video_auxid=None, text_auxid=text_query), meta_data
 
     def get_aux(self, item_idx, exist_queries,
                 video_auxid,
