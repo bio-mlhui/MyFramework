@@ -305,13 +305,12 @@ class Trainer:
 
     def load_ckpt(self, ckpt_path, resume=False):
         assert os.path.exists(ckpt_path)
-        
         checkpoint = torch.load(ckpt_path, map_location=self.device)
-        self.epoch = checkpoint['epoch']
-        self.iteration = checkpoint['iteration']
         model_without_ddp = self.model.module if isinstance(self.model, DDP) else self.model
         model_without_ddp.load_state_dict(checkpoint['model_state_dict'], strict=False)
         if resume:
+            self.epoch = checkpoint['epoch']
+            self.iteration = checkpoint['iteration']
             self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             if self.scheduler is not None:
                 self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
