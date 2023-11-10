@@ -99,7 +99,7 @@ class TrainRandomSampler_ByEpoch_Distributed(Sampler[T_co]):
         else:
             indices += (indices * math.ceil(padding_size / len(indices)))[:padding_size]
         assert len(indices) == self.total_size
-        indices = indices[492:] + indices[0:492]
+
         # subsample
         indices = indices[self.rank:self.total_size:self.num_replicas]
         assert len(indices) == self.num_samples
@@ -262,7 +262,7 @@ class DatasetWithAux(Dataset):
             tok_string = self.text_aux_by_auxid[text_auxid]['toknized_string']
             G : nx.DiGraph = nx.node_link_graph(amr_wv)
             top_var = G.graph['top']
-            nodekey_to_token = {key:node_token for key, node_token in zip(G.nodes(), G.nodes())}
+            nodekey_to_token = {key:node_token for key, node_token in zip(G.nodes(), G.nodes())} # var和concept一样
             nodekey_to_segid = {key:G.nodes[key]['seg_id'] for key in G.nodes()}
             nodekey_to_alignment = {key:G.nodes[key]['alignment'] for key in G.nodes()}
             # 标号，过滤掉segid=2的节点, 第一个永远是top var
@@ -285,11 +285,16 @@ class DatasetWithAux(Dataset):
                 edge_seg_id = G[src][dst]['seg_id']
                 if edge_seg_id == -2:
                     # 把/边的dst的token改成src的token, dst的segid改成2, dst的alignment改成src的alignment
-                    assert nodekey_to_segid[dst] == 1 and nodekey_to_segid[src] == 2
-                    nodekey_to_token[dst] = nodekey_to_token[src]
-                    nodekey_to_segid[dst] = 2
-                    nodekey_to_alignment[dst] = nodekey_to_alignment[src]
-                    # 忽略/边
+                    if not ((nodekey_to_segid[dst] == 1) and (nodekey_to_segid[src] == 2)):
+                        assert src == dst
+                        nodekey_to_token[dst] = nodekey_to_token[src]
+                        nodekey_to_segid[dst] = 2
+                        nodekey_to_alignment[dst] = 0 # 瞎选的                       
+                    else:
+                        nodekey_to_token[dst] = nodekey_to_token[src]
+                        nodekey_to_segid[dst] = 2
+                        nodekey_to_alignment[dst] = nodekey_to_alignment[src]
+                        # 忽略/边
                 else:
                     # 有个concept既当concept又当value
                     if src not in nodekey_to_idx or dst not in nodekey_to_idx:
@@ -307,7 +312,11 @@ class DatasetWithAux(Dataset):
             assert 1 not in node_seg_ids
             assert -2 not in edge_seg_ids
             assert -100 not in node_alignments
-            edge_index = torch.tensor(edge_index).permute(1, 0)
+            edge_index = torch.tensor(edge_index)
+            if edge_index.dim() == 1:
+                edge_index = torch.empty([2, 0], dtype=torch.int64)
+            else:
+                edge_index = edge_index.permute(1, 0)
             amr = Data(edge_index=edge_index)
             amr.num_nodes = len(node_tokens)
             seg_ids = node_seg_ids + edge_seg_ids
@@ -591,6 +600,7 @@ class DatasetWithAux(Dataset):
     def get_video_aux(self, video_auxid):
         if self.video_aux_version == 0:
             return {}
+
 
 def padding_func(features, padding_side="right", pad_token_id=1, key="label"):
     assert key in features[0].keys(), f"{key} not in {features[0].keys()}"

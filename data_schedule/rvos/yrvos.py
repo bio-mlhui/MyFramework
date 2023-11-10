@@ -639,7 +639,16 @@ def youtube_schedule(configs, is_distributed, process_id, num_processes):
                                 text_aux_version=text_aux_version,
                                 video_aux_version=video_aux_version,
                                 video_aux_by_auxid=video_aux_by_auxid)
-    
+
+    with open(os.path.join(root, 'meta_expressions', 'valid', 'meta_expressions.json'), 'r') as f:
+        test_video_annotations = json.load(f)['videos']    
+    with open(os.path.join(root, 'meta_expressions', 'test', 'meta_expressions.json'), 'r') as f:
+        test2_video_annotations = json.load(f)['videos'] 
+    assert len(test_video_annotations.keys()) == 507
+    assert len(test2_video_annotations.keys()) == 305
+    assert len(set(list(test2_video_annotations.keys())) - set(list(test_video_annotations.keys()))) == 0
+    test_video_ids = list(set(list(test_video_annotations.keys())) - set(list(test2_video_annotations.keys())))
+    test_video_to_texts = {test_video_annotations[key] for key in test_video_ids}
     test_aug = video_aug_entrypoints(test_augmentation['name'])
     test_aug = create_train_aug(test_augmentation) 
     test_dataset = YRVOS_Dataset(root=root,
@@ -647,7 +656,7 @@ def youtube_schedule(configs, is_distributed, process_id, num_processes):
                                  split='test',
                                 samples = test_samples,
                                 augmentation=test_aug,
-                                video_to_texts=None,
+                                video_to_texts=test_video_to_texts,
                                 video_to_objects=None,
                                 catname_to_id=category_name_to_id,
                                 
@@ -666,8 +675,8 @@ def youtube_schedule(configs, is_distributed, process_id, num_processes):
                             collate_fn=train_dataset.collator, 
                             num_workers=num_workers,
                             pin_memory=True,
-                            persistent_workers=True)
-        
+                            persistent_workers=True) 
+
     sampler_test = Evaluate_Sampler_Distributed(test_dataset, 
                                     num_replicas=num_processes, 
                                     rank=process_id,)
