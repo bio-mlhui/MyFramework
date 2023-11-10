@@ -4280,14 +4280,14 @@ class AMR_Grounding_2DObj(nn.Module):
         loss_layer_weights = self.tasks['temporal_decoder']['loss_layer_weights']
         tgt_masks = targets['masks'] # list[ni t' H W]
         referent_idxs = targets['referent_idx'] # list[int]
-        is_valid = targets['is_valid'] # list[ni]
-        num_objs = sum([is_v.int().sum() for is_v in is_valid])
+
+        num_objs = sum([tm.flatten(0,1).flatten(1).any(-1).int().sum() for tm in tgt_masks])
         num_objs = torch.as_tensor([num_objs], dtype=torch.float, device=self.device)
         if is_dist_avail_and_initialized():
             torch.distributed.all_reduce(num_objs)
         num_objs = torch.clamp(num_objs / get_world_size(), min=1).item()
 
-        num_refs = sum([is_v[ref_idx].int() for is_v, ref_idx in zip(is_valid, referent_idxs)])
+        num_refs = len(tgt_masks) # 
         num_refs = torch.as_tensor([num_refs], dtype=torch.float, device=self.device)
         if is_dist_avail_and_initialized():
             torch.distributed.all_reduce(num_refs)
@@ -4337,18 +4337,24 @@ class AMR_Grounding_2DObj(nn.Module):
             out_mask = src_masks_logits[i]  # nq T h w
             out_class_prob = src_class_probs[i] # nq class+1
 
-            out_mask = out_mask[:, perFrame_has_ann[i]] # nq t' h w
-            tgt_mask = tgt_masks[i].to(out_mask) # ni t' H W
-            
-            cost_mask = batch_sigmoid_ce_loss(out_mask.flatten(1), tgt_mask.flatten(1)) # nq ni
-            cost_dice = batch_dice_loss(out_mask.flatten(1), tgt_mask.flatten(1)) # nq ni
-
             tgt_cls = tgt_classes[i] # ni
             cost_class = - out_class_prob[:, tgt_cls] # nq ni
-            
-            C = self.tasks['temporal_decoder']['objseg_matching_costs']['mask'] * cost_mask + \
-                self.tasks['temporal_decoder']['objseg_matching_costs']['dice'] * cost_dice +\
-                self.tasks['temporal_decoder']['objseg_matching_costs']['class'] * cost_class
+
+            out_mask = out_mask[:, perFrame_has_ann[i]] # nq t' h w
+            tgt_mask = tgt_masks[i].to(out_mask) # ni t' H W
+
+            scores = []
+            for ann_t in range(out_mask.shape[1]):
+                out_t_mask = out_mask[:, ann_t] # nq h w
+                tgt_t_mask = tgt_mask[:, ann_t] # ni h w
+                c_mask = batch_sigmoid_ce_loss(out_t_mask.flatten(1), tgt_t_mask.flatten(1)) # nq ni
+                c_dice = batch_dice_loss(out_t_mask.flatten(1), tgt_t_mask.flatten(1)) # nq ni
+
+                t_cost =  self.tasks['temporal_decoder']['objseg_matching_costs']['mask'] * c_mask + \
+                    self.tasks['temporal_decoder']['objseg_matching_costs']['dice'] * c_dice
+                scores.append(t_cost)
+            scores = torch.stack(scores, dim=0).mean(0) # n nq ni -> nq ni
+            C = scores + self.tasks['temporal_decoder']['objseg_matching_costs']['class'] * cost_class
             C = C.cpu()
             indices.append(linear_sum_assignment(C))
             
@@ -4378,21 +4384,22 @@ class AMR_Grounding_2DObj(nn.Module):
 
     def temporal_decoder_masks_loss(self, out_mask_logits, targets, matching_indices, num_objs):
         has_anntation = targets['has_ann'] # list[T]
-        is_valid = targets['is_valid'] # list[ni]
+        # is_valid = targets['is_valid'] # list[ni]
+
         # b nq T H W -> list[ni t' H W]
         src_masks = [t[J][:, has_ann.bool()] for t, (J, _), has_ann in zip(out_mask_logits, matching_indices, has_anntation)]
-        
+
         # list[ni t' H W], b 
         tgt_masks = [t[J] for t, (_, J) in zip(targets['masks'], matching_indices)]
         
+        src_masks = torch.stack([sm.flatten(0, 1) for sm in src_masks],dim=0)# list[ni_t' h w]
+        tgt_masks = torch.stack([tm.flatten(0,1) for tm in tgt_masks],dim=0) # list[ni_t' h w]
+        tgt_masks = tgt_masks.to(src_masks)
         # 每个视频可能有不同的annotation数量
         # list[ni] -> n_sigma
-        masks_losses = torch.cat([self.binary_cross_entropy_mask_loss(src_m[is_v.bool()], tgt_m[is_v.bool()]) for src_m, tgt_m, is_v in zip(src_masks, tgt_masks, is_valid)], dim=0)
-        dice_losses = torch.cat([self.dice_mask_loss(src_m[is_v.bool()], tgt_m[is_v.bool()]) for src_m, tgt_m, is_v in zip(src_masks, tgt_masks, is_valid)], dim=0)
-
         losses = {
-            "tempdecoder_mask": masks_losses.sum() / num_objs,
-            "tempdecoder_dice": dice_losses.sum() / num_objs,
+            "tempdecoder_mask": ce_mask_loss(src_masks.flatten(1), tgt_masks.flatten(1), num_objs),
+            "tempdecoder_dice": dice_loss(src_masks.flatten(1), tgt_masks.flatten(1), num_objs),
         }
         return losses    
 
