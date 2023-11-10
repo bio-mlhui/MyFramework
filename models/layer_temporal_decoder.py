@@ -397,7 +397,7 @@ class VITA(nn.Module):
             decoder_outputs.append(dec_out.transpose(0, 1))
 
         mask_embeds = [self.mask_embed(dec_o) for dec_o in decoder_outputs] # b nq c
-        mask_features = self.vita_mask_features(mask_features.flatten(0, 1)) # b t c h w
+        mask_features = self.vita_mask_features(mask_features) # b t c h w
         mask_features = rearrange(mask_features, '(b t) c h w -> b t c h w',b=B,t=T)
 
         pred_masks_by_layer = [torch.einsum('bnc,btchw->bnthw', mask_e, mask_features) for mask_e in mask_embeds]
