@@ -99,7 +99,7 @@ class TrainRandomSampler_ByEpoch_Distributed(Sampler[T_co]):
             indices += (indices * math.ceil(padding_size / len(indices)))[:padding_size]
         assert len(indices) == self.total_size
 
-        indices = indices[119968:] + indices[0:119968]
+        indices = indices[269440:] + indices[0:269440]
         # subsample
         indices = indices[self.rank:self.total_size:self.num_replicas]
         assert len(indices) == self.num_samples
@@ -308,6 +308,9 @@ class DatasetWithAux(Dataset):
             node_tokens = [nodekey_to_token[idx_to_nodekey[idx]] for idx in range(cnt)] 
             node_seg_ids = [nodekey_to_segid[idx_to_nodekey[idx]] for idx in range(cnt)] 
             node_alignments = [nodekey_to_alignment[idx_to_nodekey[idx]] for idx in range(cnt)]
+            for idx in range(len(node_seg_ids)):
+                if node_seg_ids[idx] == 1:
+                    node_seg_ids[idx] = 2
             assert 1 not in node_seg_ids
             assert -2 not in edge_seg_ids
             assert -100 not in node_alignments
