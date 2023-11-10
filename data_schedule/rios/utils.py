@@ -311,6 +311,7 @@ class DatasetWithAux(Dataset):
             for idx in range(len(node_seg_ids)):
                 if node_seg_ids[idx] == 1:
                     node_seg_ids[idx] = 2
+                    node_alignments[idx] = 0
             assert 1 not in node_seg_ids
             assert -2 not in edge_seg_ids
             assert -100 not in node_alignments
