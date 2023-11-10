@@ -457,7 +457,7 @@ class VITA(nn.Module):
             'frame_queries':rearrange(src, '(t nqf) b c -> b t nqf c',t=T,nqf=nqf),
             'cross_attn_weights': cross_weight_by_layer, # b nq t s
             
-        }
+        }        
         return out 
 
 
