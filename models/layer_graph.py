@@ -2122,12 +2122,12 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
         batch_size, nq, _, = temporal_queries.shape
         frame_queries = self.frame_query_proj(frame_queries)
         temporal_queries = self.temp_query_proj(temporal_queries)
-        # node_feats = self.node_linear(node_feats)
-        # if E > 0:
-        #     edge_feats = self.edge_linear(edge_feats) 
-        # else:
-        #     zero_foo = (self.edge_linear.weight * torch.zeros_like(self.edge_linear.weight)).sum()
-        #     node_feats = node_feats + zero_foo
+        node_feats = self.node_linear(node_feats)
+        if E > 0:
+            edge_feats = self.edge_linear(edge_feats) 
+        else:
+            zero_foo = (self.edge_linear.weight * torch.zeros_like(self.edge_linear.weight)).sum()
+            node_feats = node_feats + zero_foo
         if frame_queries_grounding_score is not None:
             node_frame_query_gscore = torch.cat(frame_queries_grounding_score, dim=0) # V T nqf
         else:
