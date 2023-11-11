@@ -70,11 +70,12 @@ class Hflip_ReSizeSmaller(VideoText_Transforms):
 
 class ReSizeSmaller(VideoText_Transforms):
     def __init__(self, 
-                 sizes,):
+                 sizes,
+                 max_size,):
         normalize = T.Compose([T.ToTensor(), T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
         self.transform = T.Compose([
             T.RandomResize(sizes=sizes,
-                           max_size=None),
+                           max_size=max_size),
             normalize,
         ])
                        
