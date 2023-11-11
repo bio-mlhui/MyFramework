@@ -3684,6 +3684,7 @@ class AMR_Grounding_2DObj(nn.Module):
         if mode == '只训练rios':
             self.reason_2d_choose = reason_module['2d_choose_who']
             self.reason_2d_layer_if_reason =  self.tasks['2d_layer_if_reason'] # obj_decoder的每层是否reason
+            assert len(self.tasks['objdecoder']['loss_layer_weights']) == self.obj_decoder_num_layers
             assert self.reason_2d_layer_if_reason[-1]
             assert len(self.reason_2d_layer_if_reason) == self.obj_decoder_num_layers
 
@@ -3691,7 +3692,7 @@ class AMR_Grounding_2DObj(nn.Module):
             self.reason_2d_choose = reason_module['2d_choose_who']
             self.reason_2d_layer_if_reason =  self.tasks['2d_layer_if_reason'] # obj_decoder的每层是否reason
             assert len(self.reason_2d_layer_if_reason) == self.obj_decoder_num_layers
-            
+            assert len(self.tasks['objdecoder']['loss_layer_weights']) == self.obj_decoder_num_layers
             from .layer_temporal_decoder import temporal_decoder_entrypoint
             create_temporal_decoder = temporal_decoder_entrypoint(temporal_decoder['name'])
             self.temporal_decoder = create_temporal_decoder(temporal_decoder, pt_dir)
@@ -3708,7 +3709,8 @@ class AMR_Grounding_2DObj(nn.Module):
             self.reason_3d_choose = reason_module['3d_choose_who']
             self.reason_3d_layer_if_reason = self.tasks['3d_layer_if_reason'] # decoder的每层是否reason
             assert self.reason_3d_layer_if_reason[-1]
-            assert len(self.reason_3d_layer_if_reason) == self.temporal_decoder_num_layers * self.obj_decoder_num_layers
+            assert len(self.tasks['temporal_decoder']['loss_layer_weights']) == 3 * self.temporal_decoder_num_layers # 训练的时候用后三层
+            assert len(self.reason_3d_layer_if_reason) == self.temporal_decoder_num_layers * 3
         else:
             return
     @property
@@ -4053,7 +4055,7 @@ class AMR_Grounding_2DObj(nn.Module):
         
         out_mask_logits = model_outs['objdecoder']['pred_masks'] # list[b nq H W], num_layers
         out_gscores = model_outs['objdecoder']['reason_2d'] # list[b ni], num_layers     
-
+        assert len(loss_layer_weights) == len(out_mask_logits)
         for layer_idx, (layer_mask_output, layer_gscore_output, layer_loss_weight) in enumerate(zip(out_mask_logits, out_gscores, loss_layer_weights)):
             if layer_loss_weight != 0:
                 matching_indices = self.objdecoder_matching(layer_mask_output, targets)
@@ -4213,6 +4215,7 @@ class AMR_Grounding_2DObj(nn.Module):
             size_original.extend([targets[bth_idx]['orig_size'][-2:].tolist()]*ann_number_by_batch[bth_idx])
             size_after_aug.extend([targets[bth_idx]['size'][-2:].tolist()]*ann_number_by_batch[bth_idx])
         processed_pred_masks = []
+        assert len(query_pred_masks) == len(size_original)
         for f_pred_masks, orig_size, after_aug_size, in zip(query_pred_masks, size_original, size_after_aug):
             f_mask_h, f_mask_w = after_aug_size  
             f_pred_masks = f_pred_masks[:, :f_mask_h, :f_mask_w] 
@@ -4337,7 +4340,7 @@ class AMR_Grounding_2DObj(nn.Module):
         out_mask_logits = model_outs['temporal_decoder']['pred_masks'] # list[b nq T h w], num_layers
         out_gscores = model_outs['temporal_decoder']['reason_3d'] # list[b nq], num_layers   
         out_logits = model_outs['temporal_decoder']['pred_logits'] # list[b nq class+1]
-
+        assert len(loss_layer_weights) == len(out_mask_logits)
         for layer_idx, (layer_mask_output, layer_gscore_output, layer_out_logits, layer_loss_weight) in enumerate(zip(out_mask_logits, out_gscores,
                                                                                                     out_logits,
                                                                                                      loss_layer_weights)):

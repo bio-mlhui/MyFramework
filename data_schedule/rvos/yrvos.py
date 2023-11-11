@@ -168,7 +168,7 @@ def test(loader, model, device, is_distributed, is_main_process, output_dir):
         # ['query_pred_masks', 'query_pred_is_referred_prob',]]
         preds = model.sample(samples=samples, text_queries=text_query, auxiliary=auxiliary, targets=meta_data)
         
-        
+        assert len(preds['query_pred_masks']) == len(batch_video_ids)
         for pred_masks, pred_refer_prob, video_id, all_frames, exp_id in zip(preds['query_pred_masks'], 
                                                                             preds['query_pred_is_referred_prob'],
                                                                             batch_video_ids, batch_frames, batch_exp_id):
