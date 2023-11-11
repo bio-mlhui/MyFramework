@@ -1900,6 +1900,8 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
             self.obj_query_proj = FeatureResizer(**obj_query_proj)
         elif obj_query_proj_name == 'linear':
             self.obj_query_proj = nn.Linear(**obj_query_proj)
+        elif obj_query_proj_name == 'mlp':
+            self.obj_query_proj = MLP(d_model, d_model, d_model, 3)
         else:
             raise ValueError()         
         self.context_2 = nn.Parameter(torch.zeros([1, self.nheads, 2*self.head_dim, self.head_dim])) # 1 h 2c c
@@ -1924,6 +1926,8 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
                 self.frame_query_proj = FeatureResizer(**frame_query_proj)
             elif frame_query_proj_name == 'linear':
                 self.frame_query_proj = nn.Linear(**frame_query_proj)
+            elif frame_query_proj_name == 'mlp':
+                self.frame_query_proj = MLP(d_model, d_model, d_model, 3)
             else:
                 raise ValueError()   
         self._reset_parameters()
