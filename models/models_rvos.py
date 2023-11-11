@@ -4307,7 +4307,8 @@ class AMR_Grounding_2DObj(nn.Module):
         perFrame_has_ann = [t['has_ann'] for t in targets] # list[t_video_i]
         # list[t_video_i] -> bT
         perFrame_has_ann = torch.cat([F.pad(t.float(), pad=(0, pad_T-len(t))).bool() for t in perFrame_has_ann])
-
+        # 有annotation并且是valid的
+        
         return {
             'masks': rep_tgt_masks,
             'gt_referent_idx': rep_gt_referent_idx,

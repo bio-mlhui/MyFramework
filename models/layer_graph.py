@@ -2157,10 +2157,6 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
                 ):
         
         V, E, device, dtype = node_feats.shape[0], edge_feats.shape[0], node_feats.device, node_feats.dtype
-
-        node_temp_queries = self.temp_query_proj(node_temp_queries)
-        node_feats = self.node_linear(node_feats)
-        edge_feats = self.edge_linear(edge_feats)
         
         # V h nq c @ 1 h c c -> V h nq c
         # V h nq c * V h 1 c -> V h nq c
@@ -2324,118 +2320,35 @@ def spatial_temporal_grounding_v1(configs):
 
 
 
-class Spatial_Temporal_Grounding_v2(geo_nn.MessagePassing):
+class Spatial_Temporal_Grounding_v2(Spatial_Temporal_Grounding_v1):
     def __init__(self, 
                  d_model,
                  nheads,
                  flow='source_to_target',
                  score_aggr='sum',
-                 obj_query_proj=None
+                 obj_query_proj=None,
+                 temp_query_proj=None,
+                 frame_query_proj=None
                  ):
-        super().__init__(aggr=None,
-                         flow=flow,)
-        self.head_dim = d_model // nheads
-        self.nheads = nheads
-        self.score_aggr = score_aggr
+        super().__init__(flow=flow,
+                         d_model=d_model,
+                         nheads=nheads,
+                         score_aggr=score_aggr,
+                         obj_query_proj=obj_query_proj,
+                         temp_query_proj=temp_query_proj,
+                         frame_query_proj=frame_query_proj)
 
-        self.node_linear = nn.Linear(d_model, self.head_dim * self.nheads, bias=False)
-        self.edge_linear = nn.Linear(d_model, self.head_dim * self.nheads, bias=False)
-        if obj_query_proj.pop('name') == 'FeatureResizer':
-            self.obj_query_proj = FeatureResizer(**obj_query_proj)
-        elif obj_query_proj.pop('name') == 'linear':
-            self.obj_query_proj = nn.Linear(**obj_query_proj)
-        else:
-            raise ValueError()
-                
-        self.context_2 = nn.Parameter(torch.zeros([1, self.nheads, self.head_dim, self.head_dim])) # 1 h 2c c
-        self.context_3 = nn.Parameter(torch.zeros([1, self.nheads, self.head_dim, self.head_dim])) # 1 h 2c c
-        self.context_1 = nn.Parameter(torch.zeros([1, self.nheads, self.head_dim, 1])) # 1 h c 1
-
-        self.ref_2 = nn.Parameter(torch.zeros([1, self.nheads, self.head_dim, self.head_dim])) # 1 h c c
-        self.ref_1 = nn.Parameter(torch.zeros([1, self.nheads, self.head_dim, 1])) # 1 h c 1
-        self._reset_parameters()
-
-        # temporal的参数
-
-
-    def _reset_parameters(self):
-        for p in self.parameters():
-            if p.dim() > 1:
-                nn.init.xavier_uniform_(p)
-        glorot(self.context_2)
-        glorot(self.context_1)
-        glorot(self.context_3)
-        glorot(self.ref_1)
-        glorot(self.ref_2)
-
-    def batching_graph(self, 
-                       amrs=None,
-                        amr_token_feats=None,
-                        amr_seg_ids=None
-                        ):
-        """
-        Args:
-            amrs: list[Graph]
-            amr_token_feats: b (v+e)max c
-            amr_seg_ids: b (v+e)max
-            memories: b nq c
-            memories_pos: b nq c
-            text_feats: b smax c
-            node_alignments: list[list[int], si] batch
-        Returns:
-            _type_: _description_
-        """
-        device = amr_token_feats.device
-        nodes_batch_ids = []
-        edges_batch_ids = []
-        num_nodes_by_batch = [g.num_nodes for g in amrs]
-        for bch_idx, nnode in enumerate(num_nodes_by_batch):
-            nodes_batch_ids.extend([bch_idx] * nnode)
-        num_edges_by_batch = [g.num_edges for g in amrs]
-        for bch_idx, nedge in enumerate(num_edges_by_batch):
-            edges_batch_ids.extend([bch_idx] * nedge)
-        nodes_batch_ids = torch.tensor(nodes_batch_ids, device=device)
-        edges_batch_ids = torch.tensor(edges_batch_ids, device=device)
-        # edge_depth = get_edge_depth(amrs) # list[Ei], batch
-        batched_amrs = Batch.from_data_list(amrs) # concate
-        edge_index = batched_amrs.edge_index.to(device)
-
-        # V c
-        node_feats = torch.cat([b_f[seg_ids>0] for b_f, seg_ids in zip(amr_token_feats, amr_seg_ids)], dim=0)
-        node_seg_ids = torch.cat([seg_ids[seg_ids>0] for seg_ids in amr_seg_ids], dim=0) # V
-        # E c
-        if sum(num_edges_by_batch) == 0:
-            edge_feats = node_feats.new_zeros([0, node_feats.shape[-1]])
-            edges_seg_ids = node_seg_ids.new_ones([0])
-        else:
-            edge_feats  = torch.cat([b_f[seg_ids<0] for b_f, seg_ids in zip(amr_token_feats, amr_seg_ids)], dim=0)
-            edges_seg_ids = torch.cat([seg_ids[seg_ids<0] for seg_ids in amr_seg_ids], dim=0) 
- 
-
-        return nodes_batch_ids, edges_batch_ids, \
-                  node_seg_ids, edges_seg_ids, edge_index, \
-                        node_feats, edge_feats 
-
-    def batching_memory(self, tensor, nodes_batch_ids, edges_batch_ids):
-        # b ... -> V ... + E ...
-        # V nq c
-        node_mem = torch.stack([tensor[bid] for bid in nodes_batch_ids], dim=0)
-        if len(edges_batch_ids) == 0: 
-            edge_mem = torch.zeros([0, *node_mem.shape[1:]]).to(node_mem)
-        else: 
-            edge_mem = torch.stack([tensor[bid] for bid in edges_batch_ids], dim=0) 
-
-        return node_mem, edge_mem
-    
-    def forward(self,
-                 obj_queries=None,
-                 is_2d=True,
+    def forward_3d(self,
+                 temporal_queries=None,  # b nq c
+                 frame_queries=None,  # b T nqf c
+                 cross_attn_weights=None, # b nq T nqf
+                frame_queries_grounding_score=None, # list[Vi T nqf]
                 amrs=None, 
                 amr_token_feats=None,
                 amr_token_seg_ids=None, 
                 node_alignments=None,
-                text_feats=None, text_pad_masks=None):
-        batch_size = obj_queries.shape[0]
+                text_feats=None, 
+                text_pad_masks=None):
 
         nodes_batch_ids, edges_batch_ids,\
             node_seg_ids, edges_seg_ids, \
@@ -2443,42 +2356,56 @@ class Spatial_Temporal_Grounding_v2(geo_nn.MessagePassing):
             node_feats, edge_feats,= self.batching_graph(amrs=amrs,
                                                 amr_token_feats=amr_token_feats,
                                                 amr_seg_ids=amr_token_seg_ids,)
-        V, E = len(node_feats), len(edge_feats)
-        obj_queries = self.obj_query_proj(obj_queries)
+        V, E = node_feats.shape[0], edge_feats.shape[0]
+        batch_size, nq, _, = temporal_queries.shape
+        frame_queries = self.frame_query_proj(frame_queries)
+        temporal_queries = self.temp_query_proj(temporal_queries)
         node_feats = self.node_linear(node_feats)
         if E > 0:
             edge_feats = self.edge_linear(edge_feats) 
         else:
             zero_foo = (self.edge_linear.weight * torch.zeros_like(self.edge_linear.weight)).sum()
-            node_feats = node_feats + zero_foo      
-        node_obj_queries, edge_obj_queries = self.batching_memory(obj_queries, nodes_batch_ids, edges_batch_ids)
-
-        grounding_score = self.reason(node_feats=node_feats, 
-                                      edge_feats=edge_feats,
-                                      node_obj_queries=node_obj_queries, 
-                                      edge_obj_queries=edge_obj_queries,
-                                      edge_index=edge_index,) # V nq
+            node_feats = node_feats + zero_foo
+        if frame_queries_grounding_score is not None:
+            node_frame_query_gscore = torch.cat(frame_queries_grounding_score, dim=0) # V T nqf
+        else:
+            node_frame_query_gscore = None
+        node_temp_queries, edge_temp_queries = self.batching_memory(temporal_queries, nodes_batch_ids, edges_batch_ids)
+        node_cross_attns, edge_cross_attns = self.batching_memory(cross_attn_weights, nodes_batch_ids, edges_batch_ids)
+        node_frame_queries, edge_frame_queries = self.batching_memory(frame_queries, nodes_batch_ids, edges_batch_ids)
+        grounding_score = self.reason_3d(node_feats=node_feats, edge_feats=edge_feats,edge_index=edge_index,
+                                    node_temp_queries=node_temp_queries, edge_temp_queries=edge_temp_queries,
+                                    node_cross_attns=node_cross_attns, edge_cross_attns=edge_cross_attns,
+                                    node_frame_queries=node_frame_queries, edge_frame_queries=edge_frame_queries,
+                                    node_frame_query_gscore=node_frame_query_gscore                                   
+                                    ) # V nq
         g_score_by_batch = [] # list[vi nq]
         for bch_idx in range(batch_size):
             bch_node_score = torch.stack([grounding_score[idx] for idx, batch_id in enumerate(nodes_batch_ids) if batch_id == bch_idx], dim=0)
             g_score_by_batch.append(bch_node_score) # vi nq
         
         return g_score_by_batch
+   
+    def reason_3d(self, 
+                node_feats=None, edge_feats=None,edge_index=None, # V c
+                node_temp_queries=None, edge_temp_queries=None, # V nq c
+                node_cross_attns=None, edge_cross_attns=None, # V nq T nqf
+                node_frame_queries=None, edge_frame_queries=None, # V T nqf c
+                node_frame_query_gscore=None # V T nqf
+                ):
         
-    def reason(self, 
-                node_feats=None, 
-                edge_feats=None, 
-                edge_index=None,
-                node_obj_queries=None,
-                edge_obj_queries=None):
         V, E, device, dtype = node_feats.shape[0], edge_feats.shape[0], node_feats.device, node_feats.dtype
 
+        node_temp_queries = self.temp_query_proj(node_temp_queries)
+        node_feats = self.node_linear(node_feats)
+        edge_feats = self.edge_linear(edge_feats)
+        
         # V h nq c @ 1 h c c -> V h nq c
         # V h nq c * V h 1 c -> V h nq c
          # V h nq c @ 1 h c 1 -> V h nq 1
-        node_obj_queries = rearrange(node_obj_queries, 'V nq (h c) -> V h nq c',h=self.nheads)
+        node_temp_queries = rearrange(node_temp_queries, 'V nq (h c) -> V h nq c',h=self.nheads)
         node_feats = rearrange(node_feats, 'V (h c) -> V h c',h=self.nheads)
-        ref_score = (node_obj_queries @ self.ref_2) * (node_feats.unsqueeze(-2))
+        ref_score = (node_temp_queries @ self.ref_2) * (node_feats.unsqueeze(-2))
         ref_score = ref_score / ref_score.norm(dim=-1, keepdim=True)
         scores = ref_score @ self.ref_1
         scores = scores.mean(1).squeeze(-1) # V nq
@@ -2495,72 +2422,42 @@ class Spatial_Temporal_Grounding_v2(geo_nn.MessagePassing):
                 scores = self.propagate(edge_index[:, order_eid], 
                                         size=None,
                                         x=scores, # V nq
-                                        edge_attr=edge_feats[order_eid, :].clone(), # E hc
-                                        node_obj_query=node_obj_queries.flatten(1), # V h_nq_c
+                                        edge_attr=edge_feats[order_eid, :], # E hc
+                                        node_temp_query=node_temp_queries.flatten(1), # V h_nq_c
+                                        is_2d=False, is_3d=True
                                         )
         if E == 0:
             scores = scores + self.context_2.sum() * 0. + self.context_1.sum() * 0.
-
         return scores # V nq
     
-    def message(self, 
+
+    def message_3d(self, 
                 edge_attr,  # E hc
                 x_j,   # E nq
-                node_obj_query_j, # E h_nq_c
-                node_obj_query_i,) -> Tensor: # E h_nq_c
+                node_temp_query_j=None, node_temp_query_i=None,
+                node_frame_query_j=None, node_frame_query_i=None,
+                node_cross_attn_j=None, edge_cross_attn_i=None,):
         edge_attr = rearrange(edge_attr, 'E (h c) -> E h c', h=self.nheads)
         x_j = repeat(x_j, 'E nq -> E h nq', h=self.nheads)
         nq = x_j.shape[-1]
-        node_obj_query_j = rearrange(node_obj_query_j, 'E (h nq c) -> E h nq c',nq=nq,h=self.nheads)
-        node_obj_query_i = rearrange(node_obj_query_i, 'E (h nq c) -> E h nq c',nq=nq,h=self.nheads)
+        node_temp_query_j = rearrange(node_temp_query_j, 'E (h nq c) -> E h nq c',nq=nq,h=self.nheads)
+        node_temp_query_i = rearrange(node_temp_query_i, 'E (h nq c) -> E h nq c',nq=nq,h=self.nheads)
 
         # E h 1 nq @ E h nq c -> E h 1 c
         soft_attn_j = x_j.softmax(-1).unsqueeze(2)
-        context_feat_j = soft_attn_j @ node_obj_query_j
+        context_feat_j = soft_attn_j @ node_temp_query_j
         context_feat_j = context_feat_j.repeat(1,1, nq, 1) # E h nq c
+        cat_feat = torch.cat([context_feat_j, node_temp_query_i], dim=-1) # E h nq 2c
 
-        # E h nq c @ 1 h c c -> E h nq c
-        context_feat_j = context_feat_j @ self.context_2
-        context_feat_i = node_obj_query_i @ self.context_2
-        context_feat = context_feat_j * context_feat_i # E h nq c, E h nq c
-        # E h nq c @ 1 h c c -> E h nq c
-        context_feat = context_feat @ self.context_3
         # E h nq 2c @ 1 h 2c c -> E h nq c
         # E h nq c * E h 1 c -> E h nq c
-        context_score = context_feat * (edge_attr.unsqueeze(-2))
+        context_score = (cat_feat @ self.context_2) * (edge_attr.unsqueeze(-2))
         context_score = context_score / context_score.norm(dim=-1, keepdim=True)
         # E h nq c @ 1 h c 1 -> E h nq 1 -> E h nq
         context_score = (context_score @ self.context_1).squeeze(-1)
 
-        return context_score.mean(1) # E nq
-    
-    def aggregate(self, 
-                  inputs, # E nq
-                  x, # V nq
-                  index, # E, int 每个信息指向哪个节点
-                  dim_size=None):
-        out = [] # list[nq] 
-        for tgt_node_idx in range(dim_size):
-            # 如果没有节点连向x_i, 那么message就是x_i本身
-            if tgt_node_idx not in index:
-                out.append(x[tgt_node_idx])
-            else:
-                self_score = x[tgt_node_idx]
-                # Msg+1 nq
-                msgs = torch.stack([inputs[idx] for idx in range(len(index)) if index[idx] == tgt_node_idx], dim=0)
-                node_aggr_scores = torch.cat([msgs, self_score.unsqueeze(0)], dim=0)
-                out.append(self.aggr_msgs(node_aggr_scores))
+        return context_score.mean(1) # E nq         
 
-        return torch.stack(out, dim=0) # V nq
-    
-    def aggr_msgs(self, msgs):
-        # msg nq
-        if self.score_aggr == 'sum':
-            return msgs.sum(dim=0)
-        elif self.score_aggr == 'min':
-            return msgs.min(dim=0)[0]
-        else:
-            raise ValueError()
 
 @register_graphLayer
 def spatial_temporal_grounding_v2(configs):
@@ -2568,7 +2465,9 @@ def spatial_temporal_grounding_v2(configs):
                         flow=configs['flow'],
                         score_aggr=configs['score_aggr'],
                         nheads=configs['nheads'],
-                        obj_query_proj=configs['obj_query_obj'])
+                        obj_query_proj=configs['obj_query_obj'],
+                        temp_query_proj=configs['temp_query_proj'] if 'temp_query_proj' in configs else None,
+                        frame_query_proj=configs['frame_query_proj'] if 'frame_query_proj' in configs else None)
 
 
 
