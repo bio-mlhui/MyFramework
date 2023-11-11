@@ -431,7 +431,7 @@ class VITA(nn.Module):
         if not self.training:
             frame_query = [frame_query_by_layer[-1]] # b t nq c
         else:
-            frame_query = frame_query_by_layer[:-3] # 训练的时候用后三层
+            frame_query = frame_query_by_layer[-3:] # 训练的时候用后三层
         B = len(amrs)
         L = len(frame_query)
         mask_features = repeat(mask_features, '(b T) c h w -> (L b) T c h w', L=L,b=B) # lb t c h w
