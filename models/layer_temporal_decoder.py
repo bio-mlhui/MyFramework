@@ -223,7 +223,6 @@ class VITA(nn.Module):
         enc_layers: int,
         dec_layers: int,
         enc_window_size: int,
-        training_clip_size: int,
         order,
         mask_feat_proj,
 
@@ -243,7 +242,6 @@ class VITA(nn.Module):
         self.transformer_self_attention_layers = nn.ModuleList()
         self.transformer_cross_attention_layers = nn.ModuleList()
         self.transformer_ffn_layers = nn.ModuleList()
-        self.training_clip_size = training_clip_size
 
         self.enc_layers = enc_layers
         self.window_size = enc_window_size
@@ -359,153 +357,119 @@ class VITA(nn.Module):
             assert encoder_layer_ref_self == None
             self.layer_fusion_modules = [None] * self.enc_layers
 
-
-    def forward_cross_self_lln(self,
-                            frame_query,
-                            mask_features,
-                            B, T, nqf):
-        src = frame_query   # tnq b c
-        # dec_pos = self.fq_pos.weight[None, :, None, :].repeat(T, 1, B, 1).flatten(0, 1) # t_nqf b c
-
-        # nq b c
-        query_embed = self.query_embed.weight.unsqueeze(1).repeat(1, B, 1) 
-        output = self.query_feat.weight.unsqueeze(1).repeat(1, B, 1)
+    def forward_decoder(self,
+                            frame_query, # t_nqf LB c
+                            mask_features, # LB t c h w
+                            B, T, L,nqf):
+        src = frame_query   # t_nqf LB c
+        # nq L*B c
+        query_embed = self.query_embed.weight.unsqueeze(1).repeat(1, L*B, 1) 
+        output = self.query_feat.weight.unsqueeze(1).repeat(1, L*B, 1)
 
         decoder_outputs = []
         cross_weight_by_layer = []
         for i in range(self.num_layers):
-            # attention: cross-attention first
-            output, cross_weight = self.transformer_cross_attention_layers[i](
-                output, src,
-                memory_mask=None,
-                memory_key_padding_mask=None,
-                pos=None, query_pos=query_embed
-            ) # b nq t_nqf
+            if self.order == 'cross_self_lln':
+                output, cross_weight = self.transformer_cross_attention_layers[i](
+                    output, src,
+                    memory_mask=None,
+                    memory_key_padding_mask=None,
+                    pos=None, query_pos=query_embed
+                ) # LB nq t_nqf
+                output = self.transformer_self_attention_layers[i](
+                    output, tgt_mask=None,
+                    tgt_key_padding_mask=None,
+                    query_pos=query_embed
+                )
 
-            output = self.transformer_self_attention_layers[i](
-                output, tgt_mask=None,
-                tgt_key_padding_mask=None,
-                query_pos=query_embed
-            )
-
-            # FFN
+            elif self.order == 'self_cross_lln':
+                output = self.transformer_self_attention_layers[i](
+                    output, tgt_mask=None,
+                    tgt_key_padding_mask=None,
+                    query_pos=query_embed
+                )
+                output, cross_weight = self.transformer_cross_attention_layers[i](
+                    output, src,
+                    memory_mask=None,
+                    memory_key_padding_mask=None,
+                    pos=None, query_pos=query_embed
+                ) # LB nq t_nqf
+            
             output = self.transformer_ffn_layers[i](
                 output
-            )
+            )                
+            cross_weight_by_layer.append(rearrange(cross_weight, '(L b) nq (t nqf) -> L b nq t nqf',t=T,nqf=nqf, L=L,b=B))
+            dec_out = self.decoder_norm(output) # nq LB c
+            decoder_outputs.append(rearrange(dec_out, 'nq (L b) c -> L b nq c', L=L))
 
-            cross_weight_by_layer.append(rearrange(cross_weight, 'b nq (t s) -> b nq t s',t=T,s=nqf))
-            dec_out = self.decoder_norm(output) # nq b c
-            decoder_outputs.append(dec_out.transpose(0, 1))
-
-        mask_embeds = [self.mask_embed(dec_o) for dec_o in decoder_outputs] # b nq c
-        pred_cls = [self.class_embed(dec_o) for dec_o in decoder_outputs] # b nq class+1
-        mask_features = self.vita_mask_features(mask_features) # b t c h w
-        mask_features = rearrange(mask_features, '(b t) c h w -> b t c h w',b=B,t=T)
+        mask_embeds = [self.mask_embed(dec_o) for dec_o in decoder_outputs] # L b nq c
+        pred_cls = [self.class_embed(dec_o) for dec_o in decoder_outputs] # L b nq class+1
+        mask_features = self.vita_mask_features(mask_features.flatten(0,1)) # l_b_t c h w
+        mask_features = rearrange(mask_features, '(L b t) c h w -> L b t c h w',L=L,b=B,t=T)
+        pred_masks_by_layer = [torch.einsum('lbnc,lbtchw->lbnthw', mask_e, mask_features) for mask_e in mask_embeds]
         
-        pred_masks_by_layer = [torch.einsum('bnc,btchw->bnthw', mask_e, mask_features) for mask_e in mask_embeds]
-        # l b n t h
         out = {
-            'temporal_queries': decoder_outputs, # list[b nq c]
-            'pred_masks': pred_masks_by_layer, #list[b nq t h w]
-            'pred_logits': pred_cls, # list[b nq class+1]
-            'frame_queries':rearrange(src, '(t nqf) b c -> b t nqf c',t=T,nqf=nqf),
-            'cross_attn_weights': cross_weight_by_layer, # b nq t s
-            
-        }
-        return out 
-
-    def forward_self_cross_lln(self,
-                            frame_query,
-                            mask_features,
-                            B, T, nqf):
-        src = frame_query   # tnq b c
-        # dec_pos = self.fq_pos.weight[None, :, None, :].repeat(T, 1, B, 1).flatten(0, 1) # t_nqf b c
-
-        # nq b c
-        query_embed = self.query_embed.weight.unsqueeze(1).repeat(1, B, 1) 
-        output = self.query_feat.weight.unsqueeze(1).repeat(1, B, 1)
-
-        decoder_outputs = []
-        cross_weight_by_layer = []
-        for i in range(self.num_layers):
-            output = self.transformer_self_attention_layers[i](
-                output, tgt_mask=None,
-                tgt_key_padding_mask=None,
-                query_pos=query_embed
-            )
-
-            output, cross_weight = self.transformer_cross_attention_layers[i](
-                output, src,
-                memory_mask=None,
-                memory_key_padding_mask=None,
-                pos=None, query_pos=query_embed
-            ) # b nq t_nqf
-
-            output = self.transformer_ffn_layers[i](
-                output
-            )
-            cross_weight_by_layer.append(rearrange(cross_weight, 'b nq (t s) -> b nq t s',t=T,s=nqf))
-            dec_out = self.decoder_norm(output) # nq b c
-            decoder_outputs.append(dec_out.transpose(0, 1))
-
-        mask_embeds = [self.mask_embed(dec_o) for dec_o in decoder_outputs] # b nq c
-        pred_cls = [self.class_embed(dec_o) for dec_o in decoder_outputs] # b nq class+1
-        mask_features = self.vita_mask_features(mask_features) # b t c h w
-        mask_features = rearrange(mask_features, '(b t) c h w -> b t c h w',b=B,t=T)
-
-        pred_masks_by_layer = [torch.einsum('bnc,btchw->bnthw', mask_e, mask_features) for mask_e in mask_embeds]
-        # l b n t h
-        out = {
-            'temporal_queries': decoder_outputs, # list[b nq c]
-            'pred_masks': pred_masks_by_layer, #list[b nq t h w]
-            'pred_logits': pred_cls, # list[b nq class+1]
-            'frame_queries':rearrange(src, '(t nqf) b c -> b t nqf c',t=T,nqf=nqf),
-            'cross_attn_weights': cross_weight_by_layer, # b nq t s
-            
+            'temporal_queries': torch.stack(decoder_outputs,dim=1), # L D b nq c
+            'pred_masks': torch.stack(pred_masks_by_layer, dim=1), # L D b nq t h w
+            'pred_logits': torch.stack(pred_cls), # L D b nq class+1
+            'frame_queries':rearrange(src, '(t nqf) (L b) c -> L b t nqf c',t=T,nqf=nqf,L=L,b=B), # L b t nqf c
+            'cross_attn_weights': torch.stack(cross_weight_by_layer, dim=1), # L D b nq t nqf
         }        
         return out 
 
 
     def forward(self,
-                frame_query_by_layer, # b t nq c
+                frame_query_by_layer, # list[b t nq c]
                 mask_features, # bt c h w
-                amrs=None, 
-                amr_token_feats=None, 
+                amrs=None,  
+                amr_token_feats=None,  # b s c
                 amr_token_seg_ids=None,
                 text_feats=None, 
                 text_pad_masks=None):
         # list[b t nq c]
         # 只用最后一层
-        frame_query = frame_query_by_layer[-1] # b t nq c
-        B, T, nqf, _ = frame_query.shape
-        if self.training:
-            assert T == self.training_clip_size
-        frame_query : torch.Tensor = self.input_proj_dec(frame_query)
-
+        if not self.training:
+            frame_query = [frame_query_by_layer[-1]] # b t nq c
+        else:
+            frame_query = frame_query_by_layer
+        B = len(amrs)
+        L = len(frame_query)
+        mask_features = repeat(mask_features, '(b T) c h w -> (L b) T c h w', L=L,b=B) # lb t c h w
+        frame_query = torch.stack(frame_query, dim=0).flatten(0, 1) # lb t nq c
+        _, T, nqf, _ = frame_query.shape
+        # repeat amr by L times
+        repeated_amrs = []
+        for _ in range(L):
+            for idx in range(B):
+                repeated_amrs.append(copy.deepcopy(amrs[idx]))
+        amr_token_feats = repeat(amr_token_feats, 'b s c -> (L b) s c', L=L)
+        text_feats = repeat(text_feats, 'b s c -> (L b) s c',L=L)
+        amr_token_seg_ids = repeat(amr_token_seg_ids, 'b s -> (L b) s', L=L)
+        text_pad_masks = repeat(text_pad_masks, 'b s -> (L b) s',L=L)
+        frame_query = self.input_proj_dec(frame_query)
         if self.early_fusion is not None:
             frame_query, amr_token_feats, text_feats = self.early_fusion[0](
                                                                 frame_queries=frame_query,
                                                                 is_video_frame_query=True,
-                                                                amrs=amrs, 
-                                                                time_pad = frame_query.new_zeros([B, T]).bool(), 
+                                                                amrs=repeated_amrs, 
+                                                                time_pad = frame_query.new_zeros([L * B, T]).bool(), 
                                                                 amr_text_add_pos=self.early_fusion_add_pos,
                                                                 amr_token_feats=amr_token_feats,
                                                                 amr_token_seg_ids=amr_token_seg_ids, 
                                                                 text_feats=text_feats, 
                                                                 text_pad_masks=text_pad_masks)
-        # b t nq c -> t nq b c
-        frame_query = frame_query.permute(1, 2, 0, 3).contiguous() # t nq b c
+        frame_query = frame_query.permute(1, 2, 0, 3).contiguous() # t nq lb c
 
         if (self.window_size != 0) and self.window_size < T:
             pad = int(ceil(T / self.window_size)) * self.window_size - T # 让window能
             _T = pad + T
             frame_query = F.pad(frame_query, (0,0,0,0,0,0,0,pad))  # t_pad
-            enc_mask = frame_query.new_ones(B, _T).bool()        # b t_pad
+            enc_mask = frame_query.new_ones(L*B, _T).bool()        # lb t_pad
             enc_mask[:, :T] = False
         else:
-            enc_mask = frame_query.new_zeros([B, T]).bool()
+            enc_mask = frame_query.new_zeros([L*B, T]).bool()
 
-        # t nq b c
+        # t nq LB c
         frame_query, amr_token_feats, text_feats = self.encode_frame_query(frame_query, 
                                                                             enc_mask,
                                                                             amrs=amrs, 
@@ -513,16 +477,13 @@ class VITA(nn.Module):
                                                                             amr_token_seg_ids=amr_token_seg_ids, 
                                                                             text_feats=text_feats, 
                                                                             text_pad_masks=text_pad_masks)
-        frame_query = frame_query[:T].flatten(0,1)              # tnq b c
+        frame_query = frame_query[:T].flatten(0,1)              # tnq LB c
 
-        if self.order == 'cross_self_lln':
-            return self.forward_cross_self_lln(frame_query=frame_query,
-                                               mask_features=mask_features,
-                                               B=B,T=T,nqf=nqf),  amr_token_feats, text_feats
-        elif self.order == 'self_cross_lln':
-            return self.forward_self_cross_lln(frame_query=frame_query,
-                                               mask_features=mask_features,
-                                               B=B,T=T,nqf=nqf),  amr_token_feats, text_feats
+        ret =  self.forward_decoder(frame_query=frame_query, # L D b nq [class/t h w/t nqf]
+                                    mask_features=mask_features, # LB t c h w
+                                    B=B,T=T,nqf=nqf,L=L)
+        return ret, rearrange(amr_token_feats, '(L b) s c -> L b s c',L=L,b=B), \
+                        rearrange(text_feats, '(L b) s c -> L b s c',L=L,b=B)
 
     def encode_frame_query(self, frame_query, attn_mask,
                                 amrs=None, 
@@ -531,7 +492,7 @@ class VITA(nn.Module):
                                 text_feats=None, 
                                 text_pad_masks=None):
         """
-        T_pad nqf b c, b T_pad
+        _t nq LB c, LB _t
         b s c, b s
         """
         t_pad = frame_query.shape[0]
@@ -636,7 +597,6 @@ def vita(configs, pt_dir):
                 enc_layers=configs['enc_layers'],
                 dec_layers=configs['dec_layers'],
                 enc_window_size=configs['swin_window'],
-                training_clip_size=configs['training_clip_size'],
                 order=configs['order'],
                 mask_feat_proj=configs['mask_feat_proj'],
                 num_classes=configs['num_classes'])
