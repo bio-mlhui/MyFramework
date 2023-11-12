@@ -2541,7 +2541,7 @@ class Spatial_Temporal_Grounding_v3(Spatial_Temporal_Grounding_v2):
                          obj_query_proj=obj_query_proj,
                          temp_query_proj=temp_query_proj,
                          frame_query_proj=frame_query_proj
-                         detach_weight=detach_weight)\
+                         detach_weight=detach_weight)
     def forward_3d(self,
                  temporal_queries=None,  # b nq c
                  frame_queries=None,  # b T nqf c
