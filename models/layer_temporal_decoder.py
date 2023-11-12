@@ -445,7 +445,7 @@ class VITA(nn.Module):
         amr_token_seg_ids = repeat(amr_token_seg_ids, 'b s -> (L b) s', L=L)
         text_pad_masks = repeat(text_pad_masks, 'b s -> (L b) s',L=L)
         frame_query = self.input_proj_dec(frame_query)
-        if self.early_fusion is not None:
+        if self.early_fusion[0] is not None:
             frame_query, amr_token_feats, text_feats = self.early_fusion[0](
                                                                 frame_queries=frame_query,
                                                                 is_video_frame_query=True,
