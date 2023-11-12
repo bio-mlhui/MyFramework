@@ -2910,7 +2910,7 @@ class Spatial_Temporal_Grounding_v5(geo_nn.MessagePassing):
 
         context_score = self.context_2(cat_feat) * (edge_attr.unsqueeze(1))
         context_score = context_score / context_score.norm(dim=-1, keepdim=True)
-        
+
         context_score = self.context_1(context_score).squeeze(-1)
 
         return context_score        
@@ -3011,8 +3011,7 @@ class Spatial_Temporal_Grounding_v5(geo_nn.MessagePassing):
 def spatial_temporal_grounding_v5(configs):
     return Spatial_Temporal_Grounding_v5(d_model=configs['d_model'],
                         flow=configs['flow'],
-                        score_aggr=configs['score_aggr'],
-                        nheads=configs['nheads'],)
+                        score_aggr=configs['score_aggr'],)
 
 
 
