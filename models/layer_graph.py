@@ -2628,6 +2628,396 @@ def spatial_temporal_grounding_v3(configs):
 
 
 
+
+
+class Spatial_Temporal_Grounding_v5(geo_nn.MessagePassing):
+    def __init__(self, 
+                 d_model,
+                 flow='source_to_target',
+                 score_aggr='sum',
+                 ):
+        super().__init__(aggr=None,
+                         flow=flow,)
+        self.score_aggr = score_aggr
+
+        self.node_linear = nn.Linear(d_model, d_model, bias=False)
+        self.edge_linear = nn.Linear(d_model, d_model, bias=False)
+        self.obj_query_proj = MLP(d_model, d_model, d_model, 3)
+        self.frame_query_proj = MLP(d_model, d_model, d_model, 3)
+        self.temp_query_proj = MLP(d_model, d_model, d_model, 3)
+
+        # 2c -> c
+        self.context_2 = MLP(2*d_model, d_model, d_model, 3) 
+        self.context_1 = nn.Linear(d_model, 1, bias=False)
+        # c -> c
+        self.ref_2 = MLP(d_model, d_model, d_model, 3)
+        self.ref_1 = nn.Linear(d_model, 1, bias=False)
+
+
+    def batching_graph(self, 
+                       amrs=None,
+                        amr_token_feats=None,
+                        amr_seg_ids=None
+                        ):
+        """
+        Args:
+            amrs: list[Graph]
+            amr_token_feats: b (v+e)max c
+            amr_seg_ids: b (v+e)max
+            memories: b nq c
+            memories_pos: b nq c
+            text_feats: b smax c
+            node_alignments: list[list[int], si] batch
+        Returns:
+            _type_: _description_
+        """
+        device = amr_token_feats.device
+        nodes_batch_ids = []
+        edges_batch_ids = []
+        num_nodes_by_batch = [g.num_nodes for g in amrs]
+        for bch_idx, nnode in enumerate(num_nodes_by_batch):
+            nodes_batch_ids.extend([bch_idx] * nnode)
+        num_edges_by_batch = [g.num_edges for g in amrs]
+        for bch_idx, nedge in enumerate(num_edges_by_batch):
+            edges_batch_ids.extend([bch_idx] * nedge)
+        nodes_batch_ids = torch.tensor(nodes_batch_ids, device=device)
+        edges_batch_ids = torch.tensor(edges_batch_ids, device=device)
+        # edge_depth = get_edge_depth(amrs) # list[Ei], batch
+        batched_amrs = Batch.from_data_list(amrs) # concate
+        edge_index = batched_amrs.edge_index.to(device)
+
+        # V c
+        node_feats = torch.cat([b_f[seg_ids>0] for b_f, seg_ids in zip(amr_token_feats, amr_seg_ids)], dim=0)
+        node_seg_ids = torch.cat([seg_ids[seg_ids>0] for seg_ids in amr_seg_ids], dim=0) # V
+        # E c
+        if sum(num_edges_by_batch) == 0:
+            edge_feats = node_feats.new_zeros([0, node_feats.shape[-1]])
+            edges_seg_ids = node_seg_ids.new_ones([0])
+        else:
+            edge_feats  = torch.cat([b_f[seg_ids<0] for b_f, seg_ids in zip(amr_token_feats, amr_seg_ids)], dim=0)
+            edges_seg_ids = torch.cat([seg_ids[seg_ids<0] for seg_ids in amr_seg_ids], dim=0) 
+ 
+
+        return nodes_batch_ids, edges_batch_ids, \
+                  node_seg_ids, edges_seg_ids, edge_index, \
+                        node_feats, edge_feats 
+
+    def batching_memory(self, tensor, nodes_batch_ids, edges_batch_ids):
+        # b ... -> V ... + E ...
+        # V nq c
+        node_mem = torch.stack([tensor[bid] for bid in nodes_batch_ids], dim=0)
+        if len(edges_batch_ids) == 0: 
+            edge_mem = torch.zeros([0, *node_mem.shape[1:]]).to(node_mem)
+        else: 
+            edge_mem = torch.stack([tensor[bid] for bid in edges_batch_ids], dim=0) 
+
+        return node_mem, edge_mem
+
+    def forward_2d(self,obj_queries=None,
+                    amrs=None, 
+                    amr_token_feats=None,
+                    amr_token_seg_ids=None, 
+                    node_alignments=None,
+                    text_feats=None, text_pad_masks=None):
+        batch_size = obj_queries.shape[0]
+
+        nodes_batch_ids, edges_batch_ids,\
+            node_seg_ids, edges_seg_ids, \
+            edge_index, \
+            node_feats, edge_feats,= self.batching_graph(amrs=amrs,
+                                                amr_token_feats=amr_token_feats,
+                                                amr_seg_ids=amr_token_seg_ids,)
+        V, E = node_feats.shape[0], edge_feats.shape[0]
+        obj_queries = self.obj_query_proj(obj_queries)
+        node_feats = self.node_linear(node_feats)
+        if E > 0:
+            edge_feats = self.edge_linear(edge_feats) 
+        else:
+            zero_foo = (self.edge_linear.weight * torch.zeros_like(self.edge_linear.weight)).sum()
+            node_feats = node_feats + zero_foo
+        node_obj_queries, edge_obj_queries = self.batching_memory(obj_queries, nodes_batch_ids, edges_batch_ids)
+
+        grounding_score = self.reason_2d(node_feats=node_feats, 
+                                      edge_feats=edge_feats,
+                                      node_obj_queries=node_obj_queries, 
+                                      edge_obj_queries=edge_obj_queries,
+                                      edge_index=edge_index,) # V nq
+        g_score_by_batch = [] # list[vi nq]
+        for bch_idx in range(batch_size):
+            bch_node_score = torch.stack([grounding_score[idx] for idx, batch_id in enumerate(nodes_batch_ids) if batch_id == bch_idx], dim=0)
+            g_score_by_batch.append(bch_node_score) # vi nq
+
+        return g_score_by_batch
+
+    def reason_2d(self, 
+                node_feats=None,  # V c
+                edge_feats=None, 
+                edge_index=None,
+                node_obj_queries=None, # V nq c
+                edge_obj_queries=None):
+        V, E, device, dtype = node_feats.shape[0], edge_feats.shape[0], node_feats.device, node_feats.dtype
+
+        # V nq c * V 1 c
+        ref_score = self.ref_2(node_obj_queries) * (node_feats.unsqueeze(-2))
+        ref_score = ref_score / ref_score.norm(dim=-1, keepdim=True)
+        scores = self.ref_1(ref_score) # V nq 1
+        scores = scores.squeeze(-1) # V nq
+
+        dgl_graph = dgl.graph((edge_index[0, :], edge_index[1, :]), num_nodes=V)
+        traversal_order = dgl.topological_nodes_generator(dgl_graph)
+        for idx, frontier_nodes in enumerate(traversal_order):
+            frontier_nodes = frontier_nodes.to(device)
+            src, tgt, order_eid =  dgl_graph.in_edges(frontier_nodes, form='all')
+            if idx == 0:
+                assert len(src) == 0 and len(tgt) == 0 and len(order_eid) == 0
+            else:
+                # V nq
+                scores = self.propagate(edge_index[:, order_eid], 
+                                        size=None,
+                                        x=scores, # V nq
+                                        is_2d=True, is_3d=False,
+                                        edge_attr=edge_feats[order_eid, :].clone(), # E c
+                                        node_obj_query=node_obj_queries.flatten(1), # V nq_c
+                                        )
+        if E == 0:
+            scores = scores + self.context_2.sum() * 0. + self.context_1.sum() * 0.
+        return scores # V nq
+
+    def message_2d(self,edge_attr=None,  # E c
+                    x_j=None,   # E nq
+                    node_obj_query_j=None, # E nq_c
+                    node_obj_query_i=None):
+        nq = x_j.shape[-1]
+        node_obj_query_j = rearrange(node_obj_query_j, 'E (nq c) -> E nq c',nq=nq)
+        node_obj_query_i = rearrange(node_obj_query_i, 'E (nq c) -> E nq c',nq=nq)
+
+        # E 1 nq
+        soft_attn_j = x_j.softmax(-1).unsqueeze(1)
+        # E 1 nq @ E nq c
+        context_feat_j = soft_attn_j @ node_obj_query_j
+        context_feat_j = context_feat_j.repeat(1, nq, 1) # E nq c
+        cat_feat = torch.cat([context_feat_j, node_obj_query_i], dim=-1) # E nq 2c
+
+
+        # E nq c * E 1 c
+        context_score = self.context_2(cat_feat) * (edge_attr.unsqueeze(1))
+        context_score = context_score / context_score.norm(dim=-1, keepdim=True)
+        # E nq 1
+        context_score = self.context_1(context_score).squeeze(-1)
+
+        return context_score # E nq   
+
+    def forward_3d(self,
+                 temporal_queries=None,  # b nq c
+                 frame_queries=None,  # b T nqf c
+                 cross_attn_weights=None, # b nq T nqf
+                frame_queries_grounding_score=None, # list[Vi T nqf]
+                amrs=None, 
+                amr_token_feats=None,
+                amr_token_seg_ids=None, 
+                node_alignments=None,
+                text_feats=None, 
+                text_pad_masks=None):
+
+        nodes_batch_ids, edges_batch_ids,\
+            node_seg_ids, edges_seg_ids, \
+            edge_index, \
+            node_feats, edge_feats,= self.batching_graph(amrs=amrs,
+                                                amr_token_feats=amr_token_feats,
+                                                amr_seg_ids=amr_token_seg_ids,)
+        V, E = node_feats.shape[0], edge_feats.shape[0]
+        batch_size, nq, _, = temporal_queries.shape
+        frame_queries = self.frame_query_proj(frame_queries)
+        temporal_queries = self.temp_query_proj(temporal_queries)
+        node_feats = self.node_linear(node_feats)
+        if E > 0:
+            edge_feats = self.edge_linear(edge_feats) 
+        else:
+            zero_foo = (self.edge_linear.weight * torch.zeros_like(self.edge_linear.weight)).sum()
+            node_feats = node_feats + zero_foo
+        if frame_queries_grounding_score is not None:
+            node_frame_query_gscore = torch.cat(frame_queries_grounding_score, dim=0) # V T nqf
+        else:
+            node_frame_query_gscore = None
+        node_temp_queries, edge_temp_queries = self.batching_memory(temporal_queries, nodes_batch_ids, edges_batch_ids)
+        node_cross_attns, edge_cross_attns = self.batching_memory(cross_attn_weights, nodes_batch_ids, edges_batch_ids)
+        node_frame_queries, edge_frame_queries = self.batching_memory(frame_queries, nodes_batch_ids, edges_batch_ids)
+        grounding_score = self.reason_3d(node_feats=node_feats, edge_feats=edge_feats,edge_index=edge_index,
+                                    node_temp_queries=node_temp_queries, edge_temp_queries=edge_temp_queries,
+                                    node_cross_attns=node_cross_attns, edge_cross_attns=edge_cross_attns,
+                                    node_frame_queries=node_frame_queries, edge_frame_queries=edge_frame_queries,
+                                    node_frame_query_gscore=node_frame_query_gscore                                   
+                                    ) # V nq
+        g_score_by_batch = [] # list[vi nq]
+        for bch_idx in range(batch_size):
+            bch_node_score = torch.stack([grounding_score[idx] for idx, batch_id in enumerate(nodes_batch_ids) if batch_id == bch_idx], dim=0)
+            g_score_by_batch.append(bch_node_score) # vi nq
+        
+        return g_score_by_batch
+   
+    def reason_3d(self, 
+                node_feats=None, edge_feats=None,edge_index=None, # V c
+                node_temp_queries=None, edge_temp_queries=None, # V nq c
+                node_cross_attns=None, edge_cross_attns=None, # V nq T nqf
+                node_frame_queries=None, edge_frame_queries=None, # V T nqf c
+                node_frame_query_gscore=None # V T nqf
+                ):
+        
+        V, E, device, dtype = node_feats.shape[0], edge_feats.shape[0], node_feats.device, node_feats.dtype
+        
+
+        ref_score = self.ref_2(node_temp_queries) * (node_feats.unsqueeze(1))
+        ref_score = ref_score / ref_score.norm(dim=-1, keepdim=True)
+        scores = self.ref_1(ref_score) # V nq 1
+        scores = scores.squeeze(-1) # V nq
+
+        dgl_graph = dgl.graph((edge_index[0, :], edge_index[1, :]), num_nodes=V)
+        traversal_order = dgl.topological_nodes_generator(dgl_graph)
+        for idx, frontier_nodes in enumerate(traversal_order):
+            frontier_nodes = frontier_nodes.to(device)
+            src, tgt, order_eid =  dgl_graph.in_edges(frontier_nodes, form='all')
+            if idx == 0:
+                assert len(src) == 0 and len(tgt) == 0 and len(order_eid) == 0
+            else:
+                # V nq
+                scores = self.propagate(edge_index[:, order_eid], 
+                                        size=None,
+                                        x=scores, # V nq
+                                        edge_attr=edge_feats[order_eid, :], # E c
+                                        node_temp_query=node_temp_queries.flatten(1), # V nq_c
+                                        is_2d=False, is_3d=True
+                                        )
+        if E == 0:
+            scores = scores + self.context_2.sum() * 0. + self.context_1.sum() * 0.
+        return scores # V nq
+    
+
+    def message_3d(self, 
+                edge_attr,  # E c
+                x_j,   # E nq
+                node_temp_query_j=None, node_temp_query_i=None,
+                node_frame_query_j=None, node_frame_query_i=None,
+                node_cross_attn_j=None, edge_cross_attn_i=None,):
+        nq = x_j.shape[-1]
+        node_temp_query_j = rearrange(node_temp_query_j, 'E (nq c) -> E nq c',nq=nq)
+        node_temp_query_i = rearrange(node_temp_query_i, 'E (nq c) -> E nq c',nq=nq)
+
+        # E 1 nq
+        soft_attn_j = x_j.softmax(-1).unsqueeze(1)
+        context_feat_j = soft_attn_j @ node_temp_query_j
+        context_feat_j = context_feat_j.repeat(1,nq, 1) # E nq c
+        cat_feat = torch.cat([context_feat_j, node_temp_query_i], dim=-1) # E nq 2c
+
+        context_score = self.context_2(cat_feat) * (edge_attr.unsqueeze(1))
+        context_score = context_score / context_score.norm(dim=-1, keepdim=True)
+        
+        context_score = self.context_1(context_score).squeeze(-1)
+
+        return context_score        
+
+    def message(self, 
+                is_2d=True,
+                is_3d=False,
+                edge_attr=None,  # E hc
+                x_j=None,   # E nq
+                node_obj_query_j=None, # E h_nq_c
+                node_obj_query_i=None,
+
+                node_temp_query_j=None, node_temp_query_i=None,
+                node_frame_query_j=None, node_frame_query_i=None,
+                node_cross_attn_j=None, edge_cross_attn_i=None,
+
+                ) -> Tensor: # E h_nq_c
+        if is_2d:
+            return self.message_2d(edge_attr=edge_attr, x_j=x_j, node_obj_query_j=node_obj_query_j,
+                                   node_obj_query_i=node_obj_query_i)
+        if is_3d:
+            return self.message_3d(edge_attr=edge_attr,x_j=x_j, 
+                                    node_temp_query_j=node_temp_query_j, node_temp_query_i=node_temp_query_i,
+                                    node_frame_query_j=node_frame_query_j, node_frame_query_i=node_frame_query_i,
+                                    node_cross_attn_j=node_cross_attn_j, edge_cross_attn_i=edge_cross_attn_i)
+        
+    def aggregate(self, 
+                  inputs, # E nq
+                  x, # V nq
+                  index, # E, int 每个信息指向哪个节点
+                  dim_size=None):
+        out = [] # list[nq] 
+        for tgt_node_idx in range(dim_size):
+            # 如果没有节点连向x_i, 那么message就是x_i本身
+            if tgt_node_idx not in index:
+                out.append(x[tgt_node_idx])
+            else:
+                self_score = x[tgt_node_idx]
+                # Msg+1 nq
+                msgs = torch.stack([inputs[idx] for idx in range(len(index)) if index[idx] == tgt_node_idx], dim=0)
+                node_aggr_scores = torch.cat([msgs, self_score.unsqueeze(0)], dim=0)
+                out.append(self.aggr_msgs(node_aggr_scores))
+
+        return torch.stack(out, dim=0) # V nq
+    
+    def aggr_msgs(self, msgs):
+        # msg nq
+        if self.score_aggr == 'sum':
+            return msgs.sum(dim=0)
+        elif self.score_aggr == 'min':
+            return msgs.min(dim=0)[0]
+        else:
+            raise ValueError()
+
+
+    def forward(self,
+                is_2d=True,
+                is_3d=False,
+
+                obj_queries=None,
+
+                temporal_queries=None,  # b nq c
+                frame_queries=None,  # b T nqf c
+                cross_attn_weights=None, # b nq T nqf
+
+                amrs=None, 
+                amr_token_feats=None,
+                amr_token_seg_ids=None, 
+                node_alignments=None,
+                text_feats=None, text_pad_masks=None,
+                frame_queries_grounding_score=None):
+        
+        assert is_2d or is_3d
+        assert not(is_2d and is_3d)
+        if is_2d:
+            return self.forward_2d(obj_queries=obj_queries,
+                                   amrs=amrs, 
+                                    amr_token_feats=amr_token_feats,
+                                    amr_token_seg_ids=amr_token_seg_ids, 
+                                    node_alignments=node_alignments,
+                                    text_feats=text_feats, 
+                                    text_pad_masks=text_pad_masks)
+        if is_3d:
+            return self.forward_3d(temporal_queries=temporal_queries,  # b nq c
+                                    frame_queries=frame_queries,  # b T nqf c
+                                    cross_attn_weights=cross_attn_weights, # b nq T nqf
+                                    frame_queries_grounding_score=frame_queries_grounding_score, # list[Vi T nqf]
+                                    amrs=amrs, 
+                                    amr_token_feats=amr_token_feats,
+                                    amr_token_seg_ids=amr_token_seg_ids, 
+                                    node_alignments=node_alignments,
+                                    text_feats=text_feats, 
+                                    text_pad_masks=text_pad_masks)
+
+
+
+@register_graphLayer
+def spatial_temporal_grounding_v5(configs):
+    return Spatial_Temporal_Grounding_v5(d_model=configs['d_model'],
+                        flow=configs['flow'],
+                        score_aggr=configs['score_aggr'],
+                        nheads=configs['nheads'],)
+
+
+
+
+
 # 不用任何temporal
 # head在feature 上
 from .layers_unimodal_attention import FeatureResizer, MLP
