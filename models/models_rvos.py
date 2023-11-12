@@ -3709,8 +3709,9 @@ class AMR_Grounding_2DObj(nn.Module):
             self.reason_3d_choose = reason_module['3d_choose_who']
             self.reason_3d_layer_if_reason = self.tasks['3d_layer_if_reason'] # decoder的每层是否reason
             assert self.reason_3d_layer_if_reason[-1]
-            assert len(self.tasks['temporal_decoder']['loss_layer_weights']) == 3 * self.temporal_decoder_num_layers # 训练的时候用后三层
-            assert len(self.reason_3d_layer_if_reason) == self.temporal_decoder_num_layers * 3
+            assert len(self.tasks['temporal_decoder']['loss_layer_weights']) == self.temporal_decoder.used_layers\
+                                                                         * self.temporal_decoder_num_layers # 训练的时候用后三层
+            assert len(self.reason_3d_layer_if_reason) == self.temporal_decoder_num_layers * self.temporal_decoder.used_layers
         else:
             return
     @property
@@ -4308,7 +4309,7 @@ class AMR_Grounding_2DObj(nn.Module):
         # list[t_video_i] -> bT
         perFrame_has_ann = torch.cat([F.pad(t.float(), pad=(0, pad_T-len(t))).bool() for t in perFrame_has_ann])
         # 有annotation并且是valid的
-        
+
         return {
             'masks': rep_tgt_masks,
             'gt_referent_idx': rep_gt_referent_idx,

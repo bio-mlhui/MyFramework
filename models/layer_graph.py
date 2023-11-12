@@ -2358,27 +2358,37 @@ class Spatial_Temporal_Grounding_v2(Spatial_Temporal_Grounding_v1):
                                                 amr_seg_ids=amr_token_seg_ids,)
         V, E = node_feats.shape[0], edge_feats.shape[0]
         batch_size, nq, _, = temporal_queries.shape
-        frame_queries = self.frame_query_proj(frame_queries)
-        temporal_queries = self.temp_query_proj(temporal_queries)
+        _, T, nqf,_ = frame_queries.shape
+        frame_queries = self.frame_query_proj(frame_queries) # linear
+        temporal_queries = self.temp_query_proj(temporal_queries) # linear
         node_feats = self.node_linear(node_feats)
         if E > 0:
             edge_feats = self.edge_linear(edge_feats) 
         else:
             zero_foo = (self.edge_linear.weight * torch.zeros_like(self.edge_linear.weight)).sum()
             node_feats = node_feats + zero_foo
-        if frame_queries_grounding_score is not None:
-            node_frame_query_gscore = torch.cat(frame_queries_grounding_score, dim=0) # V T nqf
-        else:
-            node_frame_query_gscore = None
+
         node_temp_queries, edge_temp_queries = self.batching_memory(temporal_queries, nodes_batch_ids, edges_batch_ids)
-        node_cross_attns, edge_cross_attns = self.batching_memory(cross_attn_weights, nodes_batch_ids, edges_batch_ids)
-        node_frame_queries, edge_frame_queries = self.batching_memory(frame_queries, nodes_batch_ids, edges_batch_ids)
+        # 对每个query选择每帧最大cross weight的query作为它t时刻的query
+        # b nq T nqf -> b nq T
+        max_frame_weights, max_frame_idxs = cross_attn_weights.max(dim=-1) 
+        frame_queries = frame_queries.unsqueeze(1).repeat(1, nq, 1, 1, 1) # b nq T nqf c
+        frame_queries = frame_queries.flatten(0, 2) # b_nq_T nqf c
+        max_frame_idxs = max_frame_idxs.flatten() # b_nq_T
+        chosen_frame_queries = torch.stack([fq[cidx] for cidx, fq in zip(max_frame_idxs, frame_queries)], dim=0)
+        chosen_frame_queries = rearrange(chosen_frame_queries, '(b nq T) c -> b nq T c', b=batch_size, nq=nq, T=T)
+        # b nq T c, b nq c, b nq T 1
+
+        # V nq T
+        node_frame_weights, edge_frame_weights = self.batching_memory(max_frame_weights, nodes_batch_ids, edges_batch_ids)
+        # V nq T c
+        node_frame_queries, edge_frame_queries = self.batching_memory(chosen_frame_queries, nodes_batch_ids, edges_batch_ids)
         grounding_score = self.reason_3d(node_feats=node_feats, edge_feats=edge_feats,edge_index=edge_index,
-                                    node_temp_queries=node_temp_queries, edge_temp_queries=edge_temp_queries,
-                                    node_cross_attns=node_cross_attns, edge_cross_attns=edge_cross_attns,
-                                    node_frame_queries=node_frame_queries, edge_frame_queries=edge_frame_queries,
-                                    node_frame_query_gscore=node_frame_query_gscore                                   
-                                    ) # V nq
+                                        node_temp_queries=node_temp_queries, edge_temp_queries=edge_temp_queries,
+                                        node_frame_weights=node_frame_weights, edge_frame_weights=edge_frame_weights,
+
+                                        node_frame_queries=node_frame_queries, edge_frame_queries=edge_frame_queries                                  
+                                        ) # V nq
         g_score_by_batch = [] # list[vi nq]
         for bch_idx in range(batch_size):
             bch_node_score = torch.stack([grounding_score[idx] for idx, batch_id in enumerate(nodes_batch_ids) if batch_id == bch_idx], dim=0)
@@ -2389,21 +2399,18 @@ class Spatial_Temporal_Grounding_v2(Spatial_Temporal_Grounding_v1):
     def reason_3d(self, 
                 node_feats=None, edge_feats=None,edge_index=None, # V c
                 node_temp_queries=None, edge_temp_queries=None, # V nq c
-                node_cross_attns=None, edge_cross_attns=None, # V nq T nqf
-                node_frame_queries=None, edge_frame_queries=None, # V T nqf c
-                node_frame_query_gscore=None # V T nqf
+                node_frame_weights=None, edge_frame_weights=None, # V nq T
+                node_frame_queries=None, edge_frame_queries=None, # V nq T c
                 ):
         
         V, E, device, dtype = node_feats.shape[0], edge_feats.shape[0], node_feats.device, node_feats.dtype
-
-        node_temp_queries = self.temp_query_proj(node_temp_queries)
-        node_feats = self.node_linear(node_feats)
-        edge_feats = self.edge_linear(edge_feats)
-        
         # V h nq c @ 1 h c c -> V h nq c
         # V h nq c * V h 1 c -> V h nq c
          # V h nq c @ 1 h c 1 -> V h nq 1
         node_temp_queries = rearrange(node_temp_queries, 'V nq (h c) -> V h nq c',h=self.nheads)
+        node_frame_weights = repeat(node_frame_weights, 'V nq T -> V h nq T',h=self.nheads)
+        node_frame_queries = rearrange(node_frame_queries, 'V nq T (h c) -> V h nq T c',h=self.nheads)
+
         node_feats = rearrange(node_feats, 'V (h c) -> V h c',h=self.nheads)
         ref_score = (node_temp_queries @ self.ref_2) * (node_feats.unsqueeze(-2))
         ref_score = ref_score / ref_score.norm(dim=-1, keepdim=True)
@@ -2424,7 +2431,9 @@ class Spatial_Temporal_Grounding_v2(Spatial_Temporal_Grounding_v1):
                                         x=scores, # V nq
                                         edge_attr=edge_feats[order_eid, :], # E hc
                                         node_temp_query=node_temp_queries.flatten(1), # V h_nq_c
-                                        is_2d=False, is_3d=True
+                                        node_frame_query=node_frame_queries.flatten(1), # V h_nq_T_c
+                                        is_2d=False, is_3d=True,
+                                        node_frame_weight=node_frame_weights.flatten(1) # V h_nq_T
                                         )
         if E == 0:
             scores = scores + self.context_2.sum() * 0. + self.context_1.sum() * 0.
@@ -2434,30 +2443,61 @@ class Spatial_Temporal_Grounding_v2(Spatial_Temporal_Grounding_v1):
     def message_3d(self, 
                 edge_attr,  # E hc
                 x_j,   # E nq
-                node_temp_query_j=None, node_temp_query_i=None,
-                node_frame_query_j=None, node_frame_query_i=None,
-                node_cross_attn_j=None, edge_cross_attn_i=None,):
+                node_temp_query_j=None, node_temp_query_i=None, # V h_nq_c
+                node_frame_query_j=None, node_frame_query_i=None, # V h_nq_T_c
+                node_frame_weight_j=None, node_frame_weight_i=None,): # V h_nq_T
         edge_attr = rearrange(edge_attr, 'E (h c) -> E h c', h=self.nheads)
         x_j = repeat(x_j, 'E nq -> E h nq', h=self.nheads)
         nq = x_j.shape[-1]
-        node_temp_query_j = rearrange(node_temp_query_j, 'E (h nq c) -> E h nq c',nq=nq,h=self.nheads)
         node_temp_query_i = rearrange(node_temp_query_i, 'E (h nq c) -> E h nq c',nq=nq,h=self.nheads)
+        node_frame_weight_i = rearrange(node_frame_weight_i, 'E (h nq T) -> E h T nq',h=self.nheads, nq=nq)
+        T = node_frame_weight_i.shape[-1]
+        node_frame_query_j = rearrange(node_frame_query_j, 'E (h nq T c) -> E h T nq c',nq=nq,h=self.nheads,T=T)
 
-        # E h 1 nq @ E h nq c -> E h 1 c
+        node_temp_query_i = repeat(node_temp_query_i, 'E h nq c -> E h T nq c',T=T, nq=nq,h=self.nheads)
+        # E h 1 nq
         soft_attn_j = x_j.softmax(-1).unsqueeze(2)
-        context_feat_j = soft_attn_j @ node_temp_query_j
-        context_feat_j = context_feat_j.repeat(1,1, nq, 1) # E h nq c
-        cat_feat = torch.cat([context_feat_j, node_temp_query_i], dim=-1) # E h nq 2c
+        # E h 1 1 nq @ E h T nq c -> E h T 1 c
+        context_feat_j = soft_attn_j.unsqueeze(2) @ node_frame_query_j
+        context_feat_j = context_feat_j.repeat(1,1,1, nq, 1) # E h T nq c
+        cat_feat = torch.cat([context_feat_j, node_temp_query_i], dim=-1) # E h T nq 2c
+        cat_feat = cat_feat.flatten(2,3) # E h T_nq 2c
 
-        # E h nq 2c @ 1 h 2c c -> E h nq c
-        # E h nq c * E h 1 c -> E h nq c
+        # E h T_nq 2c @ 1 h 2c c -> E h T_nq c
+        # E h T_nq c * E h 1 c
         context_score = (cat_feat @ self.context_2) * (edge_attr.unsqueeze(-2))
         context_score = context_score / context_score.norm(dim=-1, keepdim=True)
-        # E h nq c @ 1 h c 1 -> E h nq 1 -> E h nq
+        # E h T_nq c @ 1 h c 1 -> E h T_nq 1 -> E h T_nq
         context_score = (context_score @ self.context_1).squeeze(-1)
+
+        context_score = rearrange(context_score, 'E h (T nq) -> E h T nq',T=T,nq=nq)
+
+        context_score = (node_frame_weight_i * context_score).sum(2) # E h nq
 
         return context_score.mean(1) # E nq         
 
+
+    def message(self, 
+                is_2d=True,
+                is_3d=False,
+                edge_attr=None,  # E hc
+                x_j=None,   # E nq
+                node_obj_query_j=None, # E h_nq_c
+                node_obj_query_i=None,
+
+                node_temp_query_j=None, node_temp_query_i=None,
+                node_frame_query_j=None, node_frame_query_i=None,
+                node_frame_weight_j=None, node_frame_weight_i=None,
+
+                ) -> Tensor: # E h_nq_c
+        if is_2d:
+            return self.message_2d(edge_attr=edge_attr, x_j=x_j, node_obj_query_j=node_obj_query_j,
+                                   node_obj_query_i=node_obj_query_i)
+        if is_3d:
+            return self.message_3d(edge_attr=edge_attr,x_j=x_j, 
+                                    node_temp_query_j=node_temp_query_j, node_temp_query_i=node_temp_query_i,
+                                    node_frame_query_j=node_frame_query_j, node_frame_query_i=node_frame_query_i,
+                                    node_frame_weight_j=node_frame_weight_j, node_frame_weight_i=node_frame_weight_i)
 
 @register_graphLayer
 def spatial_temporal_grounding_v2(configs):

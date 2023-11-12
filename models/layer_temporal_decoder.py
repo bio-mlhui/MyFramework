@@ -230,7 +230,7 @@ class VITA(nn.Module):
         dim_feedforward: int = 2048,
         pre_norm: bool = False,
         enforce_input_project: bool = True,
-
+        used_layers: int = 3,
     ):
         super().__init__()
         assert enforce_input_project
@@ -318,6 +318,7 @@ class VITA(nn.Module):
 
         self.mask_embed = MLP(hidden_dim, hidden_dim, hidden_dim, 3)
 
+        self.used_layers = used_layers
         self._reset_parameters()
         self.mask_out_stride = 4
         self.mask_threshold=0.5
@@ -428,7 +429,7 @@ class VITA(nn.Module):
                 text_pad_masks=None):
         # list[b t nq c]
         # 只用最后一层
-        frame_query = frame_query_by_layer[-3:] # 训练的时候用后三层, 测试的时候用最后一层
+        frame_query = frame_query_by_layer[-self.used_layers:] # 训练的时候用后三层, 测试的时候用最后一层
         B = len(amrs)
         L = len(frame_query)
         mask_features = repeat(mask_features, '(b T) c h w -> (L b) T c h w', L=L,b=B) # lb t c h w
@@ -596,5 +597,6 @@ def vita(configs, pt_dir):
                 enc_window_size=configs['swin_window'],
                 order=configs['order'],
                 mask_feat_proj=configs['mask_feat_proj'],
-                num_classes=configs['num_classes'])
+                num_classes=configs['num_classes'],
+                used_layers=configs['used_layers'] if 'used_layers' in configs else 3)
 
