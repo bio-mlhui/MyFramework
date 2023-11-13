@@ -3627,9 +3627,11 @@ class AMR_Grounding_2DObj(nn.Module):
                  },
                 reason_module={},
                 temporal_decoder = {},
-                fusion={}
+                fusion={},
+                use_we=False
                 ) -> None:
         super().__init__()
+        self.use_we = use_we
         self.d_model = d_model
         self.loss_weight = loss_weight
         self.tasks = tasks
@@ -3745,7 +3747,16 @@ class AMR_Grounding_2DObj(nn.Module):
         assert amr_token_feats.shape[1] == amr_token_seg_ids.shape[1]
         assert (amr_token_feats.flatten(0, 1)[amr_token_seg_ids.flatten()==0]).sum() == 0
         node_alignments = text_auxiliary['node_alignments']
-        return amrs, amr_token_feats, amr_token_seg_ids, text_feats, text_pad_masks, node_alignments
+
+        if self.use_we:
+            we_size = len(self.amrbart_wordEmbedding.weight)
+            global_we = self.amrtext_wordEmbedding_proj(self.amrbart_wordEmbedding.weight)
+            global_we = repeat(global_we, 's c -> b s c',b=batch_size)
+            global_seg_ids = (amr_token_seg_ids.new_ones([batch_size, we_size]) * 2).int()
+        else:
+            global_we = None
+            global_seg_ids = None
+        return amrs, amr_token_feats, amr_token_seg_ids, text_feats, text_pad_masks, node_alignments, global_we, global_seg_ids
         
         # amrs = text_auxiliary['amrs'] # list[Graph]
         # batch_size = len(amrs)
@@ -3811,18 +3822,27 @@ class AMR_Grounding_2DObj(nn.Module):
             raise ValueError()
         device = samples.tensors.device
         if text_queries is not None:
-            amrs, amr_token_feats, amr_token_seg_ids, text_feats, text_pad_masks, node_alignments = self.encode_text(text_queries, auxiliary, device) 
+            amrs, amr_token_feats, amr_token_seg_ids, text_feats, text_pad_masks, node_alignments, global_we, global_we_seg_ids,\
+                  = self.encode_text(text_queries, auxiliary, device) 
         else:
             text_feats, text_pad_masks, amr_token_feats, amr_token_seg_ids = None, None, None, None
 
         # list[bt nq c], num_layers,  obj_queries
         # list[bt nq h w], num_layers,  pred_masks
-        obj_decoder_output, amr_token_feats, text_feats = self.obj_decoder(samples,
-                                                                            amrs=amrs, 
-                                                                            amr_token_feats=amr_token_feats,
-                                                                            amr_token_seg_ids=amr_token_seg_ids, 
-                                                                            text_feats=text_feats, 
-                                                                            text_pad_masks=text_pad_masks)
+        if self.use_we:
+            obj_decoder_output, _, _ = self.obj_decoder(samples,
+                                                                    amrs=[None] * len(amrs), 
+                                                                    amr_token_feats=global_we,
+                                                                    amr_token_seg_ids=global_we_seg_ids, 
+                                                                    text_feats=None, 
+                                                                    text_pad_masks=None)
+        else:
+            obj_decoder_output, amr_token_feats, text_feats = self.obj_decoder(samples,
+                                                                                amrs= amrs, 
+                                                                                amr_token_feats=amr_token_feats,
+                                                                                amr_token_seg_ids=amr_token_seg_ids, 
+                                                                                text_feats=text_feats, 
+                                                                                text_pad_masks=text_pad_masks)
         obj_queries_by_layer, pred_masks_by_layer, multiscale_feats, \
                             mask_features= obj_decoder_output['obj_queries'], obj_decoder_output['pred_masks'],\
                                                                     obj_decoder_output['multiscale_feats'], obj_decoder_output['mask_features'] # b nq c
@@ -3833,6 +3853,8 @@ class AMR_Grounding_2DObj(nn.Module):
             grounding_score_by_layer = []
             for layer_idx, obj_queries in enumerate(obj_queries_by_layer): 
                 if self.reason_2d_layer_if_reason[layer_idx]:
+                    if self.use_we:
+                        amr_token_feats = contexualized_amr_feats
                     grounding_score = self.reason_module(obj_queries=obj_queries, 
                                                         amrs=amrs,
                                                         amr_token_feats=amr_token_feats,
@@ -3878,14 +3900,22 @@ class AMR_Grounding_2DObj(nn.Module):
 
             obj_queries_by_layer = [rearrange(obj_q, '(b t) nq c -> b t nq c',b=batch_size,t=nf) for obj_q in obj_queries_by_layer] 
             # L b s c, L b s c
-            temporal_decoder_output, amr_token_feats, text_feats = self.temporal_decoder(frame_query_by_layer=obj_queries_by_layer, # list[b t nq c]
-                                                                                        mask_features=mask_features, # bt c h w
-
-                                                                                        amrs=amrs, 
-                                                                                        amr_token_feats=amr_token_feats,
-                                                                                        amr_token_seg_ids=amr_token_seg_ids, 
-                                                                                        text_feats=text_feats, 
-                                                                                        text_pad_masks=text_pad_masks)
+            if self.use_we:
+                temporal_decoder_output, _, _ = self.temporal_decoder(frame_query_by_layer=obj_queries_by_layer, # list[b t nq c]
+                                                                                            mask_features=mask_features, # bt c h w
+                                                                                            amrs=[None] * len(amrs), 
+                                                                                            amr_token_feats=global_we,
+                                                                                            amr_token_seg_ids=global_we_seg_ids, 
+                                                                                            text_feats=None, 
+                                                                                            text_pad_masks=None)
+            else:
+                temporal_decoder_output, amr_token_feats, text_feats = self.temporal_decoder(frame_query_by_layer=obj_queries_by_layer, # list[b t nq c]
+                                                                                            mask_features=mask_features, # bt c h w
+                                                                                            amrs= amrs, 
+                                                                                            amr_token_feats=amr_token_feats,
+                                                                                            amr_token_seg_ids=amr_token_seg_ids, 
+                                                                                            text_feats=text_feats, 
+                                                                                            text_pad_masks=text_pad_masks)
             # L D b nq c
             # L b t nqf c
             # L D b nq t nqf
@@ -3897,8 +3927,13 @@ class AMR_Grounding_2DObj(nn.Module):
                                                                 temporal_decoder_output['cross_attn_weights'],\
                                                                 temporal_decoder_output['pred_masks'], temporal_decoder_output['pred_logits']
             D = temporal_queries_by_layer.shape[1]
-            amr_token_feats = repeat(amr_token_feats, 'L b s c -> L D b s c',D=D)
-            text_feats = repeat(text_feats, 'L b s c -> L D b s c', D=D)
+            L = temporal_queries_by_layer.shape[0]
+            if self.use_we:
+                amr_token_feats = repeat(amr_token_feats, 'b s c -> L D b s c',L=L, D=D)
+                text_feats = repeat(text_feats, 'b s c -> L D b s c', L=L, D=D)
+            else:
+                amr_token_feats = repeat(amr_token_feats, 'L b s c -> L D b s c',D=D)
+                text_feats = repeat(text_feats, 'L b s c -> L D b s c', D=D)
             frame_queries_memory = repeat(frame_queries_memory, 'L b t nqf c -> L D b t nqf c',D=D)
             # region
             # repeated_amrs = []
@@ -4507,6 +4542,7 @@ def amr_grounding_2dobj(device, configs):
     model = AMR_Grounding_2DObj(
         d_model=configs['d_model'],
         max_stride=configs['max_stride'],
+        use_we=configs['use_we'] if 'use_we' in configs else False,
         pt_dir=configs['pt_dir'],
         work_dir=configs['work_dir'],
         mode=configs['mode'],

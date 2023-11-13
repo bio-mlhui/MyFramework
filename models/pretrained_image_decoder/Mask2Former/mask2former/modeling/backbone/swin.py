@@ -768,3 +768,6 @@ class D2SwinTransformer(SwinTransformer, Backbone):
     @property
     def size_divisibility(self):
         return 32
+
+
+

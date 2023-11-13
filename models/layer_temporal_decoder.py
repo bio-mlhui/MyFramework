@@ -430,7 +430,7 @@ class VITA(nn.Module):
         # list[b t nq c]
         # 只用最后一层
         frame_query = frame_query_by_layer[-self.used_layers:] # 训练的时候用后三层, 测试的时候用最后一层
-        B = len(amrs)
+        B = len(amr_token_feats)
         L = len(frame_query)
         mask_features = repeat(mask_features, '(b T) c h w -> (L b) T c h w', L=L,b=B) # lb t c h w
         frame_query = torch.stack(frame_query, dim=0).flatten(0, 1) # lb t nq c
@@ -439,11 +439,14 @@ class VITA(nn.Module):
         repeated_amrs = []
         for _ in range(L):
             for idx in range(B):
-                repeated_amrs.append(copy.deepcopy(amrs[idx]))
+                if amrs[idx] is not None:
+                    repeated_amrs.append(copy.deepcopy(amrs[idx]))
+                else:
+                    repeated_amrs.append(None)
         amr_token_feats = repeat(amr_token_feats, 'b s c -> (L b) s c', L=L)
-        text_feats = repeat(text_feats, 'b s c -> (L b) s c',L=L)
+        text_feats = repeat(text_feats, 'b s c -> (L b) s c',L=L) if text_feats is not None else None
         amr_token_seg_ids = repeat(amr_token_seg_ids, 'b s -> (L b) s', L=L)
-        text_pad_masks = repeat(text_pad_masks, 'b s -> (L b) s',L=L)
+        text_pad_masks = repeat(text_pad_masks, 'b s -> (L b) s',L=L) if text_pad_masks is not None else None
         frame_query = self.input_proj_dec(frame_query)
         if self.early_fusion[0] is not None:
             frame_query, amr_token_feats, text_feats = self.early_fusion[0](
@@ -481,7 +484,7 @@ class VITA(nn.Module):
                                     mask_features=mask_features, # LB t c h w
                                     B=B,T=T,nqf=nqf,L=L)
         return ret, rearrange(amr_token_feats, '(L b) s c -> L b s c',L=L,b=B), \
-                        rearrange(text_feats, '(L b) s c -> L b s c',L=L,b=B)
+                        rearrange(text_feats, '(L b) s c -> L b s c',L=L,b=B) if text_feats is not None else None
 
     def encode_frame_query(self, frame_query, attn_mask,
                                 amrs=None, 

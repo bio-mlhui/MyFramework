@@ -319,7 +319,7 @@ class CommonCrossAttentionWeights(nn.Module):
     def with_pos_embed(self, tensor, pos):
         return tensor if pos is None else tensor + pos
 
-    def forward(self, amr_feats, amr_pad_mask, visual_feats, visual_pads=None):
+    def forward_vanilla(self, amr_feats, amr_pad_mask, visual_feats, visual_pads=None):
         amr_pad_mask = repeat(amr_pad_mask, 'b s -> (b h) s',h=self.nheads)
         # b s c, b s, b s c
         amr_feats_qk = self.amr_emb(amr_feats)
@@ -374,6 +374,64 @@ class CommonCrossAttentionWeights(nn.Module):
             raise ValueError()
 
         return ret
+     
+    def forward_mem_eff(self, amr_feats, amr_pad_mask, visual_feats, visual_pads=None):
+        # b s c, b s, b s c
+        amr_feats_qk = self.amr_emb(amr_feats)
+        visual_feats_qk = self.vis_emb(visual_feats)
+        amr_feats_qk, visual_feats_qk = map(lambda t: rearrange(t, 'b s (h c) -> b h s c', h=self.nheads), (amr_feats_qk, visual_feats_qk))
+
+        amr_values = self.amr_v_emb(amr_feats)
+        visual_values = self.vis_v_emb(visual_feats)
+        amr_values, visual_values = map(lambda t: rearrange(t, 'b s (h c) -> b h s c', h=self.nheads), (amr_values, visual_values))
+
+        amr_length = amr_feats.shape[1]
+        visual_length = visual_feats.shape[1]
+        with torch.backends.cuda.sdp_kernel(enable_mem_efficient=True):
+            amr_feats_2 = F.scaled_dot_product_attention(query=amr_feats_qk,
+                                                         key=visual_feats_qk,
+                                                         value=visual_values,
+                                                         attn_mask=None)
+            visual_feats_2 = F.scaled_dot_product_attention(query=visual_feats_qk,
+                                                         key=amr_feats_qk,
+                                                         value=amr_values,
+                                                         attn_mask=None) 
+        amr_feats_2 = rearrange(amr_feats_2, 'b h s c -> b s (h c)')
+        visual_feats_2 = rearrange(visual_feats_2, 'b h s c -> b s (h c)')
+        amr_feats_2 = self.amr_out(amr_feats_2)
+        visual_feats_2 = self.visual_out(visual_feats_2)
+        # torch.backends.cuda.enable_mem_efficient_sdp() 
+        assert self.text_trans == 'none'
+        ret = []
+        if self.text_trans == 'dot':
+            ret.append(amr_feats_2 * amr_feats)
+        elif self.text_trans == 'add_dot':
+            ret.append(amr_feats + (amr_feats * amr_feats_2))
+        elif self.text_trans == 'add':
+            ret.append(amr_feats_2 + amr_feats)
+        elif self.text_trans == 'none':
+            ret.append(amr_feats)
+        else:
+            raise ValueError()
+        
+        if self.visual_trans == 'dot':
+            ret.append(visual_feats * visual_feats_2)
+        elif self.visual_trans == 'add_dot':
+            ret.append(visual_feats + (visual_feats * visual_feats_2))
+        elif self.visual_trans =='add':
+            ret.append(visual_feats + visual_feats_2)
+        elif self.visual_trans == 'none':
+            ret.append(visual_feats)
+        else:
+            raise ValueError()
+
+        return ret
+
+    def forward(self, amr_feats, amr_pad_mask, visual_feats, visual_pads=None):
+        if amr_feats.shape[1] > 10000:
+            return self.forward_mem_eff(amr_feats, amr_pad_mask, visual_feats, visual_pads)
+        else:
+            return self.forward_vanilla(amr_feats, amr_pad_mask, visual_feats, visual_pads=None)
 
 class VisionLanguageFusionModule_v2(nn.Module):
     def __init__(self, d_model, nhead, 
@@ -618,7 +676,7 @@ class Visual_AMRText_SeqSeq(nn.Module):
                 amrs, amr_token_feats, amr_token_seg_ids,
                 text_feats=None, text_pad_masks=None,
                 amr_text_add_pos=True): # 假设multiscale肯定转换
-        B = len(amrs)
+        B = len(amr_token_feats)
         if multiscale_is_flattened:
             # b \sigmaHE c
             assert len(multiscale_feats.shape) == 3
