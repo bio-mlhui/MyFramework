@@ -724,10 +724,10 @@ class A2DS_Dataset(DatasetWithAux):
                 cnt += len(foo)
             assert cnt == len(appear_texts)
             
-            return vframes, text_query, self.get_aux(item_idx, queries_by_objid=annotated_exps_by_object,
+            return vframes, text_query, self.get_aux(item_idx, queries_by_objid=annotated_exps_by_object, all_flatten_texts=appear_texts,
                                                      video_auxid=None, text_auxid=text_query), targets
 
-    def get_aux(self, item_idx, queries_by_objid,
+    def get_aux(self, item_idx, queries_by_objid, all_flatten_texts,
                 video_auxid,
                 text_auxid):
         aux = {}
@@ -735,6 +735,13 @@ class A2DS_Dataset(DatasetWithAux):
         aux['exist_queries'] = queries_by_objid
         aux.update(self.get_text_aux(text_auxid, queries_by_objid))
         aux.update(self.get_video_aux(video_auxid))
+        if self.split == 'train':
+            all_concept_roles = []
+            for text_id in all_flatten_texts:
+                text_aux = self.get_text_aux(text_id, queries_by_objid)['token_ids']
+                all_concept_roles.extend(text_aux)
+            all_concept_roles = torch.tensor(all_concept_roles).unique().tolist()
+            aux['all_concept_roles'] = all_concept_roles
         return aux
     
     def __len__(self):

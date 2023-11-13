@@ -3749,10 +3749,17 @@ class AMR_Grounding_2DObj(nn.Module):
         node_alignments = text_auxiliary['node_alignments']
 
         if self.use_we:
-            we_size = len(self.amrbart_wordEmbedding.weight)
-            global_we = self.amrtext_wordEmbedding_proj(self.amrbart_wordEmbedding.weight)
-            global_we = repeat(global_we, 's c -> b s c',b=batch_size)
-            global_seg_ids = (amr_token_seg_ids.new_ones([batch_size, we_size]) * 2).int()
+            if not self.training:
+                we_size = len(self.amrbart_wordEmbedding.weight)
+                global_we = self.amrtext_wordEmbedding_proj(self.amrbart_wordEmbedding.weight)
+                global_we = repeat(global_we, 's c -> b s c',b=batch_size)
+                global_seg_ids = (amr_token_seg_ids.new_ones([batch_size, we_size]) * 2).int()
+            else:
+                global_we = text_auxiliary['all_concept_roles'] # b mmax
+                global_seg_ids = global_we.new_ones([batch_size, global_we.shape[1]]) * 2 # b mmax
+                acc_pad = text_auxiliary['all_concept_roles_pad'] # b max
+                global_seg_ids.masked_fill_(acc_pad, 0)
+                global_we = self.amrtext_wordEmbedding_proj(self.amrbart_wordEmbedding(global_we))
         else:
             global_we = None
             global_seg_ids = None

@@ -645,6 +645,11 @@ class CollatorWithAux:
             text_token_ids = [s_dic['text_token_ids'] for s_dic in auxiliary] # list[list[int]], batch
             text_token_splits = [s_dic['text_token_splits'] for s_dic in auxiliary]
             text_token_ids, _ = text_pad_token_ids(text_token_ids, self.tokenizer.pad_token_id)
+            if 'all_concept_roles' in auxiliary[0]:
+                all_concept_roles = [s_dic['all_concept_roles'] for s_dic in auxiliary]
+                all_concept_roles, all_concept_roles_pad = text_pad_token_ids(all_concept_roles, self.tokenizer.pad_token_id) # b max
+            else:
+                all_concept_roles, all_concept_roles_pad = None, None
             return {
                 'exist_queries':  [s['exist_queries'] for s in auxiliary],
                 'sample_idx': [s['sample_idx'] for s in auxiliary],
@@ -654,7 +659,9 @@ class CollatorWithAux:
                 'token_ids': text_pad_token_ids(token_ids, self.tokenizer.pad_token_id)[0],  # b max
                 'node_alignments': node_alignments,
                 'text_token_ids': text_token_ids,
-                'text_token_splits': text_token_splits
+                'text_token_splits': text_token_splits,
+                'all_concept_roles': all_concept_roles,
+                'all_concept_roles_pad': all_concept_roles_pad
             }
         elif self.text_aux_version == 3:
             amrs = [s_dic['amrs'] for s_dic in auxiliary]
