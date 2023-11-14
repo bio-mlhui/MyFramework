@@ -440,7 +440,6 @@ def mevis_changeTop(root):
         json.dump(text_to_aux, f) # {1: 401, 2: 116, 3: 1692, 4: 26408}
 
 
-
 def refcocog_normalize_text_v2(text_query,name, sent_id):
     if name == 'refcoco':
         if sent_id == '':
