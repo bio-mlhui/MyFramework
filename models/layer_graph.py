@@ -1934,9 +1934,9 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
 
         # temporal的参数
     def _reset_parameters(self):
-        # for p in self.parameters():
-        #     if p.dim() > 1:
-        #         nn.init.xavier_uniform_(p)
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
         glorot(self.context_2)
         glorot(self.context_1)
         glorot(self.ref_1)
