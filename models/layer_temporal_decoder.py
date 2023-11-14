@@ -395,7 +395,14 @@ class VITA(nn.Module):
                     memory_key_padding_mask=None,
                     pos=None, query_pos=query_embed
                 ) # LB nq t_nqf
-            
+            elif self.order == 'cross_lln':
+                output, cross_weight = self.transformer_cross_attention_layers[i](
+                    output, src,
+                    memory_mask=None,
+                    memory_key_padding_mask=None,
+                    pos=None, query_pos=query_embed
+                ) # LB nq t_nqf
+                                
             output = self.transformer_ffn_layers[i](
                 output
             )                
