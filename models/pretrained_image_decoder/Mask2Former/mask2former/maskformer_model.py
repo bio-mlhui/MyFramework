@@ -571,18 +571,21 @@ from . import add_maskformer2_config
 import os
 import logging
 from detectron2.checkpoint import DetectionCheckpointer
+
+
 @register_pt_obj_2d_decoder
 def mask2former(configs, pt_dir, work_dir):
     cfg = get_cfg()
     add_deeplab_config(cfg)
     add_maskformer2_config(cfg)
     cfg.merge_from_file(os.path.join(work_dir, configs['config_file']))
+    cfg.MODEL.MASK_FORMER.NUM_OBJECT_QUERIES = configs['num_queries']
     cfg.freeze()
     model:torch.nn.Module = MaskFormer_fusionText(cfg)
     if configs["imgseg_pt_file_name"] is not None:
         try:
             checkpoint = torch.load(os.path.join(pt_dir, f'{configs["imgseg_pt_file_name"]}'), map_location='cpu')['model']
-            model.load_state_dict(checkpoint, strict=True)
+            model.load_state_dict(checkpoint, strict=False)
         except:
             DetectionCheckpointer(model).load(os.path.join(pt_dir, f'{configs["imgseg_pt_file_name"]}')) 
         
