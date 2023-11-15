@@ -1,3 +1,11 @@
+"""
+Ref-YoutubeVOS data loader
+"""
+import os
+from PIL import Image
+import json
+import numpy as np
+import random
 import json
 import os
 from glob import glob
@@ -24,7 +32,7 @@ import torch.distributed as dist
 import pycocotools.mask as mask_util
 from pycocotools.mask import encode, area
 from detectron2.data import DatasetCatalog
-
+import logging
 import wandb
 import plotly.express as px
 
@@ -36,114 +44,62 @@ from data_schedule.rvos.metric_utils import get_AP_PAT_IOU_PerFrame
 
 __all__ = ['mevis_schedule']
 
-def show_dataset_information_and_validate(root):
-    
-    information = {'num_frame_range': None,
-                   'num_videos': [],
-                   'num_frame_by_video': [],
-                   'video_id_by_video': [],
-                   'split_by_video': [],
-                   'w_by_video': [], 
-                   'h_by_video': [], 
-                   'referent_classes': [], # extend
-                   'num_objects_by_video': [], # append
-                   'color_by_video': []
-                   } 
-    split_colors = ['#F85F08', '#0858F8']
-    splits = ['train', 'valid']
-    for split, color in zip(splits, split_colors):
-        if split == 'train':
-            with open(os.path.join(root, 'meta_expressions', split, 'meta_expressions.json'), 'r') as f:
-                video_annotations = json.load(f)['videos']            
-            with open(os.path.join(root, split, 'meta.json'), 'r') as f:
-                video_objects_annotations = json.load(f)['videos']  # 类别信息是有用的, 还包含object第一次出现之后的帧
+
+def generate_metas(root, num_frames):
+    meta_by_split = {}
+    for split in ['train', 'valid', 'valid_u']:
+        with open(os.path.join(root, split, 'meta_expressions.json'), 'r') as f:
+            video_to_texts = json.load(f)['videos']
+        videos = list(video_to_texts.keys())
+        print('number of video in the datasets:{}'.format(len(videos)))
+        metas = []
+        for vid in videos:
+            vid_data = video_to_texts[vid]
+            vid_frames = sorted(vid_data['frames'])
+            vid_len = len(vid_frames)
+            if split == 'train' or split == 'valid_u':
+                if vid_len < 2:
+                    continue
+                all_objs, all_obj_anns = [], []
+                for exp_id, exp_dict in vid_data['expressions'].items():           
+                    obj_ids =  [int(x) for x in exp_dict['obj_id']]
+                    ann_ids = [str(x) for x in exp_dict['anno_id']] 
+                    assert len(obj_ids) == len(ann_ids)
+                    for exp_o, exp_a in zip(obj_ids, ann_ids):
+                        if exp_o not in all_objs:
+                            all_objs.append(exp_o)
+                            all_obj_anns.append(exp_a)
                 
-            video_ids = [key for key in video_annotations.keys()] 
-            assert len(set(video_ids)) == len(video_ids)
-            for video_id in video_ids:
-                assert video_id in video_objects_annotations
-            
-            for video_id in tqdm(video_ids):
-                # 数据集中的每个video都是原video的一个clip, 所以并不一定都是从0开始
-                # 每个video都是相隔5帧的多个图片
-                video_annotated_frames = sorted(video_annotations[video_id]['frames'])
-                frame_dirs = [os.path.join(root, 'train/JPEGImages', video_id, f'{f}.jpg') for f in video_annotated_frames]
-                mask_dirs = [os.path.join(root, 'train/Annotations', video_id, f'{f}.png') for f in video_annotated_frames]
-                assert torch.tensor([os.path.exists(f) for f in frame_dirs]).all()
-                assert torch.tensor([os.path.exists(f) for f in mask_dirs]).all()
-                # 该video标注的expressions 
-                video_expressions = video_annotations[video_id]['expressions']
-                # 该video中出现的所有objects
-                video_appear_objects = video_objects_annotations[video_id]['objects']
-                assert len(set(video_annotated_frames)) == len(video_annotated_frames)
-                assert len(set(list(video_expressions.keys()))) == len(list(video_expressions.keys()))
-                assert len(set(list(video_appear_objects.keys()))) == len(list(video_appear_objects.keys()))
+                for exp_id, exp_dict in vid_data['expressions'].items():
+                    for frame_id in range(0, vid_len, num_frames): # 锚点
+                        meta = {}
+                        meta['video'] = vid
+                        meta['exp'] = exp_dict['exp']
+                        meta['video_objects'] = all_objs
+                        meta['video_object_anns'] = all_obj_anns
+                        referent_idxs = [all_objs.index(oi) for oi in exp_dict['obj_id']]
+                        meta['frames'] = vid_frames
+                        meta['exp_id'] = exp_id
+                        meta['length'] = vid_len
+                        meta['frame_id'] = frame_id
+                        meta['referent_idxs'] = referent_idxs
+                        metas.append(meta)
+            else:
+                for exp_id, exp_dict in vid_data['expressions'].items():
+                    meta = {}
+                    meta['video'] = vid
+                    meta['exp'] = exp_dict['exp']
+                    meta['frames'] = vid_frames
+                    meta['exp_id'] = exp_id
+                    meta['category'] = 0
+                    meta['length'] = vid_len
+                    metas.append(meta)
+        meta_by_split[split] = metas
 
-                # 2. video的resolution信息
-                one_of_frame = torch.tensor(np.array(Image.open(frame_dirs[0])))
-                # 3. referent出现的帧数占整个video的比例
-                # 4. refeerent的大小分布
-                # 5. referent类别的分布
-                referent_obj_ids = [exp_dict['obj_id'] for exp, exp_dict in video_expressions.items()] # 1, 1, 2, 2
+    with open(os.path.join(root, f'split_metas_{num_frames}.json'), 'w') as f:
+        json.dump(meta_by_split, f)
+ # static method
 
-                information['num_frame_by_video'].append(len(video_annotated_frames))
-                information['w_by_video'].append(one_of_frame.shape[1])
-                information['h_by_video'].append(one_of_frame.shape[0])
-                information['video_id_by_video'].append(video_id)
-                information['split_by_video'].append(split)
-                information['num_objects_by_video'].append(len(list(video_appear_objects.keys())))
-                information['referent_classes'].extend([video_appear_objects[obj_id]['category'] for obj_id in referent_obj_ids])
-                information['color_by_video'].append(color)
-            information['num_videos'].append(len(video_ids))
-            assert len(video_ids) == 3471
-        elif split == 'valid':
-            with open(os.path.join(root, 'meta_expressions', split, 'meta_expressions.json'), 'r') as f:
-                video_annotations = json.load(f)['videos']                            
-            video_ids = [key for key in video_annotations.keys()]  # 507
-            assert len(set(video_ids)) == len(video_ids)
-            with open(os.path.join(root, 'meta_expressions', 'test', 'meta_expressions.json'), 'r') as f:
-                test_video_annotations = json.load(f)['videos'] 
-            test_video_ids = [key for key in test_video_annotations] # 305
-            assert len(set(test_video_ids)) == len(test_video_ids)  
-
-            # test \in valid
-            assert len(set(test_video_ids) - set(video_ids)) == 0
-            for video_id in tqdm(video_ids):
-                # 数据集中的每个video都是原video的一个clip, 所以并不一定都是从0开始
-                # 每个video都是相隔5帧的多个图片
-                video_annotated_frames = sorted(video_annotations[video_id]['frames'])
-                # if video_id in test_video_ids:
-                #     frame_dirs = [os.path.join(root, 'test/JPEGImages', video_id, f'{f}.jpg') for f in video_annotated_frames]
-                # else:
-                frame_dirs = [os.path.join(root, 'valid/JPEGImages', video_id, f'{f}.png') for f in video_annotated_frames]
-                assert torch.tensor([os.path.exists(f) for f in frame_dirs]).all()
-                # 该video标注的expressions 
-                video_expressions = video_annotations[video_id]['expressions']
-                assert len(set(video_annotated_frames)) == len(video_annotated_frames)
-                assert len(set(list(video_expressions.keys()))) == len(list(video_expressions.keys()))
-                one_of_frame = torch.tensor(np.array(Image.open(frame_dirs[0])))
-                information['num_frame_by_video'].append(len(video_annotated_frames))
-                information['w_by_video'].append(one_of_frame.shape[1])
-                information['h_by_video'].append(one_of_frame.shape[0])
-                information['video_id_by_video'].append(video_id)
-                information['split_by_video'].append(split)
-                information['color_by_video'].append(color)
-            information['num_videos'].append(len(video_ids))
-            assert len(video_ids) == 507
-    min_nframe = np.array(information['num_frame_by_video']).min()
-    max_nframe = np.array(information['num_frame_by_video']).max() 
-    information['num_frame_range'] = np.arange(min_nframe, max_nframe+1)  
-    wandb.log(data={
-        'video resolution':  wandb.Plotly(px.scatter({'x':information['w_by_video'], 'y':information['h_by_video'],
-                                                      's': information['split_by_video'],
-                                                      'c':information['color_by_video']}, 
-                                                     x='x', y='y', symbol='s', color='c')),
-        'number of frames': wandb.Plotly(px.bar({'x':information['num_frame_range'], 'y': information['num_frame_by_video'],
-                                                  'c':information['color_by_video']}, 
-                                                   x='x', y='y', color='c', barmode='group')),
-    })
-
-# static method
 def test(loader, model, device, is_distributed, is_main_process, output_dir):
     save_dir = os.path.join(output_dir, 'Annotations')
     # 如果存在了annotation 目录，让主进程删除重新Make
@@ -173,7 +129,7 @@ def test(loader, model, device, is_distributed, is_main_process, output_dir):
                                                                             preds['query_pred_is_referred_prob'],
                                                                             batch_video_ids, batch_frames, batch_exp_id):
             # n t' -> t'
-            sort_idx = pred_refer_prob.argmax(dim=0) # 每一帧的最牛的query
+            sort_idx = pred_refer_prob.sigmoid(dim=0) # 大于0.5的合并
             # t n h w, t -> list[h w], t -> t h w
             pred_masks = torch.stack([frame_pred[idx] for frame_pred, idx in zip(pred_masks.permute(1, 0, 2, 3), sort_idx)], dim=0)
 
@@ -194,193 +150,12 @@ def test(loader, model, device, is_distributed, is_main_process, output_dir):
         zip_file_path = os.path.join(output_dir, f'submission')
         shutil.make_archive(zip_file_path, 'zip', root_dir=output_dir, base_dir='Annotations')
         print('a zip file was successfully created.')
-        shutil.rmtree(save_dir)  # remove the uncompressed annotations for memory efficiency
+        # shutil.rmtree(save_dir)  # remove the uncompressed annotations for memory efficiency
     if is_distributed:
         dist.barrier() 
     return {}
-
-# semi-static method  
-def validate(loader, model, device, is_distributed, is_main_process, output_dir, pFpE_coco_file):
-    coco_perframe_preds = [] # 3800 * 1 * n
-    for batch_dict in tqdm(loader):
-        samples = batch_dict['samples'].to(device)
-        targets = to_device(batch_dict['targets'], device)
-        text_queries = batch_dict['text_query']
-        auxiliary = batch_dict['auxiliary']
-        
-        frame_has_ann = [t['inputvideo_whichframe_hasann'] for t in targets]
-        # [n t h w], [n t/n], batch; 不是T
-        # ['query_mask_preds', 'query_refer_prob_preds']
-        model_preds_by_batch = model.sample(samples, text_queries, auxiliary, targets)
-
-        # [n t h w] -> n bt h w -> bt n h w -> [n h w] bt
-        query_mask_preds = torch.cat(model_preds_by_batch['query_pred_masks'], dim=1).permute(1, 0, 2, 3).split(1, dim=0)
-        
-        query_refer_prob_preds = model_preds_by_batch['query_pred_is_referred_prob']
-        # [n t / n] -> [n t]
-        if query_refer_prob_preds[0].dim() == 1:
-            for idx in range(len(query_refer_prob_preds)):
-                query_refer_prob_preds[idx] = query_refer_prob_preds[idx].unsqueeze(-1).repeat(1, frame_has_ann[idx].int().sum())
-        # [n t] -> n bt -> bt n -> [n] bt
-        query_refer_prob_preds = torch.cat(query_refer_prob_preds, dim=1).permute(1, 0).split(1, dim=0) 
-        
-        query_rle_masks = [[mask_util.encode(np.array(mask[:, :, np.newaxis], dtype=np.uint8, order="F"))[0]
-                            for mask in frame_mask_pred.cpu()] for frame_mask_pred in query_mask_preds]
-        
-        # [n, n h w, list[rle]n ] bt_has_ann_sum
-        model_outputs = [{'scores': s, 'masks': m, 'rle_masks': rle}
-                        for s, m, rle in zip(query_refer_prob_preds, query_mask_preds, query_rle_masks)]
-
-        # 每个test sample 
-        # 有t个被annotate的帧, 返回 t*n个预测
-        image_ids = []
-        for t in targets:
-            image_ids.extend(t['perframe_eval']['image_ids'])
-        for p, image_id in zip(model_outputs, image_ids):
-            for s, m in zip(p['scores'], p['rle_masks']):
-                # int, h w
-                coco_perframe_preds.append({'image_id': image_id,
-                                    'category_id': 1,  # dummy label, as categories are not predicted in ref-vos
-                                    'segmentation': m,
-                                    'score': s.item()})
-        
-    if is_distributed:
-        coco_perframe_preds = all_gather(coco_perframe_preds)
-        coco_perframe_preds = [p for p_list in coco_perframe_preds for p in p_list]
-
-    if is_main_process:
-        eval_metrics = get_AP_PAT_IOU_PerFrame(coco_file, coco_perframe_preds)
-    else:
-        eval_metrics = None
-        
-    if is_distributed:
-        dist.barrier()
-    return eval_metrics
-
-
-# utils
-def generate_train_validate_test_samples(root, generate_params):
-    
-    with open(os.path.join(root, 'train', 'meta_expressions.json'), 'r') as f:
-        train_video_annotations = json.load(f)['videos']   
-    with open(os.path.join(root, 'valid_u', 'meta_expressions.json'), 'r') as f:
-        valid_video_annotations = json.load(f)['videos'] 
-
-    with open(os.path.join(root, 'valid', 'meta_expressions.json'), 'r') as f:
-        test_video_annotations = json.load(f)['videos']  
-
-    with open(os.path.join(root, 'train', 'mask_dict.json'), 'r') as f:
-        train_mask_anns = json.load(f)
-
-    with open(os.path.join(root, 'valid_u', 'mask_dict.json'), 'r') as f:
-        valid_mask_anns = json.load(f)
-    # 23,051 + 793, 2490
-    assert len(train_video_annotations.keys()) == 1662 
-    assert len(valid_video_annotations.keys()) == 50 
-    assert len(test_video_annotations.keys()) == 140  
-
-
-    train_video_annotations.update(valid_video_annotations)
-    all_train_video_ids = np.array([key for key in train_video_annotations.keys()]) 
-    assert len(all_train_video_ids) == 1712
-    train_video_ids = all_train_video_ids
-
-    test_video_ids = list(test_video_annotations.keys())
    
-    params_by_vid = [(root, train_video_annotations[video_id], video_id, 'train', generate_params) for video_id in train_video_ids]
-    n_jobs = min(multiprocessing.cpu_count(), 12)
-    train_samples = Parallel(n_jobs)(delayed(generate_samples_of_one_video)(*p) for p in tqdm(params_by_vid))
-    train_samples = [s for l in train_samples for s in l]   
-    
-    print(f'there are {len(train_samples)} training samples')
 
-    # test set的samples
-    params_by_vid = [(root, test_video_annotations[video_id], video_id, 'test', generate_params) for video_id in test_video_ids]
-    n_jobs = min(multiprocessing.cpu_count(), 12)
-    test_samples = Parallel(n_jobs)(delayed(generate_samples_of_one_video)(*p) for p in tqdm(params_by_vid))
-    test_samples = [s for l in test_samples for s in l]   
-    print(f'there are {len(test_samples)} test samples')   
-
-    with open(os.path.join(root, f'{generate_params["name"]}_TrainValidateTest.json'), 'w') as f:
-        json.dump({'train': train_samples, 'test': test_samples}, f)
-    
-def generate_samples_of_one_video(root, video_annotations, video_id, split, generate_params):
-    samples = []
-    video_expressions = video_annotations['expressions'] # exp_id:{exp, obj_id} / exp_id:{exp}
-    all_frames = sorted(video_annotations['frames'])
-    if split == 'train':
-        train_window_size = generate_params['train_window_size']
-        train_window_step = generate_params['train_window_step']
-        sampled_windows = generate_windows_of_video(all_frames, window_size=train_window_size,window_step=train_window_step,
-                                                    force_all_used=True)
-        # pad window size
-        last_window_len = len(sampled_windows[-1])
-        if last_window_len < train_window_size:
-            if len(all_frames) > train_window_size:
-                sampled_windows[-1] = all_frames[-train_window_size:]
-            else:
-                delta = train_window_size - last_window_len
-                sampled_windows[-1] = sampled_windows[-1] + [all_frames[-1]] * delta
-        for wd in sampled_windows:
-            assert len(wd) == train_window_size   
-                            
-        for window in sampled_windows:
-            # 这个window中出现的所有objects
-            window_annotation = [os.path.join(root, 'train/Annotations', video_id, f'{idx}.png') for idx in window]
-            mask_annotations = [torch.tensor(np.array(Image.open(p))) for p in window_annotation]  # list[h w, uint8], window_size
-            mask_annotations = torch.stack(mask_annotations, dim=0) # t h w
-            appear_objects = mask_annotations.unique().tolist()
-            # appear_objects = set().union(*[m.unique().tolist() for m in mask_annotations])
-            for exp_id, exp_dict in video_expressions.items():
-                referent_id = exp_dict['obj_id']
-                if int(referent_id) not in appear_objects:  #这个window中没出现exp refer 的object
-                    continue
-                samples.append({
-                    'video_id': video_id,
-                    'window': window,
-                    'exp_id': exp_id,
-                })
-        return samples
-    elif split == 'test':
-        test_window_size = generate_params['test_window_size']
-        test_window_step = generate_params['test_window_step']
-        sampled_windows = generate_windows_of_video(all_frames, window_size=test_window_size,window_step=test_window_step,
-                                                    force_not_interleave=True, force_all_used=True)
-        # 最后一个window的大小可能小于test window size
-        for window in sampled_windows:
-            for exp_id, exp_dict in video_expressions.items():
-                samples.append({
-                    'video_id': video_id,
-                    'window': window,
-                    'exp_id': exp_id,
-                })
-        return samples
-        
-    elif split == 'validate':
-        validate_window_size = generate_params['validate_window_size']
-        validate_window_step = generate_params['validate_window_step']
-        sampled_windows = generate_windows_of_video(all_frames, window_size=validate_window_size, window_step=validate_window_step,
-                                                        force_not_interleave=True, force_all_used=True)
-        for window in sampled_windows:
-            # 这个window中出现的所有objects
-            window_annotation = [os.path.join(root, 'train/Annotations', video_id, f'{idx}.png') for idx in window]
-            mask_annotations = [torch.tensor(np.array(Image.open(p))) for p in window_annotation]  # list[h w, uint8], window_size
-            mask_annotations = torch.stack(mask_annotations, dim=0) # t h w
-            appear_objects = mask_annotations.unique().tolist()
-            # appear_objects = set().union(*[m.unique().tolist() for m in mask_annotations])
-            for exp_id, exp_dict in video_expressions.items():
-                referent_id = exp_dict['obj_id']
-                if int(referent_id) not in appear_objects:  #这个window中没出现exp refer 的object
-                    continue
-                samples.append({
-                    'video_id': video_id,
-                    'window': window,
-                    'exp_id': exp_id,
-                })
-        return samples
-
-
-import logging
 @register_data_schedule
 def mevis_schedule(configs, is_distributed, process_id, num_processes):
     
@@ -389,9 +164,10 @@ def mevis_schedule(configs, is_distributed, process_id, num_processes):
     pt_tokenizer_dir=configs['pt_tokenizer_dir']
     num_workers= configs['num_workers']
     test_batch_size= configs['test_batch_size']
+    local_range = configs['local_range']
     assert test_batch_size == 1
-    # 如果每个sample的视频有大量的交集，那么模型可以通过记住一个sample的结果来分割另一个sample
-    generate_traintest_params: dict = configs['generate_traintest_params']
+    add_validate_to_train = configs['add_validate_to_train']
+    train_window_size = configs['train_window_size']
     # 训练时额外的数据 
     amr_are_used: bool = configs['amr_are_used']
     text_aux_version: int = configs['text_aux_version']
@@ -412,22 +188,20 @@ def mevis_schedule(configs, is_distributed, process_id, num_processes):
         assert train_augmentation['name'] in amr_legi_augs
         assert test_augmentation['name'] in amr_legi_augs
     
-    traintest_samples_file = os.path.join(root, f'{generate_traintest_params["name"]}_TrainTest.json')
-    if not os.path.exists(traintest_samples_file):
+    if not os.path.exists(os.path.join(root, f'split_metas_{train_window_size}.json')):
         if process_id == 0:
-            generate_train_validate_test_samples(root, generate_traintest_params)
+            generate_metas(root, train_window_size)
         if is_distributed:
             dist.barrier()
-    with open(traintest_samples_file, 'r') as f:
-        samples = json.load(f)
-        train_samples = samples['train']
-        test_samples = samples['test']
-    logging.info(f'there are {len(train_samples)} training samples')
-    print(f'there are {len(train_samples)} training samples')
-    logging.info(f'there are {len(test_samples)} test samples')
-    print(f'there are {len(test_samples)} test samples')
+
+    with open(os.path.join(root, f'split_metas_{train_window_size}.json'), 'r') as f:
+        metas = json.load(f)
+        train_metas = metas['train']
+        validate_metas = metas['valid_u']
+        test_metas = metas['valid']    
+
     if text_aux_version != 0:
-        with open(os.path.join(root, 'meta_expressions', f'text_to_aux.json'), 'r') as f:
+        with open(os.path.join(root, f'text_to_aux.json'), 'r') as f:
             text_aux_by_auxid = json.load(f)
     else:
         text_aux_by_auxid = None
@@ -438,47 +212,68 @@ def mevis_schedule(configs, is_distributed, process_id, num_processes):
     else:
         video_aux_by_auxid = None          
 
-    with open(os.path.join(root, 'train', f'meta.json'), 'r') as f:
-        train_video_to_objs = json.load(f)['videos']
-    with open(os.path.join(root, 'meta_expressions', 'train', f'meta_expressions.json'), 'r') as f:
-        train_video_to_texts = json.load(f)['videos']   
+    with open(os.path.join(root, 'train', f'mask_dict.json'), 'r') as f:
+        train_video_to_anns = json.load(f)
+    with open(os.path.join(root, 'train', f'meta_expressions.json'), 'r') as f:
+        train_video_to_texts = json.load(f)['videos']  
+    with open(os.path.join(root, 'valid_u', f'mask_dict.json'), 'r') as f:
+        valid_video_to_anns = json.load(f)   
+    with open(os.path.join(root, 'valid_u', f'meta_expressions.json'), 'r') as f:
+        valid_video_to_texts = json.load(f)['videos'] 
+
 
     create_train_aug = video_aug_entrypoints(train_augmentation['name'])
     train_aug = create_train_aug(train_augmentation)       
-    train_dataset = YRVOS_Dataset(root=root,
+    train_dataset = Mevis_dataset(root=root,
                                  pt_tokenizer_dir=pt_tokenizer_dir,
                                  split='train',
-                                samples = train_samples,
+                                 local_range=local_range,
+                                metas = train_metas,
+                                train_window_size=train_window_size,
                                 augmentation=train_aug,
                                 video_to_texts=train_video_to_texts,
-                                video_to_objects=train_video_to_objs,
-                                catname_to_id=category_name_to_id,
+                                video_to_anns=train_video_to_anns,
 
                                 text_aux_by_auxid=text_aux_by_auxid,
                                 text_aux_version=text_aux_version,
                                 video_aux_version=video_aux_version,
                                 video_aux_by_auxid=video_aux_by_auxid)
 
-    with open(os.path.join(root, 'meta_expressions', 'valid', 'meta_expressions.json'), 'r') as f:
-        test_video_annotations = json.load(f)['videos']    
-    with open(os.path.join(root, 'meta_expressions', 'test', 'meta_expressions.json'), 'r') as f:
-        test2_video_annotations = json.load(f)['videos'] 
-    assert len(test_video_annotations.keys()) == 507
-    assert len(test2_video_annotations.keys()) == 305
-    assert len(set(list(test2_video_annotations.keys())) - set(list(test_video_annotations.keys()))) == 0
-    test_video_ids = list(set(list(test_video_annotations.keys())) - set(list(test2_video_annotations.keys())))
-    test_video_to_texts = {key:test_video_annotations[key] for key in test_video_ids}
+    if add_validate_to_train:     
+        validate_dataset = Mevis_dataset(root=root,
+                                    pt_tokenizer_dir=pt_tokenizer_dir,
+                                    split='validate',
+                                    metas = validate_metas,
+                                    local_range=local_range,
+                                    train_window_size=train_window_size,
+                                    augmentation=train_aug,
+                                    video_to_texts=valid_video_to_anns,
+                                    video_to_anns=valid_video_to_texts,
+
+                                    text_aux_by_auxid=text_aux_by_auxid,
+                                    text_aux_version=text_aux_version,
+                                    video_aux_version=video_aux_version,
+                                    video_aux_by_auxid=video_aux_by_auxid)   
+        from torch.utils.data import ConcatDataset
+        collator = train_dataset.collator
+        train_dataset = ConcatDataset([train_dataset, validate_dataset])
+        train_dataset.collator = collator
+
+    with open(os.path.join(root,'valid', 'meta_expressions.json'), 'r') as f:
+        test_video_to_texts = json.load(f)['videos']  
+
     test_aug = video_aug_entrypoints(test_augmentation['name'])
     test_aug = create_train_aug(test_augmentation) 
-    test_dataset = YRVOS_Dataset(root=root,
+    test_dataset = Mevis_dataset(root=root,
                                  pt_tokenizer_dir=pt_tokenizer_dir,
                                  split='test',
-                                samples = test_samples,
+                                 train_window_size=None,
+                                metas = test_metas,
+                                local_range=None,
                                 augmentation=test_aug,
                                 video_to_texts=test_video_to_texts,
-                                video_to_objects=None,
-                                catname_to_id=category_name_to_id,
-                                
+                                video_to_anns=None,
+
                                 text_aux_by_auxid=text_aux_by_auxid,
                                 text_aux_version=text_aux_version,
                                 video_aux_version=video_aux_version,
@@ -522,129 +317,200 @@ def mevis_normalize_text(text_query):
     text_1 = " ".join(normalized_text_query.lower().split())
     return text_1
 
+from detectron2.structures import Boxes, BoxMode, PolygonMasks
 
-# 训练集是perWindow_perExp, 即(clip, text)
-# test set是(video, text) 对
 
-class MEVIS_Dataset(DatasetWithAux):      
+def bounding_box(img):
+    rows = np.any(img, axis=1)
+    cols = np.any(img, axis=0)
+    rmin, rmax = np.where(rows)[0][[0, -1]]
+    cmin, cmax = np.where(cols)[0][[0, -1]]
+    return rmin, rmax, cmin, cmax # y1, y2, x1, x2
+
+import copy
+from detectron2.data import detection_utils as utils
+from pycocotools import mask as maskUtils 
+class Mevis_dataset(DatasetWithAux):
     def __init__(self, 
-                 root,
-                 split,
-                 samples,
-                 augmentation,
-                 video_to_texts,
-                 video_to_objects,
-                catname_to_id,
-                 text_aux_version,
-                 text_aux_by_auxid,                
-                 video_aux_version,
-                 video_aux_by_auxid,
-                 pt_tokenizer_dir,
-                 ) -> None:
+                root,
+                pt_tokenizer_dir,
+                train_window_size,
+                split,
+                metas,
+                local_range,
+                augmentation,
+                video_to_texts,
+                video_to_anns,
+                
+                text_aux_by_auxid,
+                text_aux_version,
+                video_aux_version,
+                video_aux_by_auxid):
+
         super().__init__(text_aux_version=text_aux_version,
                          text_aux_by_auxid=text_aux_by_auxid,
                          video_aux_version=video_aux_version,
                          video_aux_by_auxid=video_aux_by_auxid,
                          pt_tokenizer_dir=pt_tokenizer_dir,
                          )
+        self.local_range = local_range
         self.root = root
+        self.num_frames = train_window_size
+        self.metas = metas
+        self.text_annotations_by_videoid = video_to_texts
+        self.video_to_anns = video_to_anns
+
+        self.augmentation = augmentation
+        if split == 'train':
+            self.img_root = os.path.join(self.root, 'train', 'JPEGImages')
+        elif split == 'validate':
+            self.img_root = os.path.join(self.root, 'valid_u', 'JPEGImages')
+        elif split == 'test':
+            self.img_root = os.path.join(self.root, 'valid', 'JPEGImages')
         self.split = split
-        self.catname_to_id = catname_to_id
-        self.samples = samples
-        self.video_to_texts = video_to_texts
-        self.video_to_objects = video_to_objects
-        self.augmentation = augmentation 
-        if self.split == 'test':
-            self.video_root = os.path.join(self.root, f'valid/JPEGImages')
-        elif self.split in ['train', 'validate']:
-            self.video_root = os.path.join(self.root, f'train/JPEGImages')
-            self.mask_ann_root = os.path.join(self.root, f'train/Annotations')
-        else:
-            raise ValueError()
         collator_kwargs = {}
         if text_aux_version == 1 or text_aux_version == 2 or text_aux_version == 3 or text_aux_version == 4:
             collator_kwargs['tokenizer'] = self.tokenizer
-
         self.collator = Collator(split=split,
                                  text_aux_version=text_aux_version,
                                  video_aux_version=video_aux_version,
                                  **collator_kwargs)
+        
+    def __len__(self):
+        return len(self.metas)
+    
+    def get_annotation_clip_masks(self, ann_id, window_indexs, video_length):
+        obj_ann = self.video_to_anns[ann_id] # list[], v_dieo_length
+        assert video_length == len(obj_ann)
+        obj_win_ann = [obj_ann[si] for si in window_indexs] #list[rle/None]
+        for srwa in obj_win_ann:
+            if srwa is not None:
+                H, W = srwa['size']
+                break
+        masks = []
+        for ann in obj_win_ann:
+            if ann is None:
+                masks.append(torch.zeros([H, W]).bool()) # 我后面是用valid来不学习你的
+            else:
+                masks.append(torch.from_numpy(np.array(maskUtils.decode(ann), dtype=np.uint8)).bool())
+        return torch.stack(masks, dim=0)
 
-    def __getitem__(self, sample_idx):
+    def __getitem__(self, idx):
+        # if self.split == 'train':
+        #     instance_check = False
+        #     while not instance_check:
         if self.split == 'train' or self.split == 'validate':
-            video_id, window_frames, exp_id = self.samples[sample_idx]['video_id'], \
-                                            self.samples[sample_idx]['window'], self.samples[sample_idx]['exp_id']
-            all_exps_dict = self.video_to_texts[video_id]['expressions'] # exp_id : {exp, obj_id}
-            all_objs_dict = self.video_to_objects[video_id]['objects'] # obj_id : {category:name, frames,}
-            text_query = all_exps_dict[exp_id]['exp']
-            text_query = yrvos_normalize_text(text_query)
+            meta = self.metas[idx]  # dict
 
-            vframes = [Image.open(os.path.join(self.video_root, video_id, f'{f}.jpg'),) for f in window_frames]
+            video, text_query, all_objs, all_obj_anns, frames, frame_id, referent_idxs = \
+                        meta['video'], meta['exp'], meta['video_objects'], meta['video_object_anns'], \
+                    meta['frames'], meta['frame_id'], meta['referent_idxs']
+            # clean up the caption
+            text_query = mevis_normalize_text(text_query)
+            vid_len = len(frames)
+            assert len(set(all_objs)) == len(all_objs) and (len(set(all_obj_anns)) == len(all_obj_anns))
+            num_frames = self.num_frames
+            # random sparse sample
+            sample_indx = [frame_id]
+            if self.num_frames != 1:
+                # local sample
+                sample_id_before = random.randint(1, self.local_range) # 可以控制3
+                sample_id_after = random.randint(1, self.local_range)
+                local_indx = [max(0, frame_id - sample_id_before), min(vid_len - 1, frame_id + sample_id_after)]
+                sample_indx.extend(local_indx)
+
+                # global sampling
+                if num_frames > 3:
+                    all_inds = list(range(vid_len))
+                    global_inds = all_inds[:min(sample_indx)] + all_inds[max(sample_indx):]
+                    global_n = num_frames - len(sample_indx)
+                    if len(global_inds) > global_n:
+                        select_id = random.sample(range(len(global_inds)), global_n)
+                        for s_id in select_id:
+                            sample_indx.append(global_inds[s_id])
+                    elif vid_len >=global_n:  # sample long range global frames
+                        select_id = random.sample(range(vid_len), global_n)
+                        for s_id in select_id:
+                            sample_indx.append(all_inds[s_id])
+                    else:
+                        select_id = random.sample(range(vid_len), global_n - vid_len) + list(range(vid_len))           
+                        for s_id in select_id:                                                                   
+                            sample_indx.append(all_inds[s_id])
+            sample_indx.sort()
+            # load masks of all objects at this window
+            object_masks = [self.get_annotation_clip_masks(ann, sample_indx, vid_len) for ann in all_obj_anns]
+            object_masks = torch.stack(object_masks, dim=0) # ni t h w
+            referent_masks = object_masks[referent_idxs] # n_r t h w
+            if not referent_masks.any():
+                idx = random.randint(0, self.__len__() - 1)
+                return self.__getitem__(idx)
+
+            # 去掉没有出现的物体
+            all_appear = object_masks.flatten(1).any(-1) # ni
+
+            appear_objects = torch.tensor(all_objs)[all_appear]
+            appear_refs = [all_objs[ref_idx] for ref_idx in referent_idxs if all_appear[ref_idx] == True]
+            referent_idxs = [appear_objects.tolist().index(aref) for aref in appear_refs]
+            appear_obj_masks = object_masks[all_appear] # ni t h w
+
+            boxes = []
+            for object_mask in appear_obj_masks.flatten(0, 1).long():
+                if (object_mask > 0).any():
+                    y1, y2, x1, x2 = bounding_box_from_mask(object_mask.numpy())
+                    box = torch.tensor([x1, y1, x2, y2]).to(torch.float)
+                    boxes.append(box)
+                else:
+                    box = torch.tensor([0,0,0,0]).to(torch.float)
+                    boxes.append(box)
+            boxes = torch.stack(boxes, dim=0) # nt 4
+            boxes = rearrange(boxes, '(n t) c -> n t c', n=appear_obj_masks.shape[0], t=appear_obj_masks.shape[1])
+
+            vframes = [Image.open(os.path.join(self.img_root,video, frames[sample_indx[j]] + '.jpg')).convert('RGB')\
+                        for j in range(self.num_frames)]
             width, height = vframes[0].size
-            # t h w
-            all_objects_masks = torch.stack([torch.from_numpy(np.array(Image.open(os.path.join(self.mask_ann_root, video_id, f'{f}.png')))) for f in window_frames], dim=0) #
-            appear_obj_ids = set(all_objects_masks.unique().tolist())
-            if 0 in appear_obj_ids:
-                appear_obj_ids = list(appear_obj_ids - set([0]))
-            appear_obj_ids = sorted(appear_obj_ids) # 1，2，3, 5
-            annotated_exps_by_object = []
-            masks_by_object = [] 
-            obj_classes_by_object = []
-            for obj_id in appear_obj_ids:
-                masks_by_object.append(all_objects_masks == obj_id) # t h w, uint8
-                obj_classes_by_object.append(self.catname_to_id[all_objs_dict[str(obj_id)]["category"]])
-                obj_exps = [value['exp'] for key, value in all_exps_dict.items() if int(value['obj_id']) == obj_id]
-                if len(obj_exps) == 0:
-                    print('there are some objects that in the video has no expressions')
-                annotated_exps_by_object.append(obj_exps)
-            masks = torch.stack(masks_by_object, dim=0) # n t h w, bool
-            class_labels = torch.tensor(obj_classes_by_object).long() # n
-            referent_idx = appear_obj_ids.index(int(all_exps_dict[exp_id]['obj_id'])) # 在1, 2, 3, 5中的下标    
-            targets = {
-                'has_ann': torch.ones(len(vframes)).bool(), # t
-                'masks': masks, # n t h w (bool) 
-                'class_labels': class_labels, # n
-                'referent_idx': referent_idx,
+            targets = { 
+                'has_ann': torch.ones(len(vframes)).bool(),
+                'masks': appear_obj_masks, # n t' h w (bool)
+                'boxes': boxes, # n t' 4, xyxy, float
+                'referent_idx': referent_idxs, 
                 'orig_size': torch.tensor([len(vframes), height, width]), # T h w
                 'size': torch.tensor([len(vframes),  height, width]), # T h w
-            }
-            
-            flatten_texts = [text_query]
-            for att in annotated_exps_by_object:
-                flatten_texts.extend(att)
-            vframes, flatten_texts, targets = self.augmentation(vframes, flatten_texts, targets)
-            text_query = flatten_texts[0]
-            cnt = 1
-            for idx in range(len(annotated_exps_by_object)):
-                num_texts = len(annotated_exps_by_object[idx])
-                annotated_exps_by_object[idx] = flatten_texts[cnt:(cnt+num_texts)]
-                cnt += num_texts
-            assert (cnt - 1) == sum([len(ttt) for ttt in annotated_exps_by_object]) 
-                
+            } # plt.imshow(appear_obj_masks[referent_idxs[0]][1])
+            # import matplotlib.pyplot as plt
+            # plt.imshow(vframes[0])
+            # plt.savefig('./test.png')
+            # plt.imshow(appear_obj_masks[referent_idxs[0]][0])
+            # plt.savefig('./test.png')
+            vframes, text_query, targets = self.augmentation(vframes, [text_query], targets) 
+            text_query = text_query[0]
+
             return vframes, text_query,\
-                  self.get_aux(sample_idx, annotated_exps_by_object, video_auxid=None, text_auxid=text_query), targets
-            
-        elif self.split == 'test': 
-            video_id, window_frames, exp_id = self.samples[sample_idx]['video_id'], \
-                                            self.samples[sample_idx]['window'], self.samples[sample_idx]['exp_id']          
-            all_exps_dict = self.video_to_texts[video_id]["expressions"] # exp_id: exp
-            text_query = all_exps_dict[exp_id]['exp']
-            text_query = yrvos_normalize_text(text_query)
-            vframes = [Image.open(os.path.join(self.video_root, video_id, f'{f}.jpg')) for f in window_frames]
+                    self.get_aux(idx, None, video_auxid=None, text_auxid=text_query), targets
+        elif self.split == 'test':
+            meta = self.metas[idx]  # dict
+            video, text_query, frames, exp_id = \
+                        meta['video'], meta['exp'], meta['frames'], meta['exp_id']
+            # clean up the caption
+            text_query = mevis_normalize_text(text_query)
+            vid_len = len(frames)
+        
+            vframes = [Image.open(os.path.join(self.img_root,video, frame + '.jpg')).convert('RGB')\
+                        for frame in range(frames)]
             width, height = vframes[0].size
-            meta_data = {
+            targets = { 
                 'size': torch.tensor([len(vframes),  height, width]),
                 'orig_size': torch.tensor([len(vframes),  height, width]),
                 'has_ann': torch.ones(len(vframes)).bool(), # T
-                'video_id': video_id,
-                'all_frames': window_frames,
+                'video_id': video,
+                'all_frames': frames,
                 'exp_id': exp_id,
             }
-            vframes, text_query, meta_data = self.augmentation(vframes, [text_query], meta_data)  # T(t 3 h w), list[none]
+            vframes, text_query, targets = self.augmentation(vframes, [text_query], targets) 
             text_query = text_query[0]
-            return vframes, text_query, \
-                self.get_aux(sample_idx, None, video_auxid=None, text_auxid=text_query), meta_data
 
+            return vframes, text_query,\
+                    self.get_aux(idx, None, video_auxid=None, text_auxid=text_query), targets
+        
     def get_aux(self, item_idx, exist_queries,
                 video_auxid,
                 text_auxid):
@@ -655,7 +521,8 @@ class MEVIS_Dataset(DatasetWithAux):
         aux.update(self.get_video_aux(video_auxid))
         return aux
     def __len__(self):
-        return len(self.samples)
+        return len(self.metas)
+
 class Collator(CollatorWithAux):
     def __init__(self, split, 
                  text_aux_version,
@@ -666,7 +533,6 @@ class Collator(CollatorWithAux):
                        video_aux_version=video_aux_version,
                        **kwargs)
         self.split = split
-
     def __call__(self, batch):
     
         samples, text_query, auxiliary, meta_or_target = list(zip(*batch))
@@ -682,7 +548,7 @@ class Collator(CollatorWithAux):
         }
         if self.split == 'test':
             batch_data['meta'] = meta_or_target
-        else:
+        elif self.split == 'train' or self.split == 'validate':
             batch_data['targets'] = meta_or_target
     
         return batch_data

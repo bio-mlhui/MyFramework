@@ -132,9 +132,9 @@ class Trainer:
             
             epoch_header = f'Epoch[{self.epoch:{int(math.log10(self.total_epochs))+1}}/{self.total_epochs-1}]'
             debug_data_loding = False
-            debug_step_iteration = False
+            debug_step_iteration = True
             for idx, batch_dict in enumerate(self.train_loader):
-                if debug_data_loding:
+                if idx == 5:
                     continue
                 if debug_step_iteration:
                     break
