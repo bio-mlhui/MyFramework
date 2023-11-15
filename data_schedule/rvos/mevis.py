@@ -34,7 +34,7 @@ from .utils import Evaluate_Sampler_Distributed, TrainRandomSampler_ByEpoch_Dist
     bounding_box_from_mask,DatasetWithAux, CollatorWithAux
 from data_schedule.rvos.metric_utils import get_AP_PAT_IOU_PerFrame
 
-__all__ = ['youtube_schedule', 'yrvos_v300s1999_schedule']
+__all__ = ['mevis_schedule']
 
 def show_dataset_information_and_validate(root):
     
@@ -194,7 +194,7 @@ def test(loader, model, device, is_distributed, is_main_process, output_dir):
         zip_file_path = os.path.join(output_dir, f'submission')
         shutil.make_archive(zip_file_path, 'zip', root_dir=output_dir, base_dir='Annotations')
         print('a zip file was successfully created.')
-        # shutil.rmtree(save_dir)  # remove the uncompressed annotations for memory efficiency
+        shutil.rmtree(save_dir)  # remove the uncompressed annotations for memory efficiency
     if is_distributed:
         dist.barrier() 
     return {}
@@ -259,87 +259,34 @@ def validate(loader, model, device, is_distributed, is_main_process, output_dir,
 
 
 # utils
-def generate_train_validate_test_samples(root, generate_params, validate_sample_number=300, validate_sample_seed=1999):
+def generate_train_validate_test_samples(root, generate_params):
     
-    with open(os.path.join(root, 'meta_expressions', 'train', 'meta_expressions.json'), 'r') as f:
-        train_video_annotations = json.load(f)['videos']           
-    all_train_video_ids = np.array([key for key in train_video_annotations.keys()]) # 3471
-    
-    if validate_sample_number != 0:
-        # 分开一点成validate set
-        np.random.seed(validate_sample_seed)
-        g = torch.Generator()
-        g.manual_seed(validate_sample_seed)
-        sampled_validate_idxs = torch.randperm(len(all_train_video_ids), generator=g)[:validate_sample_number]
-        train_idxs = np.setdiff1d(np.arange(len(all_train_video_ids)), sampled_validate_idxs.numpy())
-        train_video_ids = all_train_video_ids[train_idxs]
-        validate_video_ids = all_train_video_ids[sampled_validate_idxs]
-    else:
-        train_video_ids = all_train_video_ids
-        validate_video_ids = []
-    
-    # 生成validate set的coco annotation file
-    if validate_sample_number != 0:
-        images_id_set = set()
-        perframeperExp_coco_evaluation = []
-        images_dict = []
-        for video_id in validate_video_ids:
-            all_frames = train_video_annotations[video_id]["frames"]
-            for frame in all_frames:
-                # h w
-                frame_annotation = torch.from_numpy(np.array(Image.open(os.path.join(root, 'train/Annotations', video_id, f'{frame}.jpg'))))
-                for exp_id, exp_dict in train_video_annotations[video_id]["expressions"].items():
-                    referent_obj_id = int(exp_dict['obj_id'])
-                    referent_frame_mask = (frame_annotation == referent_obj_id) # h w
-                    if referent_frame_mask.any():
-                        image_id = f'v_{video_id}_f_{frame}_e_{exp_id}'
-                        assert image_id not in images_id_set
-                        images_id_set.add(image_id)
-                        gt_mask = referent_frame_mask.numpy()
-                        images_dict.append({'id': image_id, 'height': gt_mask.shape[0], 'width': gt_mask.shape[1]})
-                        mask_rle = encode(gt_mask)
-                        mask_rle['counts'] = mask_rle['counts'].decode('ascii')
-                        mask_area = float(area(mask_rle))
-                
-                        bbox = bounding_box_from_mask(gt_mask) # x1y1x2y2 form 
-                        assert bbox.ndim == 1 and len(bbox) == 4
-                        bbox_xywh = [bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1]]
-                        perframeperExp_coco_evaluation.append({
-                            'id': len(perframeperExp_coco_evaluation),
-                            'image_id': image_id,
-                            'category_id': 1,  
-                            'segmentation': mask_rle,
-                            'area': mask_area,
-                            'bbox': bbox_xywh,
-                            'iscrowd': 0,
-                        })
-        dataset_dict = {
-            'categories': [{'id': 1, 'name': 'dummy_class'}],
-            'images': images_dict,
-            'annotations':  perframeperExp_coco_evaluation,
-        }
-        with open(os.path.join(root, f'pWpE_{validate_sample_number}-{validate_sample_seed}_ValidatePerFrameCoCo.json'), 'w') as f:
-            json.dump(dataset_dict, f)
-    else:
-        print('不用生成validate set的coco文件, 因为没有validate set')
-    with open(os.path.join(root, 'meta_expressions', 'valid', 'meta_expressions.json'), 'r') as f:
-        test_video_annotations = json.load(f)['videos']    
-    with open(os.path.join(root, 'meta_expressions', 'test', 'meta_expressions.json'), 'r') as f:
-        test2_video_annotations = json.load(f)['videos'] 
-    assert len(test_video_annotations.keys()) == 507
-    assert len(test2_video_annotations.keys()) == 305
-    assert len(set(list(test2_video_annotations.keys())) - set(list(test_video_annotations.keys()))) == 0
-    test_video_ids = list(set(list(test_video_annotations.keys())) - set(list(test2_video_annotations.keys())))
-    # Furthermore, for the competition the subset's original validation set, which consists of 507 videos, was split into
-    # two competition 'validation' & 'test' subsets, consisting of 202 and 305 videos respectively. Evaluation can
-    # currently only be done on the competition 'validation' subset using the competition's server, as
-    # annotations were publicly released only for the 'train' subset of the competition.
-    # train/test的meta file中object frames是
-    # all the frame indices after its first occurrence, for every object in every video.
-    # 并且 Please note that small objects (smaller than 100 pixels in 256p resolution) are ignored in meta file
-    # 会有60000多个
-    assert len(test_video_ids) == 202
-    # train set的samples      
+    with open(os.path.join(root, 'train', 'meta_expressions.json'), 'r') as f:
+        train_video_annotations = json.load(f)['videos']   
+    with open(os.path.join(root, 'valid_u', 'meta_expressions.json'), 'r') as f:
+        valid_video_annotations = json.load(f)['videos'] 
+
+    with open(os.path.join(root, 'valid', 'meta_expressions.json'), 'r') as f:
+        test_video_annotations = json.load(f)['videos']  
+
+    with open(os.path.join(root, 'train', 'mask_dict.json'), 'r') as f:
+        train_mask_anns = json.load(f)
+
+    with open(os.path.join(root, 'valid_u', 'mask_dict.json'), 'r') as f:
+        valid_mask_anns = json.load(f)
+    # 23,051 + 793, 2490
+    assert len(train_video_annotations.keys()) == 1662 
+    assert len(valid_video_annotations.keys()) == 50 
+    assert len(test_video_annotations.keys()) == 140  
+
+
+    train_video_annotations.update(valid_video_annotations)
+    all_train_video_ids = np.array([key for key in train_video_annotations.keys()]) 
+    assert len(all_train_video_ids) == 1712
+    train_video_ids = all_train_video_ids
+
+    test_video_ids = list(test_video_annotations.keys())
+   
     params_by_vid = [(root, train_video_annotations[video_id], video_id, 'train', generate_params) for video_id in train_video_ids]
     n_jobs = min(multiprocessing.cpu_count(), 12)
     train_samples = Parallel(n_jobs)(delayed(generate_samples_of_one_video)(*p) for p in tqdm(params_by_vid))
@@ -354,18 +301,8 @@ def generate_train_validate_test_samples(root, generate_params, validate_sample_
     test_samples = [s for l in test_samples for s in l]   
     print(f'there are {len(test_samples)} test samples')   
 
-    if validate_sample_number != 0:
-        # validate set的samples
-        params_by_vid = [(root, train_video_annotations[video_id], video_id, 'validate', generate_params) for video_id in validate_video_ids]
-        n_jobs = min(multiprocessing.cpu_count(), 12)
-        validate_samples = Parallel(n_jobs)(delayed(generate_samples_of_one_video)(*p) for p in tqdm(params_by_vid))
-        validate_samples = [s for l in validate_samples for s in l]   
-        print(f'there are {len(validate_samples)} validate samples')
-    else:
-        validate_samples = []
-
     with open(os.path.join(root, f'{generate_params["name"]}_TrainValidateTest.json'), 'w') as f:
-        json.dump({'train': train_samples, 'validate': validate_samples, 'test': test_samples}, f)
+        json.dump({'train': train_samples, 'test': test_samples}, f)
     
 def generate_samples_of_one_video(root, video_annotations, video_id, split, generate_params):
     samples = []
@@ -442,139 +379,13 @@ def generate_samples_of_one_video(root, video_annotations, video_id, split, gene
                 })
         return samples
 
-@register_data_schedule
-def yrvos_v300s1999_schedule(configs, is_distributed, process_id, num_processes):
-    yrvos_schedule_id='v300s1999'
-    generate_trainvalidatetest_params: dict = configs['generate_trainvalidatetest_params']
-    amr_are_used: bool = configs['amr_are_used']
-    text_aux_version: int = configs['text_aux_version']
-    train_augmentation: dict = configs['train_augmentation']
-    validate_augmentation: dict = configs['validate_augmentation']
-    test_augmentation: dict = configs['test_augmentation']
-    training_seed: int  = configs['training_seed']
-    root = configs['root']
-    num_workers= configs['num_workers']
-    train_batch_size= configs['train_batch_size']
-    validate_batch_size = configs['validate_batch_size']
-    test_batch_size= configs['test_batch_size']
-    
-    if amr_are_used:
-        amr_legi_augs = ['fixsize', 'justnormalize', 'resize']
-        assert train_augmentation['name'] in amr_legi_augs
-        assert test_augmentation['name'] in amr_legi_augs
-        assert validate_augmentation['name'] in amr_legi_augs
-    
-    root = configs['root']
-    traintest_samples_file = os.path.join(root, f'v300s1999_{generate_trainvalidatetest_params["name"]}_TrainValidateTest_samples.json')
-    if not os.path.exists(traintest_samples_file):
-        if process_id == 0:
-            generate_train_validate_test_samples(root, generate_trainvalidatetest_params, 
-                                                 validate_sample_number=300, validate_sample_seed=1999)
-        if is_distributed:
-            dist.barrier()
-    with open(traintest_samples_file, 'r') as f:
-        samples = json.load(f)
-        train_samples = samples['train']
-        test_samples = samples['test']
-        validate_samples = samples['validate']
-
-    with open(os.path.join(root, 'meta_expression', 'train', 'meta_expressions.json'), 'r') as f:
-        trainvalidate_textann_by_videoid = json.load(f)["videos"]
-        
-    with open(os.path.join(root, 'meta_expression', 'valid', 'meta_expressions.json'), 'r') as f:
-        test_textann_by_videoid = json.load(f)["videos"]
-                
-    with open(os.path.join(root, 'train', 'meta.json'), 'r') as f:
-        trainvalidate_objann_by_videoid = json.load(f)["videos"]
-        
-
-    create_train_aug = video_aug_entrypoints(train_augmentation['name'])
-    train_aug = create_train_aug(train_augmentation)       
-    train_dataset = YRVOS_Dataset(root=root, 
-                                       split='train',
-                                       samples=train_samples,
-                                       augmentation=train_aug,
-                                       text_annotations_by_videoid=trainvalidate_textann_by_videoid,
-                                       text_aux_version = text_aux_version,
-                                       obj_annotations_groupby_videoid=trainvalidate_objann_by_videoid,)
-    
-    validate_aug = video_aug_entrypoints(validate_augmentation['name'])
-    validate_aug = create_train_aug(validate_augmentation) 
-    validate_dataset = YRVOS_Dataset(root=root, 
-                                       split='validate',
-                                       samples=validate_samples,
-                                       augmentation=validate_aug,
-                                       text_annotations_by_videoid=trainvalidate_textann_by_videoid,
-                                       text_aux_version = text_aux_version,
-                                       obj_annotations_groupby_videoid=trainvalidate_objann_by_videoid)
-    
-    test_aug = video_aug_entrypoints(test_augmentation['name'])
-    test_aug = create_train_aug(test_augmentation) 
-    test_dataset = YRVOS_Dataset(root=root, 
-                                       split='test',
-                                       samples=test_samples,
-                                       augmentation=test_aug,
-                                       text_annotations_by_videoid=test_textann_by_videoid,
-                                       text_aux_version = text_aux_version,
-                                       obj_annotations_groupby_videoid=None)
-
-    sampler_train = TrainRandomSampler_ByEpoch_Distributed(train_dataset,
-                                    num_replicas=num_processes,
-                                    rank=process_id,
-                                    seed=training_seed,)
-    train_loader = DataLoader(train_dataset,
-                            batch_size=train_batch_size,
-                            sampler=sampler_train,
-                            collate_fn=train_dataset.collator, 
-                            num_workers=num_workers,
-                            pin_memory=True,
-                            persistent_workers=True)
-
-    sampler_validate = Evaluate_Sampler_Distributed(validate_dataset, 
-                                    num_replicas=num_processes, 
-                                    rank=process_id,)
-    validate_loader = DataLoader(validate_dataset, 
-                                batch_size=validate_batch_size, 
-                                sampler=sampler_validate,
-                                collate_fn=test_dataset.collator,
-                                num_workers=num_workers,
-                                pin_memory=True,
-                                persistent_workers=True)
-            
-    sampler_test = Evaluate_Sampler_Distributed(test_dataset, 
-                                    num_replicas=num_processes, 
-                                    rank=process_id,)
-    test_loader = DataLoader(test_dataset, 
-                                batch_size=test_batch_size, 
-                                sampler=sampler_test,
-                                collate_fn=test_dataset.collator,
-                                num_workers=num_workers,
-                                pin_memory=True,
-                                persistent_workers=True)
-    def my_dataset_function():
-        return [{}]
-    DatasetCatalog.register('youtube_rvos', my_dataset_function)
-    from detectron2.data import MetadataCatalog
-    MetadataCatalog.get('youtube_rvos').thing_classes = ['r', 'nr']
-    MetadataCatalog.get('youtube_rvos').thing_colors = [(255., 140., 0.), (0., 255., 0.)]
-    
-    pFpE_validate_coco_file = os.path.join(root, f'{yrvos_schedule_id}_pFpE_validate_coco.json')
-    return train_loader, sampler_train, \
-            validate_loader, partial(validate, pFpE_coco_file=pFpE_validate_coco_file),\
-            test_loader, test
 
 import logging
 @register_data_schedule
-def youtube_schedule(configs, is_distributed, process_id, num_processes):
-    all_categories = {'truck': 1, 'leopard': 2, 'knife': 3, 'sedan': 4, 'parrot': 5, 'snail': 6, 'snowboard': 7, 'sign': 8, 'rabbit': 9, 'bus': 10, 'crocodile': 11, 'penguin': 12, 'skateboard': 13, 'eagle': 14, 'dolphin': 15, 'lion': 16, 'others': 17, 'surfboard': 18, 'earless_seal': 19, 'cow': 20, 'hat': 21, 'lizard': 22, 'duck': 23, 'dog': 24, 'hedgehog': 25, 'zebra': 26, 'bird': 27, 'turtle': 28, 'hand': 29, 'elephant': 30, 'motorbike': 31, 'bike': 32, 'bear': 33, 'tiger': 34, 'ape': 35, 'fish': 36, 'deer': 37, 'frisbee': 38, 'snake': 39, 'horse': 40, 'bucket': 41, 'train': 42, 'owl': 43, 'parachute': 44, 'monkey': 45, 'airplane': 46, 'person': 47, 'paddle': 48, 'plant': 49, 'mouse': 50, 'camel': 51, 'shark': 52, 'raccoon': 53, 'squirrel': 54, 'giraffe': 55, 'boat': 56, 'sheep': 57, 'giant_panda': 58, 'whale': 59, 'tennis_racket': 60, 'toilet': 61, 'umbrella': 62, 'frog': 63, 'cat': 64, 'fox': 65}
-    category_name_to_id = {}
-    cnt = 0
-    for key in all_categories.keys():
-        category_name_to_id[key] = cnt
-        cnt += 1
-
+def mevis_schedule(configs, is_distributed, process_id, num_processes):
+    
     root = configs['data_dir']
-    root = os.path.join(root, 'youtube_rvos')
+    root = os.path.join(root, 'mevis')
     pt_tokenizer_dir=configs['pt_tokenizer_dir']
     num_workers= configs['num_workers']
     test_batch_size= configs['test_batch_size']
@@ -592,20 +403,19 @@ def youtube_schedule(configs, is_distributed, process_id, num_processes):
     training_seed: int  = configs['training_seed']
     train_batch_size= configs['train_batch_size']
     
-    assert len(glob(os.path.join(root, f'train/JPEGImages', '*'))) == 3471 
-    assert len(glob(os.path.join(root, f'valid/JPEGImages', '*'))) == 202 
-    assert len(glob(os.path.join(root, f'test/JPEGImages', '*'))) == 305
-    assert len(glob(os.path.join(root, f'train/Annotations', '*'))) == 3471
+    assert len(glob(os.path.join(root, f'train/JPEGImages', '*'))) == 1662  
+    assert len(glob(os.path.join(root, f'valid_u/JPEGImages', '*'))) == 50  # train+valid作为训练
+    assert len(glob(os.path.join(root, f'valid/JPEGImages', '*'))) == 140  # 作为test
 
     if amr_are_used:
         amr_legi_augs = ['fixsize', 'justnormalize', 'resize', 'hflip_fixsize', 'hflip_ResizeSmaller', "resizeSmaller"]
         assert train_augmentation['name'] in amr_legi_augs
         assert test_augmentation['name'] in amr_legi_augs
     
-    traintest_samples_file = os.path.join(root, f'{generate_traintest_params["name"]}_TrainValidateTest.json')
+    traintest_samples_file = os.path.join(root, f'{generate_traintest_params["name"]}_TrainTest.json')
     if not os.path.exists(traintest_samples_file):
         if process_id == 0:
-            generate_train_validate_test_samples(root, generate_traintest_params, validate_sample_number=0, validate_sample_seed=None)
+            generate_train_validate_test_samples(root, generate_traintest_params)
         if is_distributed:
             dist.barrier()
     with open(traintest_samples_file, 'r') as f:
@@ -705,11 +515,7 @@ def youtube_schedule(configs, is_distributed, process_id, num_processes):
     
     return train_loader, sampler_train, None, None, test_loader, partial(test),
 
-def yrvos_normalize_text(text_query):
-    if text_query == 'cannot describe too little':
-        text_query = 'an airplane not moving'
-    elif text_query == 'a red clothe':
-        text_query = 'a red cloth'
+def mevis_normalize_text(text_query):
     normalized_text_query = text_query.replace('right most', 'rightmost')
     normalized_text_query = normalized_text_query.replace('left most', 'leftmost')
     normalized_text_query = normalized_text_query.replace('front most', 'frontmost')
@@ -720,7 +526,7 @@ def yrvos_normalize_text(text_query):
 # 训练集是perWindow_perExp, 即(clip, text)
 # test set是(video, text) 对
 
-class YRVOS_Dataset(DatasetWithAux):      
+class MEVIS_Dataset(DatasetWithAux):      
     def __init__(self, 
                  root,
                  split,
