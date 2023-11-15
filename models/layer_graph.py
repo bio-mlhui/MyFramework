@@ -2697,6 +2697,9 @@ class Spatial_Temporal_Grounding_v3(Spatial_Temporal_Grounding_v1):
         scores = ref_score @ self.ref_1
         scores = scores.squeeze(-1) # V h nq
 
+        if E == 0:
+            scores = scores + self.context_2.sum() * 0. + self.context_1.sum() * 0.
+            return scores.mean(1)
         dgl_graph = dgl.graph((edge_index[0, :], edge_index[1, :]), num_nodes=V)
         traversal_order = dgl.topological_nodes_generator(dgl_graph)
         for idx, frontier_nodes in enumerate(traversal_order):
@@ -2716,8 +2719,6 @@ class Spatial_Temporal_Grounding_v3(Spatial_Temporal_Grounding_v1):
                                         node_frame_weight=node_frame_weights.flatten(1) # V h_nq_T
                                         )
         scores = rearrange(scores, 'V (h nq) -> V h nq',h=self.nheads)
-        if E == 0:
-            scores = scores + self.context_2.sum() * 0. + self.context_1.sum() * 0.
         return scores.mean(1) # V nq
 
     def message(self, 

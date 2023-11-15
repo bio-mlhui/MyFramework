@@ -134,7 +134,7 @@ class Trainer:
             debug_data_loding = False
             debug_step_iteration = True
             for idx, batch_dict in enumerate(self.train_loader):
-                if idx == 5:
+                if debug_data_loding:
                     continue
                 if debug_step_iteration:
                     break

@@ -4808,6 +4808,191 @@ def amr_grounding_2dobj(device, configs):
         raise ValueError()
 
 
+class AMR_Grounding_2DObj_MeVis(AMR_Grounding_2DObj):
+    def __init__(self, d_model=256, max_stride=32, pt_dir='/home/xhh/pt', work_dir=None, mode=None, loss_weight={}, tasks={ 'objdecoder': {} }, pixel_mean=[0.485, 0.456, 0.406], pixel_std=[0.229, 0.224, 0.225], amrbart_wordEmbedding_freeze=True, amrtext_wordEmbedding_proj={ 'name': 'FeatureResizer','input_feat_size': 1024,'output_feat_size': 256,'dropout': 0,'do_ln': True }, obj_decoder={ 'name': None,'path': None,'freeze': True }, reason_module={}, temporal_decoder={}, fusion={}, use_we=False, loss_type='object') -> None:
+        super().__init__(d_model, max_stride, pt_dir, work_dir, mode, loss_weight, tasks, pixel_mean, pixel_std, amrbart_wordEmbedding_freeze, amrtext_wordEmbedding_proj, obj_decoder, reason_module, temporal_decoder, fusion, use_we, loss_type)
+
+        assert 'sigmoid' in reason_module['name']
+
+
+    def objdecoder_loss_referent(self, model_outs, targets):
+        loss_layer_weights = self.tasks['objdecoder']['loss_layer_weights']
+        isvalid = targets['isvalid'] #list[ni], batch
+        device = isvalid[0].device
+        num_objs = len(isvalid)
+        num_objs = torch.as_tensor([num_objs], dtype=torch.float, device=device)
+        if is_dist_avail_and_initialized():
+            torch.distributed.all_reduce(num_objs)
+        num_objs = torch.clamp(num_objs / get_world_size(), min=1).item()
+        
+        loss_value = {'objdecoder_mask': torch.tensor(0, device=device).float(), 
+                      'objdecoder_dice': torch.tensor(0, device=device).float(),
+                      'objdecoder_reason': torch.tensor(0, device=device).float(),}
+        
+        out_mask_logits = model_outs['objdecoder']['pred_masks'] # list[b nq H W], num_layers
+        out_gscores = model_outs['objdecoder']['reason_2d'] # list[b ni], num_layers     
+        assert len(loss_layer_weights) == len(out_mask_logits)
+        for layer_idx, (layer_mask_output, layer_gscore_output, layer_loss_weight) in enumerate(zip(out_mask_logits, out_gscores, loss_layer_weights)):
+            if layer_loss_weight != 0:
+                matching_indices = self.objdecoder_matching_referent(layer_mask_output, targets)
+                if self.loss_weight['objdecoder_mask'] != 0 or self.loss_weight['objdecoder_dice'] !=0:
+                    assert layer_mask_output is not None
+                    masks_losses = self.objdecoder_masks_loss_referent(layer_mask_output, targets, matching_indices, num_objs)
+                    for k in masks_losses.keys():
+                        loss_value[k] += layer_loss_weight * masks_losses[k]
+                if (self.loss_weight['objdecoder_reason'] != 0) and (layer_gscore_output is not None):
+                    reason_2d_loss = self.ref_choose_2d_loss_referent(layer_gscore_output, matching_indices, targets, num_objs)
+                    for k in reason_2d_loss.keys():
+                        loss_value[k] += layer_loss_weight * reason_2d_loss[k]
+        return loss_value      
+
+    @torch.no_grad()
+    def objdecoder_matching_referent(self, out_mask_logits, targets):
+        # b nq H W
+        # list[ni H W]
+        tgt_masks = targets['masks']
+        referent_idx = targets['gt_referent_idx'] # lis[int], batch
+        src_masks_logits = out_mask_logits  # b nq h w
+        batch_size, nq, h, w = src_masks_logits.shape 
+        indices = [] 
+        for i in range(batch_size):
+            out_mask = src_masks_logits[i]  # nq h w
+            tgt_mask = tgt_masks[i][[referent_idx[i]]].to(out_mask) # 1 H W
+            cost_mask = batch_sigmoid_ce_loss(out_mask.flatten(1), tgt_mask.flatten(1)) # nq hw : n hw -> nq n
+            cost_dice = batch_dice_loss(out_mask.flatten(1), tgt_mask.flatten(1))
+
+            C = self.tasks['objdecoder']['objseg_matching_costs']['mask'] * cost_mask + \
+                self.tasks['objdecoder']['objseg_matching_costs']['dice'] * cost_dice 
+            C = C.cpu()
+            indices.append(linear_sum_assignment(C))
+        return [
+            (torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64))
+            for i, j in indices
+        ]
+
+    def objdecoder_masks_loss_referent(self, out_mask_logits, targets, matching_indices, num_boxes):
+        # b nq H W
+        # list[ni H W], b
+        tgt_masks = targets['masks']
+        referent_idx = targets['gt_referent_idx'] # list[int], b
+        src_masks = torch.cat([t[J] for t, (J, _) in zip(out_mask_logits, matching_indices)], dim=0) # n_sigma h w
+        tgt_masks = torch.cat([t[[J]] for t, J in zip(tgt_masks, referent_idx)], dim=0) # n_simga h w
+        tgt_masks = tgt_masks.to(src_masks)
+        losses = {
+            "objdecoder_mask": ce_mask_loss(src_masks.flatten(1), tgt_masks.flatten(1), num_boxes=num_boxes),
+            "objdecoder_dice": dice_loss(src_masks.flatten(1), tgt_masks.flatten(1), num_boxes=num_boxes),
+        }
+        return losses    
+
+    def ref_choose_2d_loss_referent(self, layer_gscore_output, matching_indices,  targets, num_refs):
+        is_valid = targets['isvalid'] # list[ni], batch
+        referent_idx = targets['gt_referent_idx'] # list[int], batch
+        ref_is_valid = torch.tensor([isva[ridx].any() for isva, ridx in zip(is_valid, referent_idx)]).bool() # b
+        assert ref_is_valid.any()
+
+        match_as_gt_indices = [J[0] for (J, _) in matching_indices] # list[int], b
+        match_as_gt_indices = torch.tensor(match_as_gt_indices).long().to(self.device) # b
+        choose_loss = F.cross_entropy(layer_gscore_output[ref_is_valid], match_as_gt_indices[ref_is_valid], reduction='none') # b
+        return {'objdecoder_reason': choose_loss.sum() / num_refs}
+    
+
+    def temporal_decoder_loss_referent(self, model_outs, targets):
+        loss_layer_weights = self.tasks['temporal_decoder']['loss_layer_weights']
+        tgt_masks = targets['masks'] # list[ni t' H W]
+        referent_idx = targets['referent_idx'] # list[int]
+        # list[ni t' h w] -> list[t' hw]
+        num_refs = sum([tm[ref_idx].flatten(1).any(-1).int().sum() for tm, ref_idx in zip(tgt_masks, referent_idx)])
+        num_refs = torch.as_tensor([num_refs], dtype=torch.float, device=self.device)
+        if is_dist_avail_and_initialized():
+            torch.distributed.all_reduce(num_refs)
+        num_refs = torch.clamp(num_refs / get_world_size(), min=1).item()
+
+        num_refs_video = len(tgt_masks)
+        num_refs_video = torch.as_tensor([num_refs_video], dtype=torch.float, device=self.device)
+        if is_dist_avail_and_initialized():
+            torch.distributed.all_reduce(num_refs_video)
+        num_refs_video = torch.clamp(num_refs_video / get_world_size(), min=1).item()
+
+        loss_value = {'tempdecoder_mask': torch.tensor(0, device=self.device).float(), 
+                      'tempdecoder_dice': torch.tensor(0, device=self.device).float(),
+                      'tempdecoder_reason': torch.tensor(0, device=self.device).float(),}
+        
+        out_mask_logits = model_outs['temporal_decoder']['pred_masks'] # list[b nq T h w], num_layers
+        out_gscores = model_outs['temporal_decoder']['reason_3d'] # list[b nq], num_layers 
+        assert len(loss_layer_weights) == len(out_mask_logits)
+        for layer_idx, (layer_mask_output, layer_gscore_output, layer_loss_weight) in enumerate(zip(out_mask_logits, out_gscores,
+                                                                                                     loss_layer_weights)):
+            if layer_loss_weight != 0:
+                matching_indices = self.temporal_decoder_matching_referent(layer_mask_output, targets)
+                if self.loss_weight['tempdecoder_mask'] != 0 or self.loss_weight['tempdecoder_dice'] !=0:
+                    assert layer_mask_output is not None
+                    masks_losses = self.temporal_decoder_masks_loss_referent(layer_mask_output, targets, matching_indices, num_refs)
+                    for k in masks_losses.keys():
+                        loss_value[k] += layer_loss_weight * masks_losses[k]
+                if (self.loss_weight['tempdecoder_reason'] != 0) and (layer_gscore_output is not None):
+                    reason_loss = self.temporal_reason_loss_referent(layer_gscore_output, targets, matching_indices, num_refs, num_refs_video)
+                    for k in reason_loss.keys():
+                        loss_value[k] += layer_loss_weight * reason_loss[k]
+        return loss_value     
+
+    @torch.no_grad()
+    def temporal_decoder_matching_referent(self, out_mask_logits, targets):
+        perFrame_has_ann = targets['has_ann'] # list[T]
+        tgt_masks = targets['masks'] # list[ni t' H W]
+        referent_idx = targets['referent_idx'] # list[int], batch
+        src_masks_logits = out_mask_logits  # b nq T h w
+
+        batch_size, nq, T, h, w = src_masks_logits.shape
+        indices = [] 
+        for i in range(batch_size):
+            out_mask = src_masks_logits[i]  # nq T h w
+            out_mask = out_mask[:, perFrame_has_ann[i]] # nq t' h w
+            tgt_mask = tgt_masks[i][[referent_idx[i]]].to(out_mask) # 1 t' H W
+            tgt_mask = tgt_mask.to(out_mask)
+            cost_mask = batch_sigmoid_ce_loss(out_mask.flatten(1), tgt_mask.flatten(1)) # nq 1
+            cost_dice = batch_dice_loss(out_mask.flatten(1), tgt_mask.flatten(1)) # nq 1
+
+            C =  self.tasks['temporal_decoder']['objseg_matching_costs']['mask'] * cost_mask + \
+                self.tasks['temporal_decoder']['objseg_matching_costs']['dice'] * cost_dice
+            C = C.cpu()
+            indices.append(linear_sum_assignment(C))            
+            
+        return [
+            (torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64))
+            for i, j in indices
+        ]
+
+    def temporal_decoder_masks_loss_referent(self, out_mask_logits, targets, matching_indices, num_refs):
+        has_anntation = targets['has_ann'] # list[T]
+        ref_idx = targets['referent_idx'] # list[int], batch
+        # b nq T H W -> list[1 t' H W]
+        src_masks = [t[J][:, has_ann.bool()] for t, (J, _), has_ann in zip(out_mask_logits, matching_indices, has_anntation)]
+
+        # list[1 t' H W], b 
+        tgt_masks = [t[[J]] for t, J in zip(targets['masks'], ref_idx)]
+        
+        src_masks = torch.cat([sm.flatten(0, 1) for sm in src_masks],dim=0)# 1_t'_sigma h w
+        tgt_masks = torch.cat([tm.flatten(0, 1) for tm in tgt_masks],dim=0) # 1_t'_sigma h w
+        tgt_masks = tgt_masks.to(src_masks)
+        # 每个视频可能有不同的annotation数量
+        # list[ni] -> n_sigma
+        losses = {
+            "tempdecoder_mask": ce_mask_loss(src_masks.flatten(1), tgt_masks.flatten(1), num_refs),
+            "tempdecoder_dice": dice_loss(src_masks.flatten(1), tgt_masks.flatten(1), num_refs),
+        }
+        return losses    
+
+    def temporal_reason_loss_referent(self, layer_gscore_output, targets, matching_indices, num_refs, num_refs_video):
+        # b nq
+        referent_idx = targets['referent_idx'] # list[int], batch
+        is_valid = targets['is_valid'] # list[ni]
+        ref_is_valid = torch.tensor([is_v[ref_idx] for is_v, ref_idx in zip(is_valid, referent_idx)]).bool().to(self.device) # b
+        match_as_gt_indices = [J[0] for (J, _) in matching_indices] # list[int], b
+        match_as_gt_indices = torch.tensor(match_as_gt_indices).long().to(self.device) # b
+        choose_loss = F.cross_entropy(layer_gscore_output[ref_is_valid], match_as_gt_indices[ref_is_valid], reduction='none') # b
+        return {'tempdecoder_reason': choose_loss.sum() / num_refs_video}
+
+
 class AMR_Grounding_3DObj(nn.Module):
     def __init__(self, 
                  d_model=256,

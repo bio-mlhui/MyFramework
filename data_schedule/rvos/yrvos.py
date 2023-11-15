@@ -194,7 +194,7 @@ def test(loader, model, device, is_distributed, is_main_process, output_dir):
         zip_file_path = os.path.join(output_dir, f'submission')
         shutil.make_archive(zip_file_path, 'zip', root_dir=output_dir, base_dir='Annotations')
         print('a zip file was successfully created.')
-        # shutil.rmtree(save_dir)  # remove the uncompressed annotations for memory efficiency
+        shutil.rmtree(save_dir)  # remove the uncompressed annotations for memory efficiency
     if is_distributed:
         dist.barrier() 
     return {}
