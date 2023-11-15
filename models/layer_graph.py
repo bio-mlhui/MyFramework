@@ -2542,7 +2542,7 @@ class Spatial_Temporal_Grounding_v3(Spatial_Temporal_Grounding_v1):
                          temp_query_proj=temp_query_proj,
                          frame_query_proj=frame_query_proj)
         self.detach_weight = detach_weight
-        
+
     def message_3d(self, 
                 edge_attr,  # E hc
                 x_j,   # E nq

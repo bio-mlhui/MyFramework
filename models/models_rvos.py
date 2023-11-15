@@ -4569,7 +4569,13 @@ class AMR_Grounding_2DObj(nn.Module):
         if is_dist_avail_and_initialized():
             torch.distributed.all_reduce(num_refs)
         num_refs = torch.clamp(num_refs / get_world_size(), min=1).item()
-        
+
+        num_refs_video = len(tgt_masks)
+        num_refs_video = torch.as_tensor([num_refs_video], dtype=torch.float, device=self.device)
+        if is_dist_avail_and_initialized():
+            torch.distributed.all_reduce(num_refs_video)
+        num_refs_video = torch.clamp(num_refs_video / get_world_size(), min=1).item()
+
         loss_value = {'tempdecoder_mask': torch.tensor(0, device=self.device).float(), 
                       'tempdecoder_dice': torch.tensor(0, device=self.device).float(),
                       'tempdecoder_reason': torch.tensor(0, device=self.device).float(),}
@@ -4587,7 +4593,7 @@ class AMR_Grounding_2DObj(nn.Module):
                     for k in masks_losses.keys():
                         loss_value[k] += layer_loss_weight * masks_losses[k]
                 if (self.loss_weight['tempdecoder_reason'] != 0) and (layer_gscore_output is not None):
-                    reason_loss = self.temporal_reason_loss_referent(layer_gscore_output, targets, matching_indices, num_refs)
+                    reason_loss = self.temporal_reason_loss_referent(layer_gscore_output, targets, matching_indices, num_refs, num_refs_video)
                     for k in reason_loss.keys():
                         loss_value[k] += layer_loss_weight * reason_loss[k]
         return loss_value     
@@ -4639,7 +4645,7 @@ class AMR_Grounding_2DObj(nn.Module):
         }
         return losses    
 
-    def temporal_reason_loss_referent(self, layer_gscore_output, targets, matching_indices, num_refs):
+    def temporal_reason_loss_referent(self, layer_gscore_output, targets, matching_indices, num_refs, num_refs_video):
         # b nq
         referent_idx = targets['referent_idx'] # list[int], batch
         is_valid = targets['is_valid'] # list[ni]
@@ -4647,7 +4653,7 @@ class AMR_Grounding_2DObj(nn.Module):
         match_as_gt_indices = [J[0] for (J, _) in matching_indices] # list[int], b
         match_as_gt_indices = torch.tensor(match_as_gt_indices).long().to(self.device) # b
         choose_loss = F.cross_entropy(layer_gscore_output[ref_is_valid], match_as_gt_indices[ref_is_valid], reduction='none') # b
-        return {'tempdecoder_reason': choose_loss.sum() / num_refs}
+        return {'tempdecoder_reason': choose_loss.sum() / num_refs_video}
 
 
     def binary_cross_entropy_mask_loss(self, src_masks, tgt_masks):
