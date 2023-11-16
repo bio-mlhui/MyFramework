@@ -3629,7 +3629,8 @@ class AMR_Grounding_2DObj(nn.Module):
                 temporal_decoder = {},
                 fusion={},
                 use_we=False,
-                loss_type='object'
+                loss_type='object',
+                word_embedding_random=False,
                 ) -> None:
         super().__init__()
         self.use_we = use_we
@@ -3643,6 +3644,10 @@ class AMR_Grounding_2DObj(nn.Module):
         from .amr_utils.utils import BartForConditionalGeneration
         AMRBart = BartForConditionalGeneration.from_pretrained(os.path.join(self.pt_dir, 'amr', 'AMRBART_pretrain'))
         self.amrbart_wordEmbedding = AMRBart.model.shared
+        if word_embedding_random:
+            for p in self.amrbart_wordEmbedding.parameters():
+                if p.dim() > 1:
+                    nn.init.xavier_uniform_(p)
         if amrbart_wordEmbedding_freeze:
             for p in self.amrbart_wordEmbedding.parameters():
                 p.requires_grad_(False) 
@@ -4738,6 +4743,7 @@ def amr_grounding_2dobj(device, configs):
         tasks=configs['tasks'],
         pixel_mean=configs['pixel_mean'],
         pixel_std=configs['pixel_std'],
+        word_embedding_random=configs['word_embedding_random'] if 'word_embedding_random' in configs else False,
         amrbart_wordEmbedding_freeze=configs['amrbart_wordEmbedding_freeze'],
         amrtext_wordEmbedding_proj=configs['amrtext_wordEmbedding_proj'],
 
