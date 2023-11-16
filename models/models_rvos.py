@@ -4004,7 +4004,7 @@ class AMR_Grounding_2DObj(nn.Module):
         batch_size, _, H, W = samples.tensors.shape
         new_targets = self.rios_targets_handler(targets, pad_H=H, pad_W=W)
         model_outs = self.model_outputs(samples, text_queries, auxiliary, targets=new_targets) 
-        if self.loss_type == referent':
+        if self.loss_type == 'referent':
             loss_value_dict = self.objdecoder_loss_referent(model_outs, new_targets)
         else:
             loss_value_dict = self.objdecoder_loss(model_outs, new_targets)
