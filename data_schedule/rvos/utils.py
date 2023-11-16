@@ -259,6 +259,7 @@ class DatasetWithAux(Dataset):
         elif self.text_aux_version == 1:
             amr_wv = self.text_aux_by_auxid[text_auxid]['inference_graph'] 
             tok_string = self.text_aux_by_auxid[text_auxid]['toknized_string']
+            amr_tree_string = self.text_aux_by_auxid[text_auxid]['amr_tree_string']
             G : nx.DiGraph = nx.node_link_graph(amr_wv)
             top_var = G.graph['top']
             nodekey_to_token = {key:node_token for key, node_token in zip(G.nodes(), G.nodes())} # var和concept一样
@@ -347,7 +348,8 @@ class DatasetWithAux(Dataset):
                 'token_ids': tokens_ids, 
                 'node_alignments': node_alignments,
                 'text_token_ids': text_token_ids,
-                'text_token_splits': text_token_splits
+                'text_token_splits': text_token_splits,
+                'amr_tree_string': amr_tree_string,
             }
             
         elif self.text_aux_version == 2:
@@ -644,6 +646,7 @@ class CollatorWithAux:
             node_alignments = [s_dic['node_alignments'] for s_dic in auxiliary]
             text_token_ids = [s_dic['text_token_ids'] for s_dic in auxiliary] # list[list[int]], batch
             text_token_splits = [s_dic['text_token_splits'] for s_dic in auxiliary]
+            amr_tree_strings = [s_dic['amr_tree_string'] for s_dic in auxiliary]
             text_token_ids, _ = text_pad_token_ids(text_token_ids, self.tokenizer.pad_token_id)
             if 'all_concept_roles' in auxiliary[0]:
                 all_concept_roles = [s_dic['all_concept_roles'] for s_dic in auxiliary]
@@ -661,7 +664,8 @@ class CollatorWithAux:
                 'text_token_ids': text_token_ids,
                 'text_token_splits': text_token_splits,
                 'all_concept_roles': all_concept_roles,
-                'all_concept_roles_pad': all_concept_roles_pad
+                'all_concept_roles_pad': all_concept_roles_pad,
+                'amr_tree_strings': amr_tree_strings
             }
         elif self.text_aux_version == 3:
             amrs = [s_dic['amrs'] for s_dic in auxiliary]

@@ -3810,7 +3810,7 @@ class AMR_Grounding_2DObj(nn.Module):
         # amr_token_feats = self.amrtext_wordEmbedding_proj(amr_token_feats) # b (V+E)max c
         # return amrs, amr_token_feats, amr_token_seg_ids, text_feats, text_pad_masks, node_alignments
 
-    def model_outputs(self, samples : NestedTensor, text_queries, auxiliary, targets=None):
+    def model_outputs(self, samples : NestedTensor, text_queries, auxiliary, targets=None, visualize_dir=None):
         """ text_auxiliary
         'amrs': list[T(2 E_i)]
         'seg_ids': b (V+E)max
@@ -3981,7 +3981,15 @@ class AMR_Grounding_2DObj(nn.Module):
                                                              node_alignments=node_alignments,
                                                              text_feats=txt_feat,
                                                              text_pad_masks=text_pad_masks) # list[vi nq]
-                    
+                    # 可视化所有object query的mask
+                    if visualize_dir is not None:
+                        save_model_output(videos=samples.tensors,
+                                        text_query=text_queries[0], 
+                                        amr=auxiliary['amrs'][0],
+                                        amr_tree_string=auxiliary['amr_tree_strings'][0], 
+                                        directory=visualize_dir,
+                                        pred_masks=temporal_pred_masks_by_layer.flatten(0,1)[-1][0],
+                                        scores=grounding_score[0],)
                     if self.reason_3d_choose == '第一个':
                         grounding_score = torch.stack([lg[0] for lg in grounding_score], dim=0)
                     else:
@@ -4294,14 +4302,14 @@ class AMR_Grounding_2DObj(nn.Module):
         return loss_dict_unscaled, loss_dict_scaled, grad_total_norm 
 
     @torch.no_grad()
-    def sample_rvos(self, samples, text_queries, auxiliary, targets, visualize=False):
+    def sample_rvos(self, samples, text_queries, auxiliary, targets, visualize_dir=False):
         if not isinstance(samples, NestedTensor):
-            samples = nested_tensor_from_videos_list_with_stride(samples, max_stride=self.max_stride)
+            samples = nested_tensor_from_videos_list_with_stride(samples, max_stride=self.max_stride) # targets[0]['masks']
         T, batch_size, _, H, W = samples.tensors.shape
         perFrame_has_ann = [t['has_ann'] for t in targets] # bool, t
         ann_number_by_batch = [f.int().sum() for f in perFrame_has_ann]
         perFrame_has_ann = torch.stack([F.pad(t.float(), pad=(0, T-len(t))).bool() for t in perFrame_has_ann], dim=0) # b T
-        decoder_layer_preds = self.model_outputs(samples, text_queries, auxiliary)
+        decoder_layer_preds = self.model_outputs(samples, text_queries, auxiliary, visualize_dir=visualize_dir,)
         # b nq T h w -> b T nq h w
         out_mask_logits = decoder_layer_preds['temporal_decoder']['pred_masks'][-1].permute(0,2,1,3,4)
         if self.mode == '测试rvos bound':
@@ -4707,13 +4715,13 @@ class AMR_Grounding_2DObj(nn.Module):
             raise ValueError()
 
     @torch.no_grad()
-    def sample(self, samples, text_queries, auxiliary, targets, visualize=False):
+    def sample(self, samples, text_queries, auxiliary, targets, visualize_dir=False):
         if self.mode == 'rios测试预训练imseg':
             return self.sample_rios(samples, text_queries=None, auxiliary=None, targets=targets)
         elif self.mode == '只训练rios':
             return self.sample_rios(samples, text_queries, auxiliary, targets)
         elif self.mode == '只训练rvos' or self.mode == 'rios之后rvos' or self.mode == 'joint':
-            return self.sample_rvos(samples, text_queries, auxiliary, targets) 
+            return self.sample_rvos(samples, text_queries, auxiliary, targets,visualize_dir=visualize_dir) 
         else:
             raise ValueError()
 
@@ -10532,6 +10540,104 @@ def text_v0linamr(device, configs):
     return model, optimizer 
 
 
+from detectron2.utils.visualizer import Visualizer
+from detectron2.structures import Instances
+from detectron2.data import MetadataCatalog
+
+from detectron2.config import configurable
+from detectron2.layers import Conv2d
+from detectron2.utils.visualizer import ColorMode
+import torchvision.transforms as transforms
+import networkx as nx
+
+def generate_instance_canvas(vid_frames, metadata, H, W, pred_mask):
+    """pred_mask: h w, score:float"""
+    istce_canvas = Visualizer(img_rgb=vid_frames*255, metadata=metadata, instance_mode=ColorMode.SEGMENTATION)
+    istce = Instances([H, W], 
+        pred_masks=pred_mask.unsqueeze(0), # 1 H W
+        scores=torch.tensor([1]), # 1,
+        pred_classes=torch.tensor([0]) # 1,
+    )
+    istce_canvas.draw_instance_predictions(istce)
+    istce_canvas = istce_canvas.get_output()
+    return istce_canvas.get_image()
 
 
+from torch_geometric.utils.convert import to_networkx
+# 存储一个batch的debug
+def save_model_output(videos, text_query, amr, amr_tree_string,  directory, pred_masks, scores):
+    # t 3 h w
+    # nq t h w
+    # vi nq 
+    #
+    # [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
+    tgt_dir = '/'.join(directory.split('/')[:-1])
+    os.makedirs(tgt_dir, exist_ok=True)
+    invTrans = transforms.Compose([ transforms.Normalize(mean = [ 0., 0., 0. ], std = [ 1/0.229, 1/0.224, 1/0.225 ]),
+                                    transforms.Normalize(mean = [ -0.485, -0.456, -0.406 ], std = [ 1., 1., 1. ]),])
+    metadata = MetadataCatalog.get('youtube_rvos')
+
+    final_image = []
+    # draw video frames
+    vid_frames = videos.detach().cpu()
+    vid_frames = invTrans(vid_frames)
+    vid_frames = torch.clamp(vid_frames, min=0, max=1).permute(2, 0, 3, 1).flatten(1,2)  # t 3 h w -> h t w 3 -> h (t w) 3
+    H, W = vid_frames.shape[:2]
+    final_image.append(vid_frames*255)
+    # draw refer preditions
+    pred_masks = pred_masks.permute(0, 2, 1, 3).flatten(2,3).detach().cpu() # t nq h w -> nq h t w -> nq h (t w) 
+    pred_masks = (F.interpolate(pred_masks.float().unsqueeze(0), size=[H, W], mode='bilinear', align_corners=False) > 0)[0]
+    scores = scores.detach().cpu()# vi nq   
+    _, map_nqs = scores.max(-1)
+    num_instances = len(pred_masks)
+    from joblib import Parallel, delayed
+    import multiprocessing
+    params_by_instance = [(vid_frames, metadata, H, W, pred_mask) for pred_mask in pred_masks]
+    n_jobs = min(multiprocessing.cpu_count(), num_instances)
+    instances_canvas = Parallel(n_jobs)(delayed(generate_instance_canvas)(*p) for p in params_by_instance)
+    final_image.extend(instances_canvas) # h (t w) 3
+
+    title = [text_query, amr_tree_string]
+    amr_tree_lines = len(amr_tree_string.split('\n'))
+    max_sentence_length = max([len(tit) for tit in title])
+    num_sentences = 2 + amr_tree_lines
+
+    assert amr.num_nodes == len(map_nqs)
+    max_nq_string = ' '.join([f'{str(key)} / ' + str(max_nq_idx) + ';' for key, max_nq_idx in zip(list(range(amr.num_nodes)), map_nqs.tolist())])
+    title.append(max_nq_string)
+    title = '\n'.join(title)
+    font_size = 20
+    linespacing = 2
+    whole_image = np.vstack(final_image) / 255.0 # (# h) (t w) 3
+
+    fig_with = max(whole_image.shape[1], (font_size*max_sentence_length))
+    fig_height = whole_image.shape[0] + (num_sentences+linespacing*(num_sentences-1)) * font_size
+
+    sep = whole_image.shape[0] / float(fig_height)
+    fig, axs = plt.subplots(1, 2, figsize=(fig_with/100.0, fig_height/100.0))
+    axs[0].xaxis.set_visible(False)
+    axs[0].yaxis.set_visible(False)
+    axs[0].imshow(whole_image)
+    axs[0].set_position([(0.5 - whole_image.shape[1]/(float(fig_with)*2)),
+                        0, 
+                        whole_image.shape[1]/float(fig_with), whole_image.shape[0]/float(fig_height)])
+
+    axs[1].xaxis.set_visible(False)
+    axs[1].yaxis.set_visible(False)
+    axs[1].set_position([0.3, sep, 1 - sep, 1 - sep])
+    G = to_networkx(amr)
+    options = {
+        "font_size": 20,
+        "node_color": "red",
+        "edgecolors": "blue",
+        "linewidths": 0,
+        "width": 5,
+        "ax": axs[1],
+        "labels": {key: str(key) for key in range(amr.num_nodes)},
+    }
+    nx.draw(G,**options)
+
+    fig.text(0, sep, title, fontsize=font_size, linespacing=linespacing,)
+    fig.savefig(directory)
+    plt.close()     
 

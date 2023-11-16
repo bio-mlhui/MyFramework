@@ -197,7 +197,7 @@ def validate(loader, model, device, is_distributed, is_main_process, output_dir,
             text_queries = batch_dict['text_query']
             auxiliary = to_device(batch_dict['auxiliary'], device)
             # [nq t' h w], [n t'/n], batch;
-            model_preds = model.sample(samples, text_queries, auxiliary, targets,)
+            model_preds = model.sample(samples, text_queries, auxiliary, targets, visualize_dir=os.path.join(output_dir, 'visualize', f'sample{idx}.png'))
             model_mask_preds = model_preds['query_pred_masks'] # [n t' h w], batch
             nf_by_batch = [mm.shape[1] for mm in model_mask_preds]
             query_mask_preds = [] # [n h w] bt'
