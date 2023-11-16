@@ -2702,6 +2702,8 @@ class Spatial_Temporal_Grounding_v3(Spatial_Temporal_Grounding_v1):
         
         if self.only_component_1:
             return scores.mean(1)
+        if self.only_component_2:
+            scores = torch.zeros_like(scores)
         
         if E == 0:
             scores = scores + self.context_2.sum() * 0. + self.context_1.sum() * 0.
@@ -2759,6 +2761,8 @@ def spatial_temporal_grounding_v3(configs):
                         obj_query_proj=configs['obj_query_obj'],
                         temp_query_proj=configs['temp_query_proj'] if 'temp_query_proj' in configs else None,
                         frame_query_proj=configs['frame_query_proj'] if 'frame_query_proj' in configs else None,
+                        only_component_2=configs['only_component_2' if 'only_component_2' in configs else False],
+                        only_component_1=configs['only_component_1'] if 'only_component_1' in configs else False,
                         detach_weight=configs['detach_weight'])
 
 
