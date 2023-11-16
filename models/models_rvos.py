@@ -3815,7 +3815,7 @@ class AMR_Grounding_2DObj(nn.Module):
         # amr_token_feats = self.amrtext_wordEmbedding_proj(amr_token_feats) # b (V+E)max c
         # return amrs, amr_token_feats, amr_token_seg_ids, text_feats, text_pad_masks, node_alignments
 
-    def model_outputs(self, samples : NestedTensor, text_queries, auxiliary, targets=None, visualize_dir=None):
+    def model_outputs(self, samples : NestedTensor, text_queries, auxiliary, targets=None, visualize_dir=False):
         """ text_auxiliary
         'amrs': list[T(2 E_i)]
         'seg_ids': b (V+E)max
@@ -3987,7 +3987,7 @@ class AMR_Grounding_2DObj(nn.Module):
                                                              text_feats=txt_feat,
                                                              text_pad_masks=text_pad_masks) # list[vi nq]
                     # 可视化所有object query的mask
-                    if visualize_dir is not None:
+                    if visualize_dir:
                         save_model_output(videos=samples.tensors,
                                         text_query=text_queries[0], 
                                         amr=auxiliary['amrs'][0],
