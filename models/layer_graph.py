@@ -2535,6 +2535,7 @@ class Spatial_Temporal_Grounding_v3(Spatial_Temporal_Grounding_v1):
                  detach_weight=None,
                  only_component_1=False,
                  only_component_2=False,
+                 all_zeros = False,
                  ):
         super().__init__(flow=flow,
                          d_model=d_model,
@@ -2546,6 +2547,7 @@ class Spatial_Temporal_Grounding_v3(Spatial_Temporal_Grounding_v1):
         self.detach_weight = detach_weight
         self.only_component_1 = only_component_1
         self.only_component_2 = only_component_2
+        self.all_zeros = all_zeros
 
     def message_3d(self, 
                 edge_attr,  # E hc
@@ -2699,7 +2701,9 @@ class Spatial_Temporal_Grounding_v3(Spatial_Temporal_Grounding_v1):
         ref_score = ref_score / ref_score.norm(dim=-1, keepdim=True)
         scores = ref_score @ self.ref_1
         scores = scores.squeeze(-1) # V h nq
-        
+
+        if self.all_zeros:
+            return  torch.zeros_like(scores)       
         if self.only_component_1:
             return scores.mean(1)
         if self.only_component_2:
@@ -2763,6 +2767,7 @@ def spatial_temporal_grounding_v3(configs):
                         frame_query_proj=configs['frame_query_proj'] if 'frame_query_proj' in configs else None,
                         only_component_2=configs['only_component_2'] if 'only_component_2' in configs else False,
                         only_component_1=configs['only_component_1'] if 'only_component_1' in configs else False,
+                        all_zeros=configs['all_zeros'] if 'all_zeros' in configs else False,
                         detach_weight=configs['detach_weight'])
 
 
