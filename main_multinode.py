@@ -165,9 +165,9 @@ def run(process_id, trainer_configs, trainer_mode, trainer_name, device):
 gpu_ids = list(os.environ['CUDA_VISIBLE_DEVICES'].split(','))
 assert len(set(gpu_ids)) == len(gpu_ids)
 gpu_ids = list(range(len(gpu_ids)))
-LOCAL_RANK = int(os.environ['LOCAL_RANK'])
-WORLD_SIZE = int(os.environ['WORLD_SIZE'])
-WORLD_RANK = int(os.environ['RANK'])
+LOCAL_RANK = int(os.environ['OMPI_COMM_WORLD_LOCAL_RANK'])
+WORLD_SIZE = int(os.environ['OMPI_COMM_WORLD_SIZE'])
+WORLD_RANK = int(os.environ['OMPI_COMM_WORLD_RANK'])
 
 
 if __name__=="__main__":
