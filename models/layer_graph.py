@@ -2703,7 +2703,7 @@ class Spatial_Temporal_Grounding_v3(Spatial_Temporal_Grounding_v1):
         scores = scores.squeeze(-1) # V h nq
 
         if self.all_zeros:
-            return  torch.zeros_like(scores)       
+            return  torch.zeros_like(scores).mean(1)
         if self.only_component_1:
             return scores.mean(1)
         if self.only_component_2:

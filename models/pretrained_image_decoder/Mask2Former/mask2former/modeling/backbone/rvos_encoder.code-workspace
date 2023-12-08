@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"name": "rvos_encoder",
+			"path": "../../../../../.."
+		}
+	],
+	"settings": {
+		"bookmarks.saveBookmarksInProject": true,
+		"bookmarks.navigateThroughAllFiles": true
+	}
+}

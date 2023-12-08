@@ -80,13 +80,14 @@ def set_logging_file(output_dir, file_name, mode='a'):
     logger.setLevel(logging.DEBUG)
 
 
-def init_process_group_and_set_device(world_size, process_id, device_id):
+def init_process_group_and_set_device(backend, world_size, process_id, device_id):
     """
     This function needs to be called on each spawned process to initiate learning using DistributedDataParallel.
     The function initiates the process' process group and assigns it a single GPU to use during training.
     """
-    torch.cuda.set_device(device_id)
+    assert backend == 'nccl'
     device = torch.device(f'cuda:{device_id}')
+    torch.cuda.set_device(device)
     if world_size > 1:
         torch.distributed.init_process_group(
             torch.distributed.Backend.NCCL,
@@ -97,7 +98,7 @@ def init_process_group_and_set_device(world_size, process_id, device_id):
         setup_for_distributed(process_id == 0)
     return device
 
-def run(process_id, trainer_configs, trainer_mode, trainer_name, gpu_ids):
+def run(process_id, trainer_configs, trainer_mode, trainer_name, device):
 
     if process_id == 0:
         if trainer_mode == 'train_attmpt':
@@ -113,8 +114,6 @@ def run(process_id, trainer_configs, trainer_mode, trainer_name, gpu_ids):
         else:
             raise ValueError()
     
-    device = init_process_group_and_set_device(world_size=len(gpu_ids), process_id=process_id, device_id=gpu_ids[process_id],)
-
     create_trainer = task_entrypoint(trainer_name)
     trainer = create_trainer(configs=trainer_configs,  # configs里的ckpt只要不是空就load ckpt
                             process_id=process_id, 
@@ -163,6 +162,14 @@ def run(process_id, trainer_configs, trainer_mode, trainer_name, gpu_ids):
     if process_id == 0:
         wandb.finish()
 
+gpu_ids = list(os.environ['CUDA_VISIBLE_DEVICES'].split(','))
+assert len(set(gpu_ids)) == len(gpu_ids)
+gpu_ids = list(range(len(gpu_ids)))
+LOCAL_RANK = int(os.environ['LOCAL_RANK'])
+WORLD_SIZE = int(os.environ['WORLD_SIZE'])
+WORLD_RANK = int(os.environ['RANK'])
+
+
 if __name__=="__main__":
     os.environ["TOKENIZERS_PARALLELISM"] = "false"  # this disables a huggingface tokenizer warning (printed every epoch)
     torch.autograd.set_detect_anomaly(True)
@@ -177,6 +184,9 @@ if __name__=="__main__":
     logging.getLogger('h5py').setLevel(logging.WARNING)
     
     parser = argparse.ArgumentParser()
+    parser.add_argument("--local_rank", type=int, help="Local rank. Necessary for using the torch.distributed.launch utility.")
+    parser.add_argument("--backend", type=str, default="nccl", choices=['nccl', 'gloo'])
+
     parser.add_argument('--data_dir', type=str, default='/hpc2hdd/home/hxu047/datasets')
     parser.add_argument('--pt_dir', type=str, default='/hpc2hdd/home/hxu047/pt')
     parser.add_argument('--work_dir', type=str, default='/hpc2hdd/home/hxu047/workspace/rvos_encoder')
@@ -245,15 +255,8 @@ if __name__=="__main__":
 
     else:
         raise ValueError()      
-
-    gpu_ids = list(os.environ['CUDA_VISIBLE_DEVICES'].split(','))
-    assert len(set(gpu_ids)) == len(gpu_ids)
-    gpu_ids = list(range(len(gpu_ids)))
     
-    if len(gpu_ids) > 1:
-        torch.multiprocessing.spawn(run, nprocs=len(gpu_ids), args=(configs, args.mode, args.task, gpu_ids))
-    elif len(gpu_ids) == 1:
-        run(process_id=0, trainer_configs=configs, trainer_mode=args.mode, trainer_name=args.task, gpu_ids=gpu_ids)
-
+    device = init_process_group_and_set_device(backend=args.backend, world_size=WORLD_SIZE, process_id=WORLD_RANK, device_id=gpu_ids[LOCAL_RANK])
+    run(process_id=WORLD_RANK, trainer_configs=configs, trainer_mode=args.mode, trainer_name=args.task, device=device)
 
   

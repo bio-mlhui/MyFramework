@@ -1,3 +1,2 @@
-from .RVOS import rvos
-from .IMSEG import imseg
+from .RIV3S import *
 from .registry import task_entrypoint

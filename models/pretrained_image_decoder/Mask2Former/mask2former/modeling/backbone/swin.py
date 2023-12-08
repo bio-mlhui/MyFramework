@@ -14,7 +14,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
-
+from einops import rearrange
 from detectron2.modeling import BACKBONE_REGISTRY, Backbone, ShapeSpec
 
 
@@ -747,14 +747,21 @@ class D2SwinTransformer(SwinTransformer, Backbone):
         Returns:
             dict[str->Tensor]: names and the corresponding features
         """
-        assert (
-            x.dim() == 4
-        ), f"SwinTransformer takes an input of shape (N, C, H, W). Got {x.shape} instead!"
+        is_video = False
+        if x.dim() == 5:
+            # b c t h w
+            is_video = True
+            batch_size, _, nf, *_ = x.shape
+            x = rearrange(x, 'b c t h w -> (b t) c h w')
+
         outputs = {}
         y = super().forward(x)
         for k in y.keys():
             if k in self._out_features:
-                outputs[k] = y[k]
+                if is_video:
+                    outputs[k] = rearrange(y[k], '(b t) c h w -> b c t h w',t=nf,b=batch_size)
+                else:
+                    outputs[k] = y[k]
         return outputs
 
     def output_shape(self):

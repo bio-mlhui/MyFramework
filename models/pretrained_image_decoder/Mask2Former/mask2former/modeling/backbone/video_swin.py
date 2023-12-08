@@ -641,7 +641,7 @@ from util.misc import NestedTensor, is_main_process
 from detectron2.modeling import BACKBONE_REGISTRY, Backbone, ShapeSpec
 
 @BACKBONE_REGISTRY.register()
-class VideoSwinTransformer(nn.Module):
+class Video_Swin(SwinTransformer3D, Backbone):
     """
     A wrapper which allows using Video-Swin Transformer as a temporal encoder for MTTR.
     Check out video-swin's original paper at: https://arxiv.org/abs/2106.13230 for more info about this architecture.
@@ -649,45 +649,78 @@ class VideoSwinTransformer(nn.Module):
     Additionally, we slightly modify video-swin to make it output per-frame embeddings as required by MTTR (check our
     paper's supplementary for more details), and completely discard of its 4th block.
     """
-    def __init__(self, backbone_pretrained, backbone_pretrained_path, running_mode):
-        super(VideoSwinTransformer, self).__init__()
-        # patch_size is (1, 4, 4) instead of the original (2, 4, 4).
-        # this prevents swinT's original temporal downsampling so we can get per-frame features.
-        swin_backbone = SwinTransformer3D(patch_size=(1, 4, 4), embed_dim=96, depths=(2, 2, 6, 2),
-                                          num_heads=(3, 6, 12, 24), window_size=(8, 7, 7), drop_path_rate=0.1,
-                                          patch_norm=True)
-        if backbone_pretrained and running_mode == 'train':
-            state_dict = torch.load(backbone_pretrained_path)['state_dict']
-            # extract swinT's kinetics-400 pretrained weights and ignore the rest (prediction head etc.)
-            state_dict = {k[9:]: v for k, v in state_dict.items() if 'backbone.' in k}
+    def __init__(self, cfg, input_shape):
+        pretrained_dir = cfg.MODEL.SWIN.PRETRAINED_DIR
+        frozen_stages = cfg.MODEL.SWIN.FROZEN_STAGES
+        patch_size = cfg.MODEL.SWIN.PATCH_SIZE
+        in_chans = 3
+        embed_dim = cfg.MODEL.SWIN.EMBED_DIM
+        depths = cfg.MODEL.SWIN.DEPTHS
+        num_heads = cfg.MODEL.SWIN.NUM_HEADS
+        window_size = cfg.MODEL.SWIN.WINDOW_SIZE
+        mlp_ratio = cfg.MODEL.SWIN.MLP_RATIO
+        qkv_bias = cfg.MODEL.SWIN.QKV_BIAS
+        qk_scale = cfg.MODEL.SWIN.QK_SCALE
+        drop_rate = cfg.MODEL.SWIN.DROP_RATE
+        attn_drop_rate = cfg.MODEL.SWIN.ATTN_DROP_RATE
+        drop_path_rate = cfg.MODEL.SWIN.DROP_PATH_RATE
+        norm_layer = nn.LayerNorm
+        ape = cfg.MODEL.SWIN.APE
+        patch_norm = cfg.MODEL.SWIN.PATCH_NORM
+        use_checkpoint = cfg.MODEL.SWIN.USE_CHECKPOINT        
+        super().__init__(pretrained=True, # 没什么用
+                         pretrained2d=True, # 没什么用
+                         patch_size=patch_size, # 1, 4, 4
+                         in_chans=in_chans,
+                         embed_dim=embed_dim, # 96
+                         depths=depths, # 2 2 6 2
+                         num_heads=num_heads, # 3 6 12 24
+                         window_size=window_size, # 8 7 7
+                         mlp_ratio=mlp_ratio,
+                         qkv_bias=qkv_bias,
+                         qk_scale=qk_scale,
+                         drop_rate=drop_rate, 
+                         attn_drop_rate=attn_drop_rate,
+                         drop_path_rate=drop_path_rate, # # 0.1
+                         norm_layer=norm_layer,
+                         patch_norm=patch_norm, # True
+                         frozen_stages=frozen_stages,
+                         use_checkpoint=use_checkpoint)
 
-            # sum over the patch embedding weight temporal dim  [96, 3, 2, 4, 4] --> [96, 3, 1, 4, 4]
-            patch_embed_weight = state_dict['patch_embed.proj.weight']
-            patch_embed_weight = patch_embed_weight.sum(dim=2, keepdims=True)
-            state_dict['patch_embed.proj.weight'] = patch_embed_weight
-            swin_backbone.load_state_dict(state_dict)
+        state_dict = torch.load(pretrained_dir, map_location='cpu')['state_dict']
+        # extract swinT's kinetics-400 pretrained weights and ignore the rest (prediction head etc.)
+        state_dict = {k[9:]: v for k, v in state_dict.items() if 'backbone.' in k}
 
-        self.patch_embed = swin_backbone.patch_embed
-        self.pos_drop = swin_backbone.pos_drop
-        self.layers = swin_backbone.layers
+        # sum over the patch embedding weight temporal dim  [96, 3, 2, 4, 4] --> [96, 3, 1, 4, 4]
+        patch_embed_weight = state_dict['patch_embed.proj.weight']
+        patch_embed_weight = patch_embed_weight.sum(dim=2, keepdims=True)
+        state_dict['patch_embed.proj.weight'] = patch_embed_weight
+        self.load_state_dict(state_dict)
+
         self.downsamples = nn.ModuleList()
         for layer in self.layers:
             self.downsamples.append(layer.downsample)
             layer.downsample = None
         self.downsamples[-1] = None  # downsampling after the last layer is not necessary
 
-        self.layer_output_channels = [swin_backbone.embed_dim * 2 ** i for i in range(len(self.layers))]
-    
-        self.scale_strides = [[1,4],[1,8],[1,16],[1,32]] 
-        assert len(self.scale_strides) == len(self.layer_output_channels)
+        self.layer_output_channels = [self.embed_dim * 2 ** i for i in range(len(self.layers))]
+        self._out_features = cfg.MODEL.SWIN.OUT_FEATURES
+        self._out_feature_strides = {
+            "res2_t": [1, 4],
+            "res3_t": [1, 8],
+            "res4_t": [1, 16],
+            "res5_t": [1, 32],
+        }
+        self._out_feature_channels = {
+            "res2_t": self.num_features[0],
+            "res3_t": self.num_features[1],
+            "res4_t": self.num_features[2],
+            "res5_t": self.num_features[3],
+        }
 
-    def get_desc(self):
-        return self.layer_output_channels, self.scale_strides
-    
-    def forward(self, samples: NestedTensor):
-        vid_frames = rearrange(samples.tensors, 't b c h w -> b c t h w')
-
-        vid_embeds = self.patch_embed(vid_frames)
+    def forward(self, samples):
+        # b c t h w
+        vid_embeds = self.patch_embed(samples)
         vid_embeds = self.pos_drop(vid_embeds)
         layer_outputs = []  # layer outputs before downsampling
         for layer, downsample in zip(self.layers, self.downsamples):
@@ -697,14 +730,20 @@ class VideoSwinTransformer(nn.Module):
                 vid_embeds = rearrange(vid_embeds, 'b c t h w -> b t h w c')
                 vid_embeds = downsample(vid_embeds)
                 vid_embeds = rearrange(vid_embeds, 'b t h w c -> b c t h w')
-        layer_outputs = [rearrange(o, 'b c t h w -> t b c h w') for o in layer_outputs]
 
-        outputs = []
-        orig_pad_mask = samples.mask
-        for l_out in layer_outputs:
-            pad_mask = F.interpolate(orig_pad_mask.float(), size=l_out.shape[-2:]).to(torch.bool)
-            outputs.append(NestedTensor(l_out, pad_mask))
+        # outputs = []
+        # orig_pad_mask = samples.mask
+        # for l_out in layer_outputs:
+        #     pad_mask = F.interpolate(orig_pad_mask.float(), size=l_out.shape[-2:]).to(torch.bool)
+        #     outputs.append(NestedTensor(l_out, pad_mask))
+        outputs = {}
+        for k, lo in zip(self._out_feature_strides.keys(), layer_outputs):
+            outputs[k] = lo
         return outputs
 
     def num_parameters(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+    @property
+    def size_divisibility(self):
+        return 32

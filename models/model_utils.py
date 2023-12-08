@@ -8,10 +8,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch.nn as nn
 import copy
-
+from .transformer_deformable import DeformableTransformerEncoder, DeformableTransformerEncoderLayer
+from .transformer import TransformerEncoder, TransformerEncoderLayer, _get_clones
+from einops import rearrange, reduce, repeat
 _model_entrypoints = {}
 def register_model(fn):
     model_name = fn.__name__
+    if model_name in _model_entrypoints:
+        raise ValueError(f'model name {model_name} has been registered')
     _model_entrypoints[model_name] = fn
 
     return fn
@@ -19,7 +23,7 @@ def model_entrypoint(model_name):
     try:
         return _model_entrypoints[model_name]
     except KeyError as e:
-        print(f'RVOS moel {model_name} not found')
+        print(f'Model Name {model_name} not found')
 
 def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
@@ -293,3 +297,390 @@ def visualization_for_AMR_V0(videos, text_query, directory,
         fig.text(0, sep, title, fontsize=font_size, linespacing=linespacing,)
         fig.savefig(os.path.join(directory,f'sample{batch_idx}.png'))
         plt.close()  
+
+
+
+def dice_loss(inputs, targets, num_boxes):
+    """
+    Compute the DICE loss, similar to generalized IOU for masks
+    Args:
+        inputs: A float tensor of arbitrary shape.
+                The predictions for each example.
+        targets: A float tensor with the same shape as inputs. Stores the binary
+                 classification label for each element in inputs
+                (0 for the negative class and 1 for the positive class).
+    """
+    inputs = inputs.sigmoid()
+    inputs = inputs.flatten(1)
+    numerator = 2 * (inputs * targets).sum(1)
+    denominator = inputs.sum(-1) + targets.sum(-1)
+    loss = 1 - (numerator + 1) / (denominator + 1)
+    return loss.sum() / num_boxes
+
+
+def ce_mask_loss(inputs, targets, num_boxes):
+    """
+    Loss used in RetinaNet for dense detection: https://arxiv.org/abs/1708.02002.
+    Args:
+        inputs: 
+            b=n_sigma thw
+        targets: b=n_sigma thw
+            (0 for the negative class and 1 for the positive class).
+    Returns:
+        Loss tensor
+    """
+    # n_sigma=b thw
+    ce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
+    # mean(b mean(thw)), 对于a2d来说，num_boxes=
+    return ce_loss.mean(1).sum() / num_boxes
+
+def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: float = 2):
+    """
+    Loss used in RetinaNet for dense detection: https://arxiv.org/abs/1708.02002.
+    Args:
+        inputs: A float tensor of arbitrary shape.
+                The predictions for each example.
+        targets: A float tensor with the same shape as inputs. Stores the binary
+                 classification label for each element in inputs
+                (0 for the negative class and 1 for the positive class).
+        alpha: (optional) Weighting factor in range (0,1) to balance
+                positive vs negative examples. Default = -1 (no weighting).
+        gamma: Exponent of the modulating factor (1 - p_t) to
+               balance easy vs hard examples.
+    Returns:
+        Loss tensor
+    """
+    prob = inputs.sigmoid()
+    ce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
+    p_t = prob * targets + (1 - prob) * (1 - targets)
+    loss = ce_loss * ((1 - p_t) ** gamma)
+
+    if alpha >= 0:
+        alpha_t = alpha * targets + (1 - alpha) * (1 - targets)
+        loss = alpha_t * loss
+
+    return loss.mean(1).sum() / num_boxes
+
+def batch_sigmoid_focal_loss(inputs, targets, alpha: float = 0.25, gamma: float = 2):
+    N, M = len(inputs), len(targets)
+    inputs = inputs.flatten(1).unsqueeze(1).expand(-1, M, -1) # [N, M, THW]
+    targets = targets.flatten(1).unsqueeze(0).expand(N, -1, -1) # [N, M, THW]
+
+    prob = inputs.sigmoid()
+    ce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
+    p_t = prob * targets + (1 - prob) * (1 - targets)
+    coef = ce_loss * ((1 - p_t) ** gamma)
+
+    if alpha >= 0:
+        alpha_t = alpha * targets + (1 - alpha) * (1 - targets)
+        coef = alpha_t * coef
+
+    return coef.mean(2) # [N, M]
+
+def batch_dice_loss(inputs: torch.Tensor, targets: torch.Tensor):
+    """
+    Compute the DICE loss, similar to generalized IOU for masks
+    Args:
+        inputs: A float tensor of arbitrary shape.
+                The predictions for each example.
+        targets: A float tensor with the same shape as inputs. Stores the binary
+                 classification label for each element in inputs
+                (0 for the negative class and 1 for the positive class).
+    """
+    inputs = inputs.sigmoid()
+    inputs = inputs.flatten(1)
+    numerator = 2 * torch.einsum("nc,mc->nm", inputs, targets)
+    denominator = inputs.sum(-1)[:, None] + targets.sum(-1)[None, :]
+    loss = 1 - (numerator + 1) / (denominator + 1)
+    return loss
+
+def batch_sigmoid_ce_loss(inputs: torch.Tensor, targets: torch.Tensor):
+    """
+    Args:
+        inputs: A float tensor of arbitrary shape.
+                The predictions for each example.
+        targets: A float tensor with the same shape as inputs. Stores the binary
+                 classification label for each element in inputs
+                (0 for the negative class and 1 for the positive class).
+    Returns:
+        Loss tensor
+    """
+    hw = inputs.shape[1]
+
+    pos = F.binary_cross_entropy_with_logits(
+        inputs, torch.ones_like(inputs), reduction="none"
+    )
+    neg = F.binary_cross_entropy_with_logits(
+        inputs, torch.zeros_like(inputs), reduction="none"
+    )
+
+    loss = torch.einsum("nc,mc->nm", pos, targets) + torch.einsum(
+        "nc,mc->nm", neg, (1 - targets)
+    )
+
+    return loss / hw
+
+def get_src_permutation_idx(indices):
+    # permute predictions following indices
+    batch_idx = torch.cat([torch.full_like(src, i) for i, (src, _) in enumerate(indices)])
+    src_idx = torch.cat([src for (src, _) in indices])
+    return batch_idx, src_idx
+
+def get_tgt_permutation_idx(indices):
+    # permute targets following indices
+    batch_idx = torch.cat([torch.full_like(tgt, i) for i, (_, tgt) in enumerate(indices)])
+    tgt_idx = torch.cat([tgt for (_, tgt) in indices])
+    return batch_idx, tgt_idx
+
+class Fpn2D(nn.Module):
+    def __init__(self, dim, cascaded_scales) -> None:
+        """
+        cascaded_scales: ['1','4'],  ['1','16'], ['1','32']
+        """
+        super().__init__()
+        # from small to big
+        self.convs = nn.ModuleList()
+        self.upsamples = nn.ModuleList()
+        self.adapters = nn.ModuleList()
+        self.norms = nn.ModuleList()
+        assert len(cascaded_scales) > 1
+        cascaded_scales = cascaded_scales[::-1] # ['1','32'], ['1','16'], ['1','4'],
+        for (temporal_stride, spatial_stride), (next_temporal_stride, next_spatial_stride) \
+            in zip(cascaded_scales[:-1], cascaded_scales[1:]):
+            assert temporal_stride == next_temporal_stride, 'the temporal stride must be the same for the FPN 2D'
+            self.adapters.append(nn.Conv2d(dim, dim, kernel_size=1))
+            self.upsamples.append(nn.Upsample(scale_factor=spatial_stride//next_spatial_stride, mode='bilinear'))
+            self.convs.append(nn.Conv2d(dim, dim, kernel_size=3, padding=1))
+            self.norms.append(nn.GroupNorm(32, dim))
+        
+        self.cascaded_scales = cascaded_scales
+    
+    def forward(self, multiscales, multiscales_pad_masks,  multiscales_poses, video_feat_scales):
+        """ bt c h w"""
+        idxs = find_scales_from_multiscales(video_feat_scales, self.cascaded_scales) 
+        fused_feats = [multiscales[idx] for idx in idxs]  # 从小到大
+
+        for idx, (small_feat, large_feat) in enumerate(zip(fused_feats[:-1], fused_feats[1:])): # from small map to large map 
+            large_feat = self.adapters[idx](large_feat)
+            large_feat += self.upsamples[idx](small_feat) 
+            large_feat = self.convs[idx](large_feat)
+            large_feat = self.norms[idx](large_feat)
+
+            fused_feats[idx+1] = large_feat
+        
+        for idx, scale_idx in enumerate(idxs):
+            multiscales[scale_idx] = fused_feats[idx]
+
+        return multiscales
+
+class Fpn2D_multiple(nn.Module):
+    def __init__(self, dim, cascaded_scales) -> None:
+        """
+        cascaded_scales: ['1','4'],  ['1','16'], ['1','32']
+        """
+        super().__init__()
+        # from small to big
+        self.convs = nn.ModuleList()
+        self.upsamples = nn.ModuleList()
+        self.adapters = nn.ModuleList()
+        self.norms = nn.ModuleList()
+        assert len(cascaded_scales) > 1
+        cascaded_scales = cascaded_scales[::-1] # ['1','32'], ['1','16'], ['1','4'],
+        for (temporal_stride, spatial_stride), (next_temporal_stride, next_spatial_stride) \
+            in zip(cascaded_scales[:-1], cascaded_scales[1:]):
+            assert temporal_stride == next_temporal_stride, 'the temporal stride must be the same for the FPN 2D'
+            self.adapters.append(nn.Conv2d(dim, dim, kernel_size=1))
+            self.upsamples.append(nn.Upsample(scale_factor=spatial_stride//next_spatial_stride, mode='bilinear'))
+            self.convs.append(nn.Conv2d(dim, dim, kernel_size=3, padding=1))
+            self.norms.append(nn.GroupNorm(32, dim))
+        
+        self.cascaded_scales = cascaded_scales
+    
+    def forward(self, multiscales, multiscales_pad_masks,  multiscales_poses, video_feat_scales):
+        """ bt c h w"""
+        idxs = find_scales_from_multiscales(video_feat_scales, self.cascaded_scales) 
+        fused_feats = [multiscales[idx] for idx in idxs]  # 从小到大
+        new_fused_feats = []
+        new_fused_feats.append(fused_feats[0])
+        for idx, large_feat in enumerate(fused_feats[1:]): # from small map to large map 
+            small_feats = new_fused_feats[-1]
+            large_feat = self.adapters[idx](large_feat)
+            large_feat += self.upsamples[idx](small_feats) 
+            large_feat = self.convs[idx](large_feat)
+            large_feat = self.norms[idx](large_feat)
+
+            new_fused_feats.append(large_feat)
+        
+        for idx, scale_idx in enumerate(idxs):
+            multiscales[scale_idx] = new_fused_feats[idx]
+
+        return multiscales
+
+class DeformVideo2D_with_FPN(nn.Module):
+    def __init__(self, 
+                 d_model,
+                d_ffn=2048,
+                dropout=0.,
+                activation='relu',
+                nheads=8,
+                # important
+                fused_scales=None, 
+                fpn_strides=None,
+
+                npoints=4, 
+                nlayers=6,
+                 ) -> None:
+        super().__init__()
+        n_levels = len(fused_scales)
+        self.fused_scales = fused_scales
+        encoder = DeformableTransformerEncoder(
+                DeformableTransformerEncoderLayer(
+                    d_model=d_model,
+                    d_ffn=d_ffn,
+                    dropout=dropout,
+                    activation=activation,
+                    n_levels=n_levels,
+                    n_heads=nheads,
+                    n_points=npoints,
+                ),
+                nlayers
+        )
+        self.deform_encoder = encoder
+        self.level_embed = nn.Embedding(n_levels, d_model)
+        self.num_feature_levels = n_levels
+
+        if fpn_strides is not None:
+            self.fpn = Fpn2D(dim=d_model, cascaded_scales=fpn_strides)
+        else:
+            self.fpn = None
+        
+    def get_valid_ratio(self, mask):
+        """
+        Input:
+            - mask:
+                bt h w
+        Output:
+            - int
+        """
+        _, H, W = mask.shape
+        # T(bt, )
+        valid_H = torch.sum(~mask[:, :, 0], 1)
+        # T(bt, )
+        valid_W = torch.sum(~mask[:, 0, :], 1)
+        valid_ratio_h = valid_H.float() / H
+        valid_ratio_w = valid_W.float() / W
+        # T(bt, 2)
+        valid_ratio = torch.stack([valid_ratio_w, valid_ratio_h], -1)
+        return valid_ratio
+    
+    def forward(self, multiscales, multiscales_pad_masks, multiscales_poses, video_feat_scales):
+        """ bt c h w"""
+        fused_scale_idxs = find_scales_from_multiscales(video_feat_scales, self.fused_scales)
+        srcs = [multiscales[idx] for idx in fused_scale_idxs]
+        masks = [multiscales_pad_masks[idx] for idx in fused_scale_idxs]
+        pos_embeds = [multiscales_poses[idx] for idx in fused_scale_idxs]
+
+        src_flatten = []
+        mask_flattn = []
+        lvl_pos_embed_flatten = []
+        spatial_shapes = []
+        for lvl, (src, mask, pos_embed) in enumerate(zip(srcs, masks, pos_embeds)):
+            bt, c, h, w = src.shape
+            spatial_shape = (h, w)
+            spatial_shapes.append(spatial_shape)
+            
+            src = rearrange(src, 'bt c h w -> bt (h w) c')
+            mask = rearrange(mask, 'bt h w -> bt (h w)')
+            pos_embed = rearrange(pos_embed, 'bt c h w -> bt (h w) c')
+            lvl_pos_embed = pos_embed + self.level_embed.weight[lvl][None, None, :]
+            lvl_pos_embed_flatten.append(lvl_pos_embed)
+            
+            src_flatten.append(src)
+            mask_flattn.append(mask)
+            
+        # bt \sigma(hi wi) c
+        src_flatten = torch.cat(src_flatten, dim=1)
+        mask_flatten = torch.cat(mask_flattn, dim=1)
+        lvl_pos_embed_flatten = torch.cat(lvl_pos_embed_flatten, dim=1)
+        
+        # #levels, 2
+        spatial_shapes = torch.as_tensor(spatial_shapes, dtype=torch.long, device=src_flatten.device)
+        # (0, h0*wo, h1*w1)
+        level_start_index = torch.cat((spatial_shapes.new_zeros((1,)), spatial_shapes.prod(1).cumsum(0)[:-1]))
+        # bt num_levels 2
+        valid_ratios = torch.stack([self.get_valid_ratio(m) for m in masks], 1)
+        # bt (h_sigma, w_sigma) c  # bt hw_sigma heads num_scales npoints 2
+        memory, sampling_locations_by_layer, attention_weights_by_layer = \
+            self.deform_encoder(src_flatten, spatial_shapes, level_start_index, valid_ratios,
+                                lvl_pos_embed_flatten, mask_flatten)
+        
+        memory_features = []
+        spatial_index = 0
+        for lvl in range(self.num_feature_levels):
+            h, w = spatial_shapes[lvl]
+            memory_lvl = memory[:, spatial_index: (spatial_index + h*w), :].contiguous()
+            memory_lvl = rearrange(memory_lvl, 'bt (h w) c -> bt c h w',h=h, w=w)
+            memory_features.append(memory_lvl)
+            spatial_index += h*w
+        
+        for idx, scale_idx in enumerate(fused_scale_idxs):
+            multiscales[scale_idx] = memory_features[idx]
+
+        multiscales = self.fpn(multiscales, multiscales_pad_masks,  multiscales_poses, video_feat_scales)
+        return multiscales, sampling_locations_by_layer, attention_weights_by_layer
+
+class Scale32CatText_Encoder_FPN(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+
+def get_parsing_encoder(name, configs):
+    if name == 'deform_video_2d_fpn':
+        return DeformVideo2D_with_FPN(**configs)
+    
+    elif name == 'split_obj_ref_deform_video_2d_fpn':
+        obj_seg_nlayers = configs.pop('obj_seg_nlayers')
+        ref_seg_nlayers = configs.pop('ref_seg_nlayers')
+        assert obj_seg_nlayers > 0
+        obj_parsing_encoder = DeformVideo2D_with_FPN(**configs, nlayers=obj_seg_nlayers)
+        if ref_seg_nlayers == 0:
+            ref_parsing_encoder = None
+        else:
+            ref_parsing_encoder = DeformVideo2D_with_FPN(**configs, nlayers=ref_seg_nlayers)
+        return obj_parsing_encoder, ref_parsing_encoder
+    elif name == 'fpn2d':
+        return Fpn2D_multiple(dim=configs['d_model'],
+                     cascaded_scales=configs['cascaded_scales'])
+    else:
+        raise ValueError()
+
+def get_fusion(name, configs):
+    if name == 'VisionLanguageFusionModule':
+        return VisionLanguageFusionModule(**configs)
+    elif name == 'self_encoder':
+        encoder_nlayers = configs.pop('nlayers')
+        return TransformerEncoder(
+            TransformerEncoderLayer(
+                **configs
+            ),encoder_nlayers
+        )
+    elif name == 'none':
+        return None
+
+class VisionLanguageFusionModule(nn.Module):
+    def __init__(self, d_model, nhead, dropout=0.0):
+        super().__init__()
+        self.multihead_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+
+    def with_pos_embed(self, tensor, pos):
+        return tensor if pos is None else tensor + pos
+
+    def forward(self, tgt, memory,
+                memory_key_padding_mask = None,
+                pos= None,
+                query_pos = None):
+        tgt2, attn_weights = self.multihead_attn(query=self.with_pos_embed(tgt, query_pos),
+                                   key=self.with_pos_embed(memory, pos),
+                                   value=memory, attn_mask=None,
+                                   key_padding_mask=memory_key_padding_mask) # b tgt src, float, 0,1
+        tgt = tgt * tgt2
+        return tgt, attn_weights

@@ -532,6 +532,7 @@ class MSDeformAttnTransformerEncoderOnly_fusionText(nn.Module):
 
 
 import copy
+from einops import rearrange
 @SEM_SEG_HEADS_REGISTRY.register()
 class MSDeformAttnPixelDecoder_fusionText(nn.Module):
     @configurable
@@ -710,17 +711,26 @@ class MSDeformAttnPixelDecoder_fusionText(nn.Module):
         return ret
 
     @autocast(enabled=False)
-    def forward_features(self, features, 
+    def forward_features(self, 
+                         features, # b c h w / b c t h w
                          amrs=None, 
                         amr_token_feats=None, 
                         amr_token_seg_ids=None,
                         text_feats=None, 
-                        text_pad_masks=None):
+                        text_pad_masks=None): 
         srcs = []
         pos = []
+        nf = None
         # Reverse feature maps into top-down order (from low to high resolution)
         for idx, f in enumerate(self.transformer_in_features[::-1]):
             x = features[f].float()  # deformable detr does not support half precision
+            batch_size = x.shape[0]
+            if x.dim() == 5:
+                if nf is None:
+                    nf = x.shape[2]
+                else:
+                    assert x.shape[2] == nf, 'deform2d encoder需要每个scale的时序缩放一致'
+                x = rearrange(x, 'b c t h w -> (b t) c h w')
             srcs.append(self.input_proj[idx](x))
             pos.append(self.pe_layer(x))
 
@@ -775,5 +785,15 @@ class MSDeformAttnPixelDecoder_fusionText(nn.Module):
                 multi_scale_features.append(o)
                 num_cur_levels += 1
 
-        return self.mask_features(out[-1]), out[-1], out[0], multi_scale_features, amr_token_feats, text_feats
+        conved_features = self.mask_features(out[-1])
+        conved_logits = out[-1]
+        high_logits = out[0]
+
+        if nf is not None:
+            conved_features = rearrange(conved_features, '(b t) c h w -> b c t h w',b=batch_size,t=nf)
+            conved_logits = rearrange(conved_logits, '(b t) c h w -> b t c h w',b=batch_size,t=nf)
+            high_logits = rearrange(high_logits, '(b t) c h w -> b t c h w',b=batch_size,t=nf)
+            multi_scale_features = [rearrange(msf, '(b t) c h w -> b t c h w',b=batch_size,t=nf) for msf in multi_scale_features]
+        return conved_features, conved_logits, high_logits,  multi_scale_features,\
+                        amr_token_feats, text_feats
 

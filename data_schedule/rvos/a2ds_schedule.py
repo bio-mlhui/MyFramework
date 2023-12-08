@@ -737,13 +737,13 @@ class A2DS_Dataset(DatasetWithAux):
         aux['exist_queries'] = queries_by_objid
         aux.update(self.get_text_aux(text_auxid, queries_by_objid))
         aux.update(self.get_video_aux(video_auxid))
-        if self.split == 'train':
-            all_concept_roles = []
-            for text_id in all_flatten_texts:
-                text_aux = self.get_text_aux(text_id, queries_by_objid)['token_ids']
-                all_concept_roles.extend(text_aux)
-            all_concept_roles = torch.tensor(all_concept_roles).unique().tolist()
-            aux['all_concept_roles'] = all_concept_roles
+        # if self.split == 'train':
+        #     all_concept_roles = []
+        #     for text_id in all_flatten_texts:
+        #         text_aux = self.get_text_aux(text_id, queries_by_objid)['token_ids']
+        #         all_concept_roles.extend(text_aux)
+        #     all_concept_roles = torch.tensor(all_concept_roles).unique().tolist()
+        #     aux['all_concept_roles'] = all_concept_roles
         return aux
     
     def __len__(self):
