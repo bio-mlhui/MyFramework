@@ -184,7 +184,6 @@ if __name__=="__main__":
     logging.getLogger('h5py').setLevel(logging.WARNING)
     
     parser = argparse.ArgumentParser()
-    parser.add_argument("--local_rank", type=int, help="Local rank. Necessary for using the torch.distributed.launch utility.")
     parser.add_argument("--backend", type=str, default="nccl", choices=['nccl', 'gloo'])
 
     parser.add_argument('--data_dir', type=str, default='/hpc2hdd/home/hxu047/datasets')
