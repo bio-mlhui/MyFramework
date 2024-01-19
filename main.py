@@ -1,76 +1,69 @@
 import os
 import argparse
-from argparse import Namespace
 import logging
-import shutil
 import wandb
-import torch
 import importlib
-import copy   
-from trainers import task_entrypoint
-
-import torch.distributed as dist
+from trainers import task_to_trainer
+from detectron2.engine import launch
+import detectron2.utils.comm as comm # deepspeed也能用
+# import deepspeed
+from termcolor import colored
+import logging
+import yaml
+import torch
 from util.misc import setup_for_distributed
+import torch.distributed as dist
 
-def namespace_to_dict(namespace):
-    result = {}
-    for key, value in vars(namespace).items():
-        if isinstance(value, Namespace):
-            result[key] = namespace_to_dict(value)
-        else:
-            result[key] = value
-    return result
+def _highlight(code, filename):
+    try:
+        import pygments
+    except ImportError:
+        return code
 
-def dict2namespace(config):
-    namespace = argparse.Namespace()
-    for key, value in config.items():
-        if isinstance(value, dict):
-            new_value = dict2namespace(value)
-        else:
-            new_value = value
-        setattr(namespace, key, new_value)
-    return namespace
+    from pygments.lexers import Python3Lexer, YamlLexer
+    from pygments.formatters import Terminal256Formatter
 
-def fuse_args_configs(args, configs):
-    namespace = argparse.Namespace()
-    for key, value in vars(configs).items():
-        if isinstance(value, dict):
-            new_value = dict2namespace(value)
-        else:
-            new_value = value
-        setattr(namespace, key, new_value)
-    for key, value in vars(args).items():
-        if isinstance(value, dict):
-            new_value = dict2namespace(value)
-        else:
-            new_value = value
-        setattr(namespace, key, new_value)
-    return namespace
+    lexer = Python3Lexer() if filename.endswith(".py") else YamlLexer()
+    code = pygments.highlight(code, lexer, Terminal256Formatter(style="monokai"))
+    return code
 
-def get_cnt_attempt(output_dir, id):
-    dirs = [d for d in os.listdir(output_dir) if os.path.isfile(os.path.join(output_dir,d))]
-    cnt = 0
-    for d in dirs:
-        if d.startswith(id):
-            cnt += 1
-    return cnt
-
-def copy_file(file1_name, file2_name):
-    file1 = open(file1_name,"r")
-    file2 = open(file2_name,"w")
-
-    s = file1.read()
-    w = file2.write(s)
-
-    file1.close()
-    file2.close() 
+class _ColorfulFormatter(logging.Formatter):
+    def __init__(self, *args, **kwargs):
+        self._root_name = kwargs.pop("root_name") + "."
+        self._abbrev_name = kwargs.pop("abbrev_name", "")
+        if len(self._abbrev_name):
+            self._abbrev_name = self._abbrev_name + "."
+        super(_ColorfulFormatter, self).__init__(*args, **kwargs)
+        # CRITICAL: 'CRITICAL',
+        # ERROR: 'ERROR',
+        # WARNING: 'WARNING',
+        # INFO: 'INFO',
+        # DEBUG: 'DEBUG',
+        # NOTSET: 'NOTSET',
+    def formatMessage(self, record):
+        record.name = record.name.replace(self._root_name, self._abbrev_name)
+        message = record.message
+        # message, asctime, name, filename = record.message, record.asctime, record.name, record.filename
+        log = super(_ColorfulFormatter, self).formatMessage(record)
+        if (record.levelno == logging.WARNING) or (record.levelno == logging.ERROR) or (record.levelno == logging.CRITICAL):
+            colored_message = colored(message, "red", attrs=["blink", "underline"])
+        elif record.levelno == logging.DEBUG:
+            colored_message = colored(message, "yellow", attrs=["blink", "underline"])
+        else: # INFO/NOTSET
+            colored_message = colored(message, "white")  
+        return log + colored_message
+        # TODO: 实现多卡log, 现在只有主进程可以log
+        # 如果主题背景是白色的话 需要在 555 上加上一个特数split_symbol, 然后log.split(split_symbol)得到message之前的东西
+        # In Python print statements, the escape sequence \x1b[0m is used to reset the text formatting to the default settings. Specifically, it is used for resetting text attributes like color, style, and background color to their default values.
     
-
 def set_logging_file(output_dir, file_name, mode='a'):
     handler1 = logging.StreamHandler()
     handler2 = logging.FileHandler(os.path.join(output_dir, file_name), mode=mode)
-    formatter = logging.Formatter(
-        "%(levelname)s - %(filename)s - %(asctime)s - %(message)s"
+    formatter = _ColorfulFormatter(
+        colored("[%(asctime)s %(name)s %(filename)s]: ", "green"), # 555
+        datefmt="%m/%d %H:%M:%S",
+        root_name=os.path.join(output_dir, file_name),
+        abbrev_name=str('grey'),
     )
     handler1.setFormatter(formatter)
     handler2.setFormatter(formatter)
@@ -93,167 +86,128 @@ def init_process_group_and_set_device(world_size, process_id, device_id):
             world_size=world_size,
             rank=process_id
         )
+        comm.create_local_process_group(world_size)
         torch.distributed.barrier(device_ids=[device_id])
         setup_for_distributed(process_id == 0)
     return device
 
-def run(process_id, trainer_configs, trainer_mode, trainer_name, gpu_ids):
-
-    if process_id == 0:
-        if trainer_mode == 'train_attmpt':
-            set_logging_file(trainer_configs['out_dir'], "stdout_train.txt", mode='w')
-        elif trainer_mode == 'train_resume':
-            set_logging_file(trainer_configs['out_dir'], "stdout_train.txt")
-        elif trainer_mode == 'evaluate_ckpt':
-            set_logging_file(trainer_configs['out_dir'], "stdout_eval.txt")
-        elif trainer_mode == 'visualize_ckpt':
-            set_logging_file(trainer_configs['out_dir'], "stdout_vis.txt")
-        elif trainer_mode == 'evaluate_dir':
-            set_logging_file(trainer_configs['out_dir'], 'stdout_eval.txt')
-        else:
-            raise ValueError()
-    
-    device = init_process_group_and_set_device(world_size=len(gpu_ids), process_id=process_id, device_id=gpu_ids[process_id],)
-
-    create_trainer = task_entrypoint(trainer_name)
-    trainer = create_trainer(configs=trainer_configs,  # configs里的ckpt只要不是空就load ckpt
-                            process_id=process_id, 
-                            device=device, 
-                            num_processes=len(gpu_ids),)
-    
-    if process_id == 0:
-        wandb_configs = trainer_configs['wandb']
-        n_parameters = sum(p.numel() for p in trainer.model.parameters() if p.requires_grad)
-        logging.info(f'number of params:{n_parameters}')
-        print(f'number of params:{n_parameters}')
-        wandb.init(   
-            project=wandb_configs['project'],
-            group=wandb_configs['group'],   
-            id=wandb_configs['id'], 
-            resume=wandb_configs['resume'], 
-            name=wandb_configs['name'],
-            config=wandb_configs['configs'],
-            mode=wandb_configs['mode'],
-        )
-
-    if len(gpu_ids) > 1: 
-        dist.barrier()
-
-    if 'train' in trainer_mode:
-        trainer.train()
-
-    elif trainer_mode == 'evaluate_ckpt':
-        trainer.evaluate_ckpt()
-
-    elif trainer_mode == 'visualize_ckpt':
-        trainer.visualize_ckpt()
-
-    elif trainer_mode == 'evaluate_dir':
-        evaluate_dir = trainer_configs['trainer_ckpts_dir']
-        ckpt_dirs = os.listdir(evaluate_dir)
-        ckpt_dirs = sorted([a for a in ckpt_dirs if a.startswith('epoch')])
-        for ckpt in ckpt_dirs:
-            ckpt_epoch = int(ckpt.split('_')[-1])
-            trainer_ckpt = os.path.join(evaluate_dir, ckpt, f'{ckpt_epoch:02d}.pth.tar')
-            trainer.load_ckpt(trainer_ckpt, strict_load=trainer_configs['strict_load'], resume=trainer_configs['resume'])
-            trainer.evaluate_ckpt()
-    else:
-        raise ValueError()
-    
-    if process_id == 0:
-        wandb.finish()
-
-if __name__=="__main__":
+def run(rank, configs, world_size):
     os.environ["TOKENIZERS_PARALLELISM"] = "false"  # this disables a huggingface tokenizer warning (printed every epoch)
-    torch.autograd.set_detect_anomaly(True)
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
+    os.environ['PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT'] = "4"
+    os.environ['PYDEVD_DISABLE_FILE_VALIDATION'] = "1"
     os.environ["DGLBACKEND"] = "pytorch"
     logging.getLogger('penman').setLevel(logging.WARNING)    
-    logging.getLogger('PIL').setLevel(logging.WARNING)  
+    logging.getLogger('PIL').setLevel(logging.WARNING) 
+    logging.getLogger('PIL.PngImagePlugin').setLevel(logging.WARNING)   
     logging.getLogger('matplotlib').setLevel(logging.WARNING)
     logging.getLogger('wandb').setLevel(logging.WARNING)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
     logging.getLogger('h5py').setLevel(logging.WARNING)
-    
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--data_dir', type=str, default='/hpc2hdd/home/hxu047/datasets')
-    parser.add_argument('--pt_dir', type=str, default='/hpc2hdd/home/hxu047/pt')
-    parser.add_argument('--work_dir', type=str, default='/hpc2hdd/home/hxu047/workspace/rvos_encoder')
-    
-    parser.add_argument('--task', type=str,  required=True,) # rios/rvos/r3os
-    parser.add_argument('--group', type=str,  required=True,) # 数据流配置
-    parser.add_argument('--config', type=str, required=True,) # 模型配置
-    
-    parser.add_argument('--mode', type=str)  # train_attmpt train_resume evaluate_ckpt evaluate_dir visualize_ckpt
-    parser.add_argument('--trainer_ckpt', type=str, default='') # trainer初始化的ckpt
-    parser.add_argument('--trainer_ckpts_dir', type=str, default='') # mode是evaluate_dir, trainer初始化需要是'', 由一个for循环load每个ckpt
-    parser.add_argument('--strict_load', type=bool, default=True)
-    parser.add_argument('--seed', type=int, default=2023)
-    parser.add_argument('--wandb_mode', type=str, default='online')
-    args = parser.parse_args()
-
-    config_file = '.'.join([args.task.upper(), args.group, args.config, args.config])
-    config_file_module = importlib.import_module(config_file)
-    configs = config_file_module.trainer_configs
-    
-    configs['out_dir'] = os.path.join('./', args.task.upper(), args.group, args.config)
-    configs['mode'] = args.mode
-    configs['data']['data_dir'] = args.data_dir
-    configs['data']['pt_tokenizer_dir'] = args.pt_dir
-    configs['model']['pt_dir'] = args.pt_dir
-    configs['model']['work_dir'] = args.work_dir
-    configs['seed'] = args.seed
-    configs['wandb'] = {
-        'project': args.task,
-        'group': args.group,
-        'name': args.config,
-        'id': f'{args.task}_{args.group}_{args.config}',
-        'mode': args.wandb_mode,
-        'resume': 'must',
-        'configs': copy.deepcopy(configs)
-    }
-    configs['trainer_ckpt'] = args.trainer_ckpt
-    configs['trainer_ckpts_dir'] = args.trainer_ckpts_dir
-    configs['strict_load'] = args.strict_load
-    configs['resume'] = True    
-
-    if args.mode == 'train_attmpt': # 重写
-        if os.path.exists(configs['out_dir']):
-            answer = input(f'相同的实验存在 {configs["out_dir"]} 重写吗? \n' )
-            if answer == 'y':
-                pass
-            else:
-                exit()
-        configs['resume'] = False
-        configs['wandb']['resume'] = None
-
-    elif args.mode == 'train_resume':
-        # /epoch-1/-1.pth.tar
-        assert args.trainer_ckpt != ''
-        assert '/'.join('/'.split(args.trainer_ckpt)[:-2]) == configs['out_dir']
-        
-
-    elif args.mode == 'evaluate_ckpt':
-        pass
-
-    elif args.mode == 'visualize_ckpt': 
-        pass
-
-    elif args.mode == 'evaluate_dir':
-        assert args.trainer_ckpt == '' and os.path.exists(args.trainer_ckpts_dir) 
+    init_process_group_and_set_device(world_size, process_id=rank, device_id=rank)
+    if comm.is_main_process():
+        mode = configs['trainer_mode']
+        out_dir = configs['out_dir']
+        if mode == 'eval':
+            # evaluate模式总是append
+            set_logging_file(out_dir, "eval.txt", mode='a')
+            path = os.path.join(out_dir, "eval_config.yaml")
+        else:
+            set_logging_file(out_dir, "train.txt", mode='w' if mode == 'train_attmpt' else 'a')
+            path = os.path.join(out_dir, "config.yaml")
+            
+        logging.debug("Running with full config:\n{}".format(_highlight(yaml.dump(configs, default_flow_style=False), ".yaml")))
+        with open(path, "w") as f:
+            f.write(yaml.dump(configs, default_flow_style=False))
+        logging.debug("Full config saved to {}".format(path))
+        wandb.init(   
+            project=configs['task'],
+            group=configs['group'], 
+            name=configs['config'],  
+            id=configs['wandb_id'], 
+            resume=configs['wandb_resume'],  # resume或者是never
+            config=configs,
+            mode=configs['wandb_mode'],
+        )  
+    comm.synchronize()
+    # init according to ( initckpt/path, initckpt/load_sampler, initckpt/load_optimizer )
+    trainer = task_to_trainer[configs['task']](configs=configs)
+    comm.synchronize()
+    if configs['trainer_mode'] == 'eval':
+        eval_ckpts = configs['eval_ckpts']
+        for ckpt in eval_ckpts:
+            trainer.load_ckpt(ckpt, load_model=True, load_schedule=True, load_random=False, load_optimize=False)
+            trainer.evaluate()
 
     else:
-        raise ValueError()      
+        if configs['trainer_mode'] == 'train_resume':
+            ckpt_dirs = os.listdir(configs['out_dir'])
+            # epc1_iter5000/ckpt.pth.tar
+            ckpt_dirs = sorted([a for a in ckpt_dirs if a.startswith('epc')], key=lambda x:int(x.split('iter')[-1]))
+            trainer_ckpt = '/'.join(configs['out_dir'], ckpt_dirs[-1], 'ckpt.pth.tar')
+            trainer.load_ckpt(trainer_ckpt, load_model=True, load_schedule=True, load_random=True, load_optimize=True)
+        trainer.train()
+    
+    if comm.is_main_process():
+        wandb.finish()
 
+if __name__=="__main__":
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config_file', type=str, required=True)
+    parser.add_argument('--trainer_mode', type=str, default='train_attmpt')  # train_attmpt train_resume eval
+    parser.add_argument('--eval_path', type=str, default='') #  # 如果是dir， 如果是file
+    parser.add_argument('--disable_wandb', action='store_true')  # default: False
+    parser.add_argument('--append_wandb_id',type=str, default='')
+    parser.add_argument('--resume_wandb', action='store_true') # default: False
+    args = parser.parse_args()
+    task, group, config, config2 = args.config_file.split('/')[-4:]
+    assert config == config2[:-3]
+    config_file = '.'.join(['output', task, group, config, config])
+    configs = importlib.import_module(config_file).trainer_configs
+    configs['task'], configs['group'], configs['config'] = task, group, config
+    configs['out_dir'] = os.path.join('./', 'output', task, group, config)
+    configs['trainer_mode'] = args.trainer_mode
+
+    wandb_id = f'{task}_{group}_{config}'
+    if args.append_wandb_id != '':
+        wandb_id = wandb_id + '_' + args.append_wandb_id
+    configs['wandb_id'] = wandb_id
+    configs['wandb_mode'] = 'disabled' if args.disable_wandb else os.environ['WANDB_MODE']
+    configs['wandb_resume'] = 'must' if args.resume_wandb else 'never' 
+    # debug模式下, never也能运行, 直到debug结束; running情况下, 每次不resume的话, wandb_id必须不一样
+
+    if configs['trainer_mode'] == 'eval':
+        eval_ckpts = []
+        eval_path = args.eval_path # dir/file
+        assert eval_path != '', f'evaluate情况下, eval_path: {args.eval_path} 不能是空,'
+        
+        if os.path.isfile(eval_path):
+            eval_ckpts.append(eval_path)
+
+        elif os.path.isdir(eval_path):
+            # 按照sap的大小依顺序evaluate每个ckpt
+            ckpt_dirs = os.listdir(eval_path) # RVOS/method1/
+            ckpt_dirs = [cd for cd in ckpt_dirs if os.path.isdir(os.path.join(eval_path, cd))]
+            # epc[1]_iter[5000]_sap[60009]
+            ckpt_dirs = sorted([cd for cd in ckpt_dirs if cd.startswith('epc')], key=lambda x:int(x.split('sap[')[-1][:-1]))
+            eval_ckpts = [os.path.join(eval_path, cd, f'ckpt.pth.tar') for cd in ckpt_dirs]
+            eval_ckpts = [eval_c for eval_c in eval_ckpts if os.path.exists(eval_c)]
+        else:
+            raise ValueError()
+        configs['eval_ckpts'] = eval_ckpts
+    else:
+        # if (configs['trainer_mode'] == 'train_attmpt') and ('debug' not in configs['config']):
+        #     if os.path.exists(os.path.join(configs['out_dir'], 'train.txt')):
+        #         answer = input(f'{configs["config"]} 有跑的记录, 要重写整个out_dir嘛\n' )
+        #         if answer != 'y':
+        #             exit()  
+        pass
+     
     gpu_ids = list(os.environ['CUDA_VISIBLE_DEVICES'].split(','))
     assert len(set(gpu_ids)) == len(gpu_ids)
     gpu_ids = list(range(len(gpu_ids)))
     
     if len(gpu_ids) > 1:
-        torch.multiprocessing.spawn(run, nprocs=len(gpu_ids), args=(configs, args.mode, args.task, gpu_ids))
+        torch.multiprocessing.spawn(run, nprocs=len(gpu_ids), args=(configs, len(gpu_ids)))
     elif len(gpu_ids) == 1:
-        run(process_id=0, trainer_configs=configs, trainer_mode=args.mode, trainer_name=args.task, gpu_ids=gpu_ids)
-
-
-  
+        run(rank=0, configs=configs, world_size=len(gpu_ids))

@@ -1,8 +1,4 @@
 **/__pycache__/**
-**/coutput_youtube_rvos/**
-**/configs_youtube_rvos/**
-**/coutput_a2ds_rvos/**
-**/configs_a2ds_rvos/**
 **/wandb/**
 **/.vscode/**
 *.out
@@ -10,13 +6,11 @@
 *.md
 *.zip
 *.tar
+*.pth
 stdout_train.txt
 stdout_eval.txt
-**/stdout_visualize.txt
-RVOS/**
-vscode_cli_alpine_x64_cli.tar
-code
-RIOS/**
-IMSEG/**
+stdout_visualize.txt
 hostfile
-
+**/olds/**
+**/old/**
+**/output/**

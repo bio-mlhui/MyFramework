@@ -1,30 +1,14 @@
-        self.d_model = d_model
-        self.nhead = nhead
-
-        encoder_layer = MSDeformAttnTransformerEncoderLayer(d_model, dim_feedforward,
-                                                            dropout, activation,
-                                                            num_feature_levels, nhead, enc_n_points)
-        self.encoder = MSDeformAttnTransformerEncoder_fusionText(encoder_layer, num_encoder_layers)
-
-        self.level_embed = nn.Parameter(torch.Tensor(num_feature_levels, d_model))
-
-        self._reset_parameters()
-
-        # self attention
-        self.self_attn = MSDeformAttn(d_model, n_levels, n_heads, n_points)
-        self.dropout1 = nn.Dropout(dropout)
-        self.norm1 = nn.LayerNorm(d_model)
-
-        # ffn
-        self.linear1 = nn.Linear(d_model, d_ffn)
-        self.activation = _get_activation_fn(activation)
-        self.dropout2 = nn.Dropout(dropout)
-        self.linear2 = nn.Linear(d_ffn, d_model)
-        self.dropout3 = nn.Dropout(dropout)
-        self.norm2 = nn.LayerNorm(d_model)
-
-        self.layers = _get_clones(encoder_layer, num_layers)
-        self.num_layers = num_layers
-        
-        self.fusion_rel_self = None # 'before', 'after', None
-        self.fusion_modules = None # hack
+        loss_sc        = (torch.sigmoid(pred1)-torch.sigmoid(pred2)).abs() # b 1 h w
+        loss_sc        = loss_sc[mask[:,0:1]==1].mean() # 
+        ## M2B transformation
+        pred           = torch.cat([pred1, pred2], dim=0)
+        mask           = torch.cat([mask, mask], dim=0)
+        predW, predH   = pred.max(dim=2, keepdim=True)[0], pred.max(dim=3, keepdim=True)[0]
+        pred           = torch.minimum(predW, predH)
+        pred, mask     = pred[:,0], mask[:,0]
+        ## loss_ce + loss_dice 
+        loss_ce        = F.binary_cross_entropy_with_logits(pred, mask)
+        pred           = torch.sigmoid(pred)
+        inter          = (pred*mask).sum(dim=(1,2))
+        union          = (pred+mask).sum(dim=(1,2))
+        loss_dice      = 1-(2*inter/(union+1)).mean()

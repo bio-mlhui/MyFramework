@@ -5,25 +5,130 @@
 
 # print(fix_spelling(["a baby giant panda near a large giant panda"],max_length=2048))
 
+import albumentations as A
+import numpy as np
+import cv2
+import torch
+hflip = A.ReplayCompose(
+    [A.HorizontalFlip(p=0.5)],
+)
+image = cv2.imread('/home/xuhuihui/datasets/SUN-SEG/TrainDataset/Frame/case2_1/case_M_20181003094031_0U62363100354631_1_001_002-1_a1_ayy_image0002.jpg')
+image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+h, w, c = image.shape
+masks = (torch.randn([h, w]) > 0).numpy().astype(np.uint8)
+ret = hflip(image=image, mask=masks)
+ret['image']
+ret['mask']
+      
+# # 测试infinite stream 
+# import torch
+# import math
+# def _infinite_indices(seed, dataset_length, shuffle=True,):
+#     g = torch.Generator()
+#     g.manual_seed(seed)
+#     while True:
+#         if shuffle:
+#             yield from torch.randperm(dataset_length, generator=g).tolist()
+#         else:
+#             yield from torch.arange(dataset_length).tolist()
 
+# # 生成一个无限的infinite stream, 保证每次运行返回的都相同
+# def infinite_indices(seed, 
+#                      dataset_length, 
+#                      batch_sizes, splits, 
+#                      one_batch_two_epoch,
+#                      shuffle=True): # 'abandon', 'just_use', 'pad'
+#     g = torch.Generator()
+#     g.manual_seed(seed)
+
+#     split_ranges = list(zip(splits[:-1], splits[1:]))
+#     assert len(split_ranges) == (len(batch_sizes))
+#     stream = _infinite_indices(seed, dataset_length=dataset_length, shuffle=shuffle)
+
+#     stream_throw_cnt = 0
+#     cnt = 0
+#     for (range_start, range_end), btch_size in zip(split_ranges, batch_sizes):
+#         assert cnt == range_start
+#         if range_end == None:
+#             range_end = math.inf
+#         # stream_throw_cnt = 5996, stream_throw_cnt + infinite_btch_sizz = 6000(下一个batch的第一个sample的index), epoch_milestone是6000, 不会抽到6000
+#         while cnt < range_end:
+#             epoch_milestone = ((stream_throw_cnt // dataset_length) + 1 ) * dataset_length
+#             if (stream_throw_cnt < epoch_milestone) and (stream_throw_cnt + btch_size > epoch_milestone):
+#                 if one_batch_two_epoch == 'just_use':
+#                     for _ in range(btch_size):
+#                         cnt += 1
+#                         stream_throw_cnt += 1
+#                         yield next(stream)
+
+#                 elif one_batch_two_epoch == 'abandon':
+#                     print(f'abandon start {stream_throw_cnt} end {stream_throw_cnt + btch_size}')
+#                     for _ in range(epoch_milestone - stream_throw_cnt):
+#                         abandon = next(stream)
+#                         stream_throw_cnt += 1
+
+#                 elif one_batch_two_epoch == 'pad':
+#                     print(f'pad start {stream_throw_cnt} end {stream_throw_cnt + btch_size}')
+#                     diff = stream_throw_cnt + btch_size - epoch_milestone
+#                     num_throw = btch_size - diff
+#                     rand_idxs = torch.randperm(dataset_length, generator=g)[:diff].tolist()
+#                     print(f'pad idxs {rand_idxs}')
+#                     for _ in range(num_throw):
+#                         cnt += 1
+#                         stream_throw_cnt += 1
+#                         yield next(stream)
+#                     for idx in rand_idxs:
+#                         cnt += 1
+#                         yield idx
+#                 else:
+#                     raise ValueError()
+#             else:
+#                 for _ in range(btch_size):
+#                     cnt += 1
+#                     stream_throw_cnt += 1
+#                     yield next(stream)  
+
+
+# infinite_stream = infinite_indices(2024,
+#                                    100,
+#                                    [4, 8, 3],
+#                                    [0, 20, 44, None],
+#                                    'pad',
+#                                    False)
+# i = 0
+# while i < 300:
+#     i += 1
+#     print(next(infinite_stream))
+
+####################################medical image preview#############################
+
+# import SimpleITK as sitk
+
+# labelImg=sitk.ReadImage('/home/xuhuihui/datasets/anatomy_recon/multiclass_anatomy_recon/train/complete/s0224_full.nii.gz')
+# labelNpy=sitk.GetArrayFromImage(labelImg)
+# labelNpy_resized=zoom(labelNpy,(128/labelNpy.shape[0],128/labelNpy.shape[1],128/labelNpy.shape[2]),order=0, mode='constant')
+# labelNpy_resized=np.expand_dims(np.expand_dims(labelNpy_resized,axis=0),axis=4) 
+# name=train_label_list[j][-len('_full.nii.gz')-len('s0556'):-len('_full.nii.gz')]
+# import matplotlib.pyplot as plt
+# plt.imsave()
 
 #####################################video clip#############################
-from models.videoclip.models.mmfusion import MMPTModel
-from models.videoclip.models import MMFusionSeparate
-import yaml
-import argparse
-import torch
-import torchvision.io as video_io
+# from models.videoclip.models.mmfusion import MMPTModel
+# from models.videoclip.models import MMFusionSeparate
+# import yaml
+# import argparse
+# import torch
+# import torchvision.io as video_io
 
-def dict2namespace(config):
-    namespace = argparse.Namespace()
-    for key, value in config.items():
-        if isinstance(value, dict):
-            new_value = dict2namespace(value)
-        else:
-            new_value = value
-        setattr(namespace, key, new_value)
-    return namespace
+# def dict2namespace(config):
+#     namespace = argparse.Namespace()
+#     for key, value in config.items():
+#         if isinstance(value, dict):
+#             new_value = dict2namespace(value)
+#         else:
+#             new_value = value
+#         setattr(namespace, key, new_value)
+#     return namespace
 
 
 # with open ('./models/videoclip/how2.yaml', 'r') as f:
@@ -159,59 +264,59 @@ def dict2namespace(config):
 
 # tokenized_amr, meta_dict = amr_tokenizer.tokenize_amr_with_only_each_token_length(linearized_amr.split())
             
-class TrainRandomSampler_ByEpoch:
-    def __init__(self, 
-                 data_source,
-                 seed,
-                 ) -> None:
-        self.data_source = data_source
-        self.num_samples = len(self.data_source)
-        self.seed = seed
-        self.epoch = None
+# class TrainRandomSampler_ByEpoch:
+#     def __init__(self, 
+#                  data_source,
+#                  seed,
+#                  ) -> None:
+#         self.data_source = data_source
+#         self.num_samples = len(self.data_source)
+#         self.seed = seed
+#         self.epoch = None
 
-    def __iter__(self):
-        seed = self.seed + self.epoch
-        print(f'generating a new indices permutations for this epoch using seed {seed}')
-        n = len(self.data_source)
-        generator = torch.Generator()
-        generator.manual_seed(seed)
+#     def __iter__(self):
+#         seed = self.seed + self.epoch
+#         print(f'generating a new indices permutations for this epoch using seed {seed}')
+#         n = len(self.data_source)
+#         generator = torch.Generator()
+#         generator.manual_seed(seed)
         
-        for _ in range(self.num_samples // n):
-            yield from torch.randperm(n, generator=generator).tolist()
-        yield from torch.randperm(n, generator=generator).tolist()[:self.num_samples % n]
+#         for _ in range(self.num_samples // n):
+#             yield from torch.randperm(n, generator=generator).tolist()
+#         yield from torch.randperm(n, generator=generator).tolist()[:self.num_samples % n]
 
-    def __len__(self) -> int:
-        return self.num_samples
+#     def __len__(self) -> int:
+#         return self.num_samples
 
-    def set_epoch(self, epoch: int) -> None:
-        r"""
+#     def set_epoch(self, epoch: int) -> None:
+#         r"""
 
-        Args:
-            epoch (int): Epoch number.
-        """
-        self.epoch = epoch
+#         Args:
+#             epoch (int): Epoch number.
+#         """
+#         self.epoch = epoch
 
-datasource = torch.arange(100)
+# datasource = torch.arange(100)
 
-sampler = TrainRandomSampler_StartEpoch(datasource, seed=1999)
-epoch5_top10 = []
-for epoch in range(10):
-    sampler.set_epoch(epoch)
-    for item in sampler:
-        if epoch == 5:
-            if len(epoch5_top10) < 10:
-                epoch5_top10.append(item)
-        pass
+# sampler = TrainRandomSampler_StartEpoch(datasource, seed=1999)
+# epoch5_top10 = []
+# for epoch in range(10):
+#     sampler.set_epoch(epoch)
+#     for item in sampler:
+#         if epoch == 5:
+#             if len(epoch5_top10) < 10:
+#                 epoch5_top10.append(item)
+#         pass
     
-new_epoch_top10 = []       
-sampler = TrainRandomSampler_StartEpoch(datasource, seed=1999)
-for epoch in range(2, 10):
-    sampler.set_epoch(epoch)
-    for item in sampler:
-        if epoch == 5:
-            if len(new_epoch_top10) < 10:
-                new_epoch_top10.append(item)
-        pass
+# new_epoch_top10 = []       
+# sampler = TrainRandomSampler_StartEpoch(datasource, seed=1999)
+# for epoch in range(2, 10):
+#     sampler.set_epoch(epoch)
+#     for item in sampler:
+#         if epoch == 5:
+#             if len(new_epoch_top10) < 10:
+#                 new_epoch_top10.append(item)
+#         pass
 
-print(epoch5_top10)
-print(new_epoch_top10)
+# print(epoch5_top10)
+# print(new_epoch_top10)

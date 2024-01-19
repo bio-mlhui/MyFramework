@@ -142,6 +142,41 @@ def all_gather(data):
 
     return data_list
 
+def all_gather_cpu(data):
+    world_size = get_world_size()
+    if world_size == 1:
+        return [data]
+
+    # serialized to a Tensor
+    buffer = pickle.dumps(data)
+    storage = torch.ByteStorage.from_buffer(buffer)
+    tensor = torch.ByteTensor(storage)
+
+    # obtain Tensor size of each rank
+    local_size = torch.tensor([tensor.numel()])
+    size_list = [torch.tensor([0]) for _ in range(world_size)]
+    dist.all_gather(size_list, local_size)
+    size_list = [int(size.item()) for size in size_list]
+    max_size = max(size_list)
+
+    # receiving Tensor from all ranks
+    # we pad the tensor because torch all_gather does not support
+    # gathering tensors of different shapes
+    tensor_list = []
+    for _ in size_list:
+        tensor_list.append(torch.empty((max_size,), dtype=torch.uint8))
+    if local_size != max_size:
+        padding = torch.empty(size=(max_size - local_size,), dtype=torch.uint8)
+        tensor = torch.cat((tensor, padding), dim=0)
+    dist.all_gather(tensor_list, tensor)
+
+    data_list = []
+    for size, tensor in zip(size_list, tensor_list):
+        buffer = tensor.cpu().numpy().tobytes()[:size]
+        data_list.append(pickle.loads(buffer))
+
+    return data_list
+
 
 def reduce_dict(input_dict, average=True):
     """
@@ -629,20 +664,24 @@ def to_device(sample, device):
     return sample
 
 
-def nested_tensor_from_videos_list_with_stride(videos_list, max_stride=16):
+def nested_tensor_from_videos_list_with_stride(videos_list, max_stride):
     """
     This function receives a list of videos (each of shape [T, C, H, W]) and returns a NestedTensor of the padded
-    videos (shape [T, B, C, PH, PW], along with their padding masks (true for padding areas, false otherwise, of shape
-    [T, B, PH, PW].
+    videos (shape [B, T, C, PH, PW], along with their padding masks (true for padding areas, false otherwise, of shape
+    [B, T, PH, PW].
     """
+    temporal_max_stride, spatial_max_stride = max_stride
     max_size = _max_by_axis([list(video.shape) for video in videos_list]) # list[t 3 h w] -> t b 3 h w
-    *_, h,w = max_size
-    if w % max_stride != 0:
-        w += max_stride - (w % max_stride)
-    if h % max_stride != 0:
-        h += max_stride - (h % max_stride)
-    max_size[-1] = w
-    max_size[-2] = h
+    t, *_, h,w = max_size
+    if t % temporal_max_stride != 0:
+        t += temporal_max_stride - (t % temporal_max_stride)
+    if w % spatial_max_stride != 0:
+        w += spatial_max_stride - (w % spatial_max_stride)
+    if h % spatial_max_stride != 0:
+        h += spatial_max_stride - (h % spatial_max_stride)
+    max_size[0] = t
+    max_size[2] = h
+    max_size[3] = w
     
     padded_batch_shape = [len(videos_list)] + max_size  # b t 3 hp wp
     b, t, c, h, w = padded_batch_shape
@@ -653,5 +692,5 @@ def nested_tensor_from_videos_list_with_stride(videos_list, max_stride=16):
     for vid_frames, pad_vid_frames, vid_pad_m in zip(videos_list, padded_videos, videos_pad_masks):
         pad_vid_frames[:vid_frames.shape[0], :, :vid_frames.shape[2], :vid_frames.shape[3]].copy_(vid_frames)
         vid_pad_m[:vid_frames.shape[0], :vid_frames.shape[2], :vid_frames.shape[3]] = False
-    # t b c hp wp
-    return NestedTensor(padded_videos.transpose(0, 1), videos_pad_masks.transpose(0, 1))
+    # b t c hp wp
+    return NestedTensor(padded_videos, videos_pad_masks)

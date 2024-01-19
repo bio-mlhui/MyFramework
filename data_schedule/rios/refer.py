@@ -664,12 +664,12 @@ def refcoco_plus_schedule(configs, is_distributed, process_id, num_processes, ju
             logging.info(f'{key} has {len(val)} samples')
             print(f'{key} has {len(val)} samples')
         return ret
-        
+    
+    validate_loaders = {'refcoco+_testA': {"loader": validate_testA_loader, "coco_eval_file":os.path.join(root, 'instances_refcoco+_testA.json')},
+                        "refcoco+_testB": {"loader": validate_testB_loader, "coco_eval_file":os.path.join(root, 'instances_refcoco+_testB.json')}}
     return train_loader, sampler_train,\
-            {'refcoco+_testA': {"loader": validate_testA_loader, "coco_eval_file":os.path.join(root, 'instances_refcoco+_testA.json')},
-             "refcoco+_testB": {"loader": validate_testB_loader, "coco_eval_file":os.path.join(root, 'instances_refcoco+_testB.json')}}, \
-                partial(validate, validate_metrics=validate_metrics, root=root),\
-                None, None
+        partial(validate, loaders=validate_loaders, validate_metrics=validate_metrics, root=root),\
+        None, None
 
 
 @register_data_schedule

@@ -6,23 +6,19 @@ import logging
 import time
 import os
 import sys
-from data_schedule import data_schedule_entrypoints
-from models import model_entrypoint
-from util.misc import NestedTensor, reduce_dict, to_device
+from util.misc import reduce_dict, to_device
 import gc
 import wandb
-from util.misc import all_gather, SmoothedValue, MetricLogger, reduce_scalar ,setup_for_distributed
+from util.misc import  SmoothedValue, MetricLogger
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 import torch.distributed as dist
 import datetime
 
-from models.video_swin import compute_mask
-from tqdm import tqdm
-from PIL import Image
+from models.backbone.swin import compute_mask
 from .registry import register_task
-__all__ = ['rios', 'rvos', 'r3os']
-
+from data_schedule import data_schedule_entrypoints
+from models import model_entrypoint
 
 class Trainer_Referring_ImageVideo3D_Segmentation:
     def __init__(self, 
@@ -91,7 +87,7 @@ class Trainer_Referring_ImageVideo3D_Segmentation:
             self.validateset_vis_idxs = visualize_configs['validateset_idxs']
         if self.test_loader is not None:
             self.testset_vis_idxs = visualize_configs['testset_idxs']
-            
+
     def train(self):   
         for self.epoch in range(self.epoch + 1, self.total_epochs):
             self.model.train()
@@ -115,17 +111,10 @@ class Trainer_Referring_ImageVideo3D_Segmentation:
                 if debug_step_iteration:
                     break
                 self.optimizer.zero_grad() #对于gradient sampling来说, 内部会先进行梯度下降
-
-                samples = to_device(batch_dict['samples'], self.device)
-                targets = to_device(batch_dict['targets'], self.device)
-                text_queries = batch_dict['text_query']
-                auxiliary = to_device(batch_dict['auxiliary'], self.device)
                 if idx < 10:
-                    logging.info(auxiliary['sample_idx'])
-                
+                    logging.info(batch_dict['auxiliary']['sample_idx'])
                 start = time.time()
-                loss_dict_unscaled, loss_dict_scaled, gradient_norm = self.model(samples, text_queries, auxiliary, targets) 
-                
+                loss_dict_unscaled, loss_dict_scaled, gradient_norm = self.model(batch_dict, visualize=False) 
                 if self.clip_gradient_norm > 0:
                     its = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_gradient_norm)
                     assert torch.isclose(its, gradient_norm).item()
@@ -254,7 +243,6 @@ class Trainer_Referring_ImageVideo3D_Segmentation:
                     if batch_idx == self.visualize_test_set_end_idx:
                         break
 
-
     def save_ckpt(self, metrics):
         model_without_ddp = self.model.module if isinstance(self.model, DDP) else self.model
         # rng_state_dict = {
@@ -266,10 +254,9 @@ class Trainer_Referring_ImageVideo3D_Segmentation:
         checkpoint_dict = {
             'epoch': self.epoch,
             'iteration': self.iteration,
-            'model_state_dict': model_without_ddp.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler is not None else None,
-            # 'rng_state': rng_state_dict
+            'model': model_without_ddp.state_dict(),
+            'optimizer': self.optimizer.state_dict(),
+            'scheduler': self.scheduler.state_dict() if self.scheduler is not None else None,
         }
         epoch_dir = os.path.join(self.out_dir, f'epoch_{self.epoch}')
         os.makedirs(epoch_dir, exist_ok=True)
