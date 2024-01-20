@@ -18,8 +18,7 @@ class RandomHorizontalFlip:
     def __init__(self, p=0.5):
         self.p = p
 
-    def __call__(self, old_ret):
-        ret = dcopy(old_ret)
+    def __call__(self, ret):
         if random.random() < self.p:
             video = ret['video']
             w, h = video[0].size
@@ -49,8 +48,7 @@ class RandomVerticalFlip:
     def __init__(self, p=0.5):
         self.p = p
 
-    def __call__(self, old_ret):
-        ret = dcopy(old_ret)
+    def __call__(self, ret):
         if random.random() < self.p:
             video = ret['video']
             w, h = video[0].size
@@ -93,8 +91,7 @@ class RandomResize:
         self.sizes = sizes
         self.max_size = max_size
 
-    def __call__(self, old_ret):
-        ret = dcopy(old_ret)
+    def __call__(self, ret):
         video = ret['video']
         orig_size = video[0].size # w h
         tgt_size = get_tgt_size(video[0].size, random.choice(self.sizes), self.max_size) # h w
@@ -108,6 +105,7 @@ class RandomResize:
             ret['callback_fns'].append(RandomResize(sizes=[orig_size], max_size=None))
 
         if "pred_masks" in ret:
+            assert (len(self.sizes) == 1) and (self.max_size == None)
             VIS_Aug_CallbackAPI
             pred_masks = ret['pred_masks'] # list[nt h w], t
             pred_masks = [torch.nn.functional.interpolate(mk.unsqueeze(0).float(), tgt_size, mode='nearest')[0].bool()
@@ -174,37 +172,4 @@ class WeakPolyP_EvalAug:
         VIS_Aug_CallbackAPI
         ret = self.resize(ret)
         ret = self.tensor_video(ret)        
-        return ret
-
-
-class WeakPolyP_EvalAug_Callback:
-    def __init__(self, configs) -> None:
-        self.pil_video = VideoToPIL()
-        self.transform = A.ReplayCompose([
-            A.Resize(352, 352),
-        ])
-        
-
-    def __call__(self, ret):
-        ret = self.pil_video(ret)
-        VIS_Aug_CallbackAPI
-        video = ret['video'] 
-        # list[PIL], n t' h w -> 
-        # list[h w 3, 255rgb], t
-        # list[list[h w, 01uint8]] t
-        video, masks = pil_torch_to_numpy(video=video, masks=masks, has_ann=has_ann)
-
-        replay = self.transform(image=video[0], mask=[masks[0][0]])['replay']
-        auged_video = []
-        auged_mask = []
-        for vid, mk in zip(video, masks):
-            ret = self.transform.replay(replay, image=vid, mask=mk)
-            auged_video.append(ret['image'])
-            auged_mask.append(ret['mask'])
-        
-        auged_video, auged_mask = numpy_to_pil_torch(video=auged_video, auged_mask=auged_mask, has_ann=has_ann)
-
-        ret['video'] = auged_video
-        ret['masks'] = auged_mask
-        
         return ret

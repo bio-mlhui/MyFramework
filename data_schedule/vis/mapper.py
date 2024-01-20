@@ -107,7 +107,7 @@ class VIS_Video_or_Step_To_Clip_TrainMapper(VIS_TrainMapper):
             re_sample = (len(list(set(appear_objs.tolist()) & set(all_obj_ids))) == 0)
             # 只要出现某些个物体就行
             sampled_counts += 1
-            if sampled_counts > 50:
+            if sampled_counts > 2:
                 logging.error('sampled two much times')
                 raise RuntimeError()
             

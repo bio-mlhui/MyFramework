@@ -131,7 +131,6 @@ class UnetPolyPSeg_VideoDiff(nn.Module):
 
         orig_video = Trans_F.normalize(orig_video, [0, 0, 0], 1 / self.pixel_std)
         orig_video = Trans_F.normalize(orig_video, -self.pixel_mean, [1, 1, 1])
-        VIS_AugAPI
         return {
             'video': [orig_video], # t 3 h w
             'pred_masks': [pred_masks], # list[1 h w], t, bool
@@ -200,7 +199,7 @@ class UnetPolyPSeg_VideoDiff(nn.Module):
 
 @register_model
 def unet_polyp_seg_video_diff(configs, device):
-    from .decode_frame_query import AUXMapper_v1
+    from .aux_mapper import AUXMapper_v1
     model = UnetPolyPSeg_VideoDiff(configs)
     model.to(device)
     params_group, log_lr_group_idx = UnetPolyPSeg_VideoDiff.get_optim_params_group(model=model, configs=configs)

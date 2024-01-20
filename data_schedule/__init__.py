@@ -108,6 +108,7 @@ def evaluate_call(evaluators, model, output_dir):
         metric_dict = evaluator(model=model,output_dir=output_dir)
         if comm.is_main_process():
             for key, value in metric_dict.items():
+                assert f'{key}_{eval_dataset_name}' not in ret
                 ret[f'{key}_{eval_dataset_name}'] = value
         comm.synchronize()
     return ret

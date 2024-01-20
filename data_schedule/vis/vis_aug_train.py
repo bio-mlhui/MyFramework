@@ -23,8 +23,7 @@ class RandomHFlip:
     def __init__(self, p=0.5):
         self.p = p
 
-    def __call__(self, old_ret):
-        ret = dcopy(old_ret)
+    def __call__(self, ret):
         if random.random() < self.p:
             video = ret['video']
             w, h = video[0].size
@@ -49,8 +48,7 @@ class RandomVFlip:
     def __init__(self, p=0.5):
         self.p = p
 
-    def __call__(self, old_ret):
-        ret = dcopy(old_ret)
+    def __call__(self, ret):
         if random.random() < self.p:
             video = ret['video']
             w, h = video[0].size
@@ -89,8 +87,7 @@ class RandomResize:
         self.sizes = sizes
         self.max_size = max_size
 
-    def __call__(self, old_ret):
-        ret = dcopy(old_ret)
+    def __call__(self, ret):
         video = ret['video']
         orig_size = video[0].size # w h
         tgt_size = get_tgt_size(video[0].size, random.choice(self.sizes), self.max_size) # h w
@@ -119,8 +116,7 @@ class RandomRotate90:
             [A.RandomRotate90(0.5)]
         )
     
-    def __call__(self, old_ret):
-        ret = dcopy(old_ret)
+    def __call__(self, ret):
         video = ret['video'] 
         masks = ret['masks'] 
         has_ann = ret['has_ann']
@@ -144,8 +140,7 @@ class RandomRotate90:
         return ret
 
 class ComputeBox:
-    def __call__(self, old_ret):
-        ret = dcopy(old_ret)
+    def __call__(self, ret):
         W, H = ret['video'][0].size
         N, T = ret['masks'].shape[:2] # n t' h w
         boxes = torch.stack([bounding_box_from_mask(mask) for mask in copy.deepcopy(ret['masks']).flatten(0, 1)], dim=0) # Nt' 4

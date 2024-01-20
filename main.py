@@ -13,6 +13,7 @@ import yaml
 import torch
 from util.misc import setup_for_distributed
 import torch.distributed as dist
+from detectron2.utils.logger import setup_logger
 
 def _highlight(code, filename):
     try:

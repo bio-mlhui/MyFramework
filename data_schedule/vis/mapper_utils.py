@@ -27,9 +27,8 @@ class VIS_TrainMapper(VIS_Mapper):
         assert mapper_config['augmentation']['name'] in ['Hflip_RandomResize', 'WeakPolyP_TrainAug']
         self.augmentation = VIS_TRAIN_AUG_REGISTRY.get(mapper_config['augmentation']['name'])(mapper_config['augmentation'])
 
-    def map_to_frame_targets(self, clip_targets):
+    def map_to_frame_targets(self, clip_rets):
         VIS_TrainAPI_clipped_video
-        clip_rets = copy.deepcopy(clip_targets)
         masks = clip_rets['masks'].transpose(0, 1).contiguous() # t' N h w
         boxes = clip_rets['boxes'].transpose(0, 1).contiguous() # t' N 4
         class_labels = clip_rets['classes'] # [10, 32, 10, 4]
@@ -50,9 +49,8 @@ class VIS_TrainMapper(VIS_Mapper):
             ret.append(frame_targets)
         return ret
 
-    def map_global_targets_to_local_targets(self, ret_with_global_targets):
+    def map_global_targets_to_local_targets(self, ret):
         VIS_TrainAPI_clipped_video
-        ret = copy.deepcopy(ret_with_global_targets)
         masks = ret['masks'] # N t' h w
         boxes = ret['boxes'] # N t' 4
         class_labels = ret['classes'] # N

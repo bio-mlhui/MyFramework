@@ -140,11 +140,14 @@ for name in SET_NAME:
     elif mode == 'evaluate':
         prefix = SET_NAME_TO_PREFIX[name]
         validate_meta = copy.deepcopy(polyp_meta)
+        eval_meta_keys = [f'{vid}_{frame}' for vid in video_ids for frame in video_to_frames[vid]] 
+
         validate_meta.update({
             'mode': 'evaluate',
             'get_frames_fn': partial(get_frames, frames_path=os.path.join(root, os.path.join(set_dir, 'Frame'))),
             'eval_set_name': SET_NAME_TO_DIR[name],
             'get_frames_gt_mask_fn': partial(get_frames_mask, mask_path=os.path.join(root, os.path.join(set_dir, 'GT')),),
+            'eval_meta_keys': eval_meta_keys
         })
         # validate
         for step_size in  [1, None,]:

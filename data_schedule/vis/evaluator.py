@@ -29,17 +29,13 @@ class VIS_Evaluator:
         self.loader = data_loader
         metrics = configs['data']['evaluate'][dataset_name]['evaluator']['metrics']
         dataset_meta = MetadataCatalog.get(dataset_name)
-        metric_fns = []
-        metric_names = []
+        self.metric_fns = []
         for metric_name, metric_config in metrics:
             metric_fn = vis_metric_entrypoint(metric_name)
-            metric_fn = partial(metric_fn, 
-                                dataset_meta=dataset_meta,
-                                **metric_config)
-            metric_fns.append(metric_fn)
-            metric_names.append(metric_name)
-        self.metric_fns = metric_fns
-        self.metric_names = metric_names
+            metric_fn = partial(metric_fn, dataset_meta=dataset_meta, **metric_config)
+            self.metric_fns.append(metric_fn)
+            
+        self.eval_meta_keys = dataset_meta.get('eval_meta_keys') 
 
     def visualize_path(self, meta_idxs, visualize, evaluator_path):
         return [os.path.join(evaluator_path, f'meta_{meta_idx}') if vis else None for (meta_idx, vis) in zip(meta_idxs, visualize)]
@@ -48,10 +44,10 @@ class VIS_Evaluator:
     def __call__(self, model, output_dir):
         evaluator_path = os.path.join(output_dir, f'eval_{self.dataset_name}')
         os.makedirs(evaluator_path, exist_ok=True)
-        model_preds = []
+        
+        metric_dict_by_vid_frame = {} # meta_key: {metric_name: scalar, metric_name2: scaler}
         for batch_dict in tqdm(self.loader):
             VIS_EvalAPI_clipped_video_request_ann
-            # meta
             eval_metas = batch_dict.pop('metas')
             request_anns = eval_metas['request_ann'][0] # t, bool tensor
             frame_strs = eval_metas['frames'][0] # t', list[str]
@@ -80,43 +76,40 @@ class VIS_Evaluator:
             assert len(frame_strs) == len(pred_masks)
 
             for idx, (fname, fmk, fclass) in enumerate(zip(frame_strs, pred_masks, pred_class)):
-                rle_masks = [mask_util.encode(np.array(mask.numpy()[:, :, np.newaxis], dtype=np.uint8, order="F"))[0]
-                                        for mask in fmk]
-                for mask_idx in range(len(rle_masks)):
-                    rle_masks[mask_idx]['counts'] = rle_masks[mask_idx]['counts'].decode('utf-8')
                 VIS_Evaluator_OutAPI_EvalFn_API
-                frame_pred = {
-                    'video_id': video_id,
-                    'frame_name': fname,
-                    'masks': rle_masks, # list[rle], nt
-                    'classes': fclass.tolist(), # nt c
-                }
+                frame_pred = {'masks': fmk, 'classes': fclass.tolist(), 'video_id': video_id, 'frame_name': fname}
                 if 'pred_boxes' in predictions:
-                    frame_pred.update({'boxes': pred_boxes[idx]}), # nt 4, x1y1x2y2})
-                model_preds.append(frame_pred)
-        # logging.debug('Gathering...')
-        # start = time.time()
-        # model_preds = comm.gather(model_preds, dst=0)   
-        # logging.debug(f'Gather done, using {time.time() - start} s')
-        with open(os.path.join(evaluator_path, f'preds_rank_{comm.get_rank()}.json'), 'w') as f:
-            json.dump(model_preds, f)
+                    frame_pred.update({'boxes': pred_boxes[idx]})
+
+                meta_key = f'{video_id}_{fname}'
+                meta_key_metrics = {}                
+                for metric_fn in self.metric_fns:
+                    metric_values = metric_fn(frame_pred=frame_pred, output_dir=evaluator_path)
+                    for key, value in metric_values.items():
+                        assert key not in meta_key_metrics
+                        meta_key_metrics[key] = value
+
+                assert meta_key not in metric_dict_by_vid_frame
+                metric_dict_by_vid_frame[meta_key] = meta_key_metrics
+
+        metric_dict_by_vid_frame = comm.gather(metric_dict_by_vid_frame, dst=0)
         comm.synchronize()
         eval_metrics = {}
         if comm.is_main_process():
-            logging.debug('Gathering ...')
-            start = time.time()
-            all_model_preds = []
-            for rank in range(comm.get_world_size()):
-                with open(os.path.join(evaluator_path, f'preds_rank_{rank}.json'), 'r') as f:
-                    rank_preds = json.load(f)
-                    all_model_preds.append(rank_preds)
-                os.remove(os.path.join(evaluator_path, f'preds_rank_{rank}.json'))
-            logging.debug(f'Gather done, using {time.time() - start} s')
+            # list[dict]
+            gathered_ret = {}
+            for process_pred in metric_dict_by_vid_frame:
+                assert len(set(list(process_pred.keys())) & set(list(gathered_ret.keys()))) == 0
+                gathered_ret.update(process_pred)
+            metric_dict_by_vid_frame = gathered_ret
+            assert len(set(list((metric_dict_by_vid_frame.keys()))) - set(self.eval_meta_keys)) == 0
+            assert len(set(self.eval_meta_keys) - set(list(metric_dict_by_vid_frame.keys()))) == 0
 
-            all_model_preds = [itm for item in all_model_preds for itm in item ]
-            for metric_fn in self.metric_fns:
-                eval_metrics.update(metric_fn(model_preds=all_model_preds, 
-                                              output_dir=evaluator_path))
+            eval_metrics = {}
+            metric_names = list(list(metric_dict_by_vid_frame.values())[0].keys())
+            for taylor_swift in metric_names:
+                eval_metrics[taylor_swift] = torch.tensor([metric_dict[taylor_swift] for metric_dict in metric_dict_by_vid_frame.values()]).mean()
+
         comm.synchronize() 
         return eval_metrics
 

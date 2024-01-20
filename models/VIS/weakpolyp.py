@@ -30,6 +30,7 @@ from data_schedule.vis.apis import VIS_TrainAPI_clipped_video, VIS_Aug_CallbackA
 from data_schedule.vis.apis import VIS_EvalAPI_clipped_video_request_ann
 import time
 
+
 class Fusion(nn.Module):
     def __init__(self, channels):
         super(Fusion, self).__init__()
@@ -163,10 +164,11 @@ class WeakPolyP(nn.Module):
     def sample(self, batch_dict):
         assert not self.training
         VIS_EvalAPI_clipped_video_request_ann
-        videos = batch_dict.pop('video_dict')['videos'] # b t 3 h w, 0-1
-        orig_t, orig_h, orig_w = batch_dict.pop('orig_size')[0]
+        videos = batch_dict['video_dict']['videos'] # b t 3 h w, 0-1
+        orig_t, _, orig_h, orig_w = batch_dict['video_dict']['orig_sizes'][0]
         videos = (videos - self.pixel_mean) / self.pixel_std
         assert videos.shape[1] == 1, 'weak_poly只输入单帧训练和测试' 
+        assert videos.shape[0] == 1
         batch_size, T, _, H, W = videos.shape
         # b t 3 h w
         pred_mask = self.model_preds(videos.permute(0, 2, 1, 3, 4).contiguous()) # b 1 h w
@@ -253,7 +255,7 @@ class WeakPolyP(nn.Module):
 
 @register_model
 def weak_polyp(configs, device):
-    from .decode_frame_query import AUXMapper_v1
+    from .aux_mapper import AUXMapper_v1
     model = WeakPolyP(configs)
     model.to(device)
     params_group, log_lr_group_idx = WeakPolyP.get_optim_params_group(model=model, configs=configs)
