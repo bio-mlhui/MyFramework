@@ -26,7 +26,7 @@ class Frames_Sampler:
 class Naive_ReferenceFrame_FrameSampler:
     # naive: 没有使用外部模型或者数据, # 没有考虑每一帧的情况, 只是按照下标进行抽样
     def __init__(self, sampler_configs, dataset_meta, **kwargs):            
-        assert dataset_meta.get('name') in ['polyp_train_step[1]', 'polyp_train_step[6]', 
+        assert dataset_meta.get('name') in ['polyp_train_step[1]', 'polyp_train_step[6]',  'weakpolyp_train_step[1]',
                                             'polyp_hard_unseen_validate_step[1]',
                                             'polyp_easy_unseen_validate_step[1]',
                                             'polyp_hard_seen_validate_step[1]',

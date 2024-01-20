@@ -219,6 +219,21 @@ class WeakPolyP_TrainAug:
 
 
 @VIS_TRAIN_AUG_REGISTRY.register()
+class Fibroid_TrainAug:
+    def __init__(self, configs) -> None:
+        self.hflip = RandomHFlip(0.5)
+        self.resize = RandomResize(sizes=[400, 500, 512, 640], max_size=1333)
+        self.tensor_video = VideoToTensor()
+
+    def __call__(self, ret):
+        VIS_Aug_CallbackAPI
+        ret = self.hflip(ret)
+        ret = self.resize(ret)
+        ret = self.tensor_video(ret)
+        return ret
+
+
+@VIS_TRAIN_AUG_REGISTRY.register()
 class Hflip_RandomResize:
     def __init__(self, configs):
         sizes = configs['sizes'] # list[(w_final, h_final)] / list[短边的目标长度, 保持ratio]

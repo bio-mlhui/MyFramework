@@ -89,7 +89,7 @@ _root = os.getenv('DATASET_PATH')
 root = os.path.join(_root, 'SUN/SUN-SEG2')
 
 visualize_meta_idxs = defaultdict(list)
-visualize_meta_idxs['polyp_train_step6'] = [] 
+visualize_meta_idxs['polyp_train_step[6]'] = [] 
 visualize_meta_idxs['polyp_train'] = []  #  hybrid temporal scale training
 visualize_meta_idxs['polyp_hard_unseen'] = []
 visualize_meta_idxs['polyp_hard_seen'] = []
@@ -164,6 +164,42 @@ for name in SET_NAME:
 
 
 
+
+
+# weakpolyp_train
+root = os.path.join(_root, 'SUN/WeakPolyp-Processed')
+set_dir = 'TrainDataset'
+set_dir = os.path.join(root, set_dir)
+num_videos = SET_NAME_TO_NUM_VIDEOS['Poly_Train']
+video_ids = os.listdir(os.path.join(set_dir, 'Frame'))
+assert len(video_ids) == num_videos
+
+video_to_frames = {
+    vid: sorted([png[:-4] for png in os.listdir(os.path.join(set_dir, 'Frame', vid)) if png.endswith('.jpg')])\
+        for vid in video_ids
+}
+mode = SET_NAME_TO_MODE[name]
+train_meta = copy.deepcopy(polyp_meta)
+train_meta.update({
+    'mode': 'train',
+    'get_frames_fn': partial(get_frames, frames_path=os.path.join(set_dir, 'Frame')),
+    'get_frames_mask_fn': partial(get_frames_mask, mask_path=os.path.join(set_dir, 'Box'),),
+})
+
+for step_size in [1, 6, 12, None]:
+    step_identifer = '' if step_size is None else f'_step[{step_size}]'
+    split_name = f'weakpolyp_train{step_identifer}'
+    train_meta.update({'name': split_name})
+    DatasetCatalog.register(split_name, partial(polyp_train,
+                                                video_ids=video_ids, 
+                                                split_dataset_name=split_name,
+                                                step_size=step_size,
+                                                video_to_frames=video_to_frames,
+                                                root_path=set_dir))    
+    MetadataCatalog.get(split_name).set(**train_meta, 
+                                        step_size=step_size,
+                                        visualize_meta_idxs=visualize_meta_idxs[split_name]) 
+        
 
 
  

@@ -22,14 +22,14 @@ SET_NAME = ['Poly_Train',
          'Poly_Hard_Seen', 
          'Poly_Hard_Unseen', 
          'Poly_Easy_Seen', 
-         'Poly_Easy_Unseen']
+         'Poly_Easy_Unseen',]
 
 SET_NAME_TO_DIR = {
     'Poly_Train': 'TrainDataset',
     'Poly_Hard_Seen': 'TestHardDataset/Seen',
     'Poly_Hard_Unseen': 'TestHardDataset/Unseen',
     'Poly_Easy_Seen': 'TestEasyDataset/Seen',
-    'Poly_Easy_Unseen': 'TestEasyDataset/Unseen'
+    'Poly_Easy_Unseen': 'TestEasyDataset/Unseen',
 }
 
 SET_NAME_TO_NUM_VIDEOS = {

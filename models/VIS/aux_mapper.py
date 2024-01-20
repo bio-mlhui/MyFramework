@@ -43,7 +43,6 @@ class AUXMapper_v1:
         return data_dict
 
     def collate(self, batch_dict, mode, max_stride):
-        time1 = time.time()
         if mode == 'train':
             VIS_TrainAPI_clipped_video
             video_dict = self.collate_video_dict(batch_dict, max_stride=max_stride)
@@ -83,7 +82,6 @@ class AUXMapper_v1:
         debug_data = False
         if debug_data:
             self.visualize_input_target_for_debug_data(ret) # ./test.png
-        print('collating time:', time.time() - time1)
         return ret
 
     def collate_video_dict(self, batch_dict, max_stride):

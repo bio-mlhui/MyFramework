@@ -1,41 +1,37 @@
-import os, shutil, glob
 
-SUN_root = '/home/xuhuihui/datasets/SUN/SUN-SEG2/SUN-Positive/'
-SUNSEG_root = '/home/xuhuihui/datasets/SUN/SUN-SEG2/SUN-SEG-Annotation/'
+import os
+import cv2
+import numpy as np
 
-SUN_split_dict = {}
-SUNSEG_split_dict = {}
-SUNSEG_dataset_dict = {}
-image_list = []
 
-# SUN_list = glob.glob(SUN_root + '*/*.jpg')
-SUNSEG_test_list = glob.glob(SUNSEG_root + 'Test*/*/GT/*/*.png')
-SUNSEG_train_list = glob.glob(SUNSEG_root + 'TrainDataset/GT/*/*.png')
-SUNSEG_list = SUNSEG_test_list + SUNSEG_train_list
+root = '/home/xuhuihui/datasets/SUN/SUN-SEG2'
 
-SUN_list = [os.path.join(SUN_root, name.split('/')[-2].split('_')[0] if len(name.split('/')[-2].split('_')) > 1 else name.split('/')[-2], name.split('/')[-1].replace('.png', '')) for name in SUNSEG_list]
+def preprocess(path_src):
+    print('process', path_src)
+    path_dst = path_src.replace('/SUN-SEG2/', '/WeakPolyp-Processed/')
+    for folder in os.listdir(path_src+'/Frame'):
+        print(folder)
+        for name in os.listdir(path_src+'/Frame/'+folder):
+            image    = cv2.imread(path_src+'/Frame/'+folder+'/'+name)
+            image    = cv2.resize(image, (352,352), interpolation=cv2.INTER_LINEAR)
+            mask     = cv2.imread(path_src+'/GT/'+folder+'/'+name.replace('.jpg', '.png'), cv2.IMREAD_GRAYSCALE)
+            mask     = cv2.resize(mask, (352, 352), interpolation=cv2.INTER_NEAREST)
+            contours = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
+            box      = np.zeros_like(mask)
+            for contour in contours:
+                x,y,w,h = cv2.boundingRect(contour)
+                box[y:y+h, x:x+w] = 255
+            
+            os.makedirs(path_dst+'/Frame/'+folder, exist_ok=True)
+            cv2.imwrite(path_dst+'/Frame/'+folder+'/'+name, image)
+            os.makedirs(path_dst+'/GT/'   +folder, exist_ok=True)
+            cv2.imwrite(path_dst+'/GT/'   +folder+'/'+name.replace('.jpg', '.png'), mask)
+            os.makedirs(path_dst+'/Box/'  +folder, exist_ok=True)
+            cv2.imwrite(path_dst+'/Box/'  +folder+'/'+name.replace('.jpg', '.png'), box)
 
-for SUN_path, SUNSEG_path in zip(SUN_list, SUNSEG_list):
-    """
-        @func: Get SUN and SUN-SEG case-to-image structure in a dictionary
-    """
-    SUN_case_name, SUN_image_name = SUN_path.split('/')[-2], SUN_path.split('/')[-1]
-    SUNSEG_dataset_name, SUNSEG_case_name, SUNSEG_image_name = SUNSEG_path.split('SUN-SEG-Annotation/')[1].split('/GT')[0], SUNSEG_path.split('/')[-2], SUNSEG_path.split('/')[-1].rstrip('.png')
-
-    SUN_split_dict[SUN_image_name] = SUN_case_name
-    SUNSEG_split_dict[SUNSEG_image_name] = SUNSEG_case_name
-    SUNSEG_dataset_dict[SUNSEG_image_name] = SUNSEG_dataset_name
-    image_list.append(SUN_image_name)
-
-for image in image_list:
-    """
-        @func: Change original SUN's structure
-    """
-    SUN_case = SUN_split_dict[image]
-    SUNSEG_case = SUNSEG_split_dict[image]
-    dataset_split = SUNSEG_dataset_dict[image]
-
-    os.makedirs(os.path.join(SUNSEG_root, dataset_split, 'Frame', SUNSEG_case), exist_ok=True)
-
-    shutil.move(os.path.join(SUN_root, SUN_case, image + '.jpg'),
-                os.path.join(SUNSEG_root, dataset_split, 'Frame', SUNSEG_case, image + '.jpg'))
+if not os.path.exists('/home/xuhuihui/datasets/SUN/WeakPolyp-Processed/'):
+    preprocess('/home/xuhuihui/datasets/SUN/SUN-SEG2/TrainDataset')
+    preprocess('/home/xuhuihui/datasets/SUN/SUN-SEG2/TestEasyDataset/Seen')
+    preprocess('/home/xuhuihui/datasets/SUN/SUN-SEG2/TestEasyDataset/Unseen')
+    preprocess('/home/xuhuihui/datasets/SUN/SUN-SEG2/TestHardDataset/Seen')
+    preprocess('/home/xuhuihui/datasets/SUN/SUN-SEG2/TestHardDataset/Unseen')

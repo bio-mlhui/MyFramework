@@ -1,4 +1,4 @@
-from data_schedule.vos.registry import register_vos_metric
+from data_schedule.vis.evaluator_utils import register_vis_metric
 import os
 from glob import glob
 from tqdm import tqdm
@@ -11,39 +11,9 @@ import detectron2.utils.comm as comm
 import logging
 import pycocotools.mask as mask_util
 from pycocotools.mask import decode as decode_rle
-from data_schedule.vos.fibroid import metrics
+import data_schedule.vis.fibroid.metrics as metrics
 
 
-# 把这些prediction mask可视化到output_dir, 并且打包
-@register_vos_metric
-def fibroid_web(model_preds,
-                 output_dir,
-                 **kwargs):
-    assert comm.is_main_process()
-    # output_dir: epc1_iter500_sap8099/eval_dataset1
-    if os.path.exists(os.path.join(output_dir, 'web')):
-        shutil.rmtree(os.path.join(output_dir, 'web'))
-    os.makedirs(os.path.join(output_dir, 'web')) 
-
-    for pred in model_preds:
-        video_id = pred['video_id'] # str
-        frame_name = pred['frame_name'] # list[str], t'
-        masks = pred['masks']# list[rle], nq
-        scores = pred['scores'] # nq
-
-        max_idx = torch.tensor(scores).argmax()
-        mask = masks[max_idx] # rle
-        mask = decode_rle(mask) # h w
-        mask = torch.as_tensor(mask, dtype=torch.uint8).contiguous()
-
-        mask = Image.fromarray(255 * mask.int().numpy()).convert('L')
-
-        save_path = os.path.join(output_dir, 'web', video_id)
-        os.makedirs(save_path, exist_ok=True)
-        mask.save(os.path.join(save_path, f'{frame_name}.png'))
-    
-    return {}
-            
 
 @register_vos_metric
 def fibroid_all_medi(model_preds, 

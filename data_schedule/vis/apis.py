@@ -5,6 +5,7 @@ class VIS_Dataset:
     'all_frames' : list[str],
     训练集:
     'all_objs': {obj_id: {'class': 0,}},
+    obj可以是某个object(instance)或者某个semantic
 
     训练集/测试集
     'frame_idx': 抽clip的时候的参考帧下标, 相对于all_frames, 具体怎么抽要传到frame_sampler里
@@ -18,7 +19,7 @@ class VIS_Aug_CallbackAPI:
     'has_ann': t, bool
     'classes': n,
     'class_names': list[str], n
-    'boxes': n t' 4, x1y1x2y2绝对值
+    'boxes': n t' 4, x1y1x2y2绝对值, 如果是instance的话, semantic segmentation没有box
 
     模型测试的输出api: 每一帧有多个mask/box预测, 每个预测都有类别的概率, 最后一个类别是背景类
     'video': t 3 h w, 0-1

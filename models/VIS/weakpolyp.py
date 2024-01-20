@@ -75,10 +75,6 @@ class WeakPolyP(nn.Module):
     def device(self):
         return self.pixel_mean.device
 
-    def compute_loss(self, pred):
-        # stride8, dim64的feature map
-        pass
-
     def model_preds(self, videos):
         # b 3 t h w
         bbout = self.video_backbone(x=videos.contiguous(),)
@@ -100,12 +96,12 @@ class WeakPolyP(nn.Module):
         VIS_TrainAPI_clipped_video
         # 看成instance个数是1的instance segmentation
         videos = batch_dict.pop('video_dict')['videos'] # b t 3 h w, 0-1
+        # plt.imsave('./frame.png', videos[0][0].permute(1,2,0).cpu().numpy())
         videos = (videos - self.pixel_mean) / self.pixel_std
         assert videos.shape[1] == 1, 'weak_poly只输入单帧训练' 
-
         image = videos.squeeze(1) # b 3 h w
-
         masks = batch_dict['targets']['masks'] # list[n t' h w], b
+        # plt.imsave('./mask.png', masks[0][0][0].cpu().numpy())
         mask = torch.stack([mk.squeeze() for mk in masks], dim=0).unsqueeze(1).float() # b 1 h w
 
         size1, size2  = np.random.choice([256, 288, 320, 352, 384, 416, 448], 2).tolist()
@@ -259,7 +255,11 @@ def weak_polyp(configs, device):
     model = WeakPolyP(configs)
     model.to(device)
     params_group, log_lr_group_idx = WeakPolyP.get_optim_params_group(model=model, configs=configs)
+    to_train_num_parameters = len([n for n, p in model.named_parameters() if p.requires_grad])
+    assert len(params_group) == to_train_num_parameters, \
+        f'parames_group设计出错, 有{len(to_train_num_parameters) - len(params_group)}个参数没有列在params_group里'
     optimizer = get_optimizer(params_group, configs)
+
     scheduler = build_scheduler(configs=configs, optimizer=optimizer)
     model_input_mapper = AUXMapper_v1(configs['model']['input_aux'])
 

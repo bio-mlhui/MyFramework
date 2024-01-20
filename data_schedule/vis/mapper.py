@@ -73,7 +73,7 @@ class VIS_Video_or_Step_To_Clip_TrainMapper(VIS_TrainMapper):
                  mode, 
                  meta_idx_shift,
                  ):  
-        good_dataset_names = ['polyp_train', 'polyp_train_step[6]', 'polyp_train_step[1]']
+        good_dataset_names = ['polyp_train', 'polyp_train_step[6]', 'polyp_train_step[1]', 'weakpolyp_train_step[1]']
         assert dataset_name in good_dataset_names
         assert mode == 'train'
         dataset_meta = MetadataCatalog.get(dataset_name)

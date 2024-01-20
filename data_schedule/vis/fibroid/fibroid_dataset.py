@@ -10,7 +10,7 @@ import copy
 from detectron2.data import DatasetCatalog, MetadataCatalog
 from collections import defaultdict
 from .fibroid_utils import get_frames, get_frames_mask
-
+from data_schedule.vis.apis import VIS_Dataset
 
 # 单帧是vis, 整个视频是vos
 def fibroid_train(step_size, # none / int; 0, 6, 13, 19 ...
@@ -22,32 +22,25 @@ def fibroid_train(step_size, # none / int; 0, 6, 13, 19 ...
     for vid_id in tqdm(video_ids):
         all_frames = sorted(video_to_frames[vid_id])
         if step_size is None:  
-            # fibroid_train
-            # video_id:
-            # meta_idx 
-            # all_frames: list[str], 这个视频的所有frame的string, 排序好的
+            VIS_Dataset
             metas.append({
                 'video_id': vid_id,
                 'all_frames' : all_frames,
-                'meta_idx': len(metas)
+                'meta_idx': len(metas),
+                'all_objs': {1: {'class': 0,}} # 语义分割
             }) 
         else:
-            # fibroid_train_step[6]
-            # 'video_id': 
-            # 'frame_idx': 
-            # 'all_frames': 
-            # 'meta_idx'
             for frame_idx in range(0, len(all_frames), step_size):
                 metas.append({
                     'video_id': vid_id,
                     'frame_idx': frame_idx,
                     'all_frames': all_frames,
+                    'all_objs': {1: {'class': 0,}}, # 语义分割
                     'meta_idx': len(metas)
                 })                
 
     logging.debug(f'{split_dataset_name} Total metas: [{len(metas)}]')
     return metas
-
 
 def fibroid_evaluate(eval_video_ids,
                      split_dataset_name,
@@ -59,6 +52,7 @@ def fibroid_evaluate(eval_video_ids,
     video_to_frames = FIBROID_VALIDATE_VIDEO_TO_FRAMES
     metas = []
     for video_id in eval_video_ids:
+        VIS_Dataset
         all_frames = sorted(video_to_frames[video_id])
         if step_size == None:
             metas.append({
@@ -101,7 +95,7 @@ def fibroid_evaluate(eval_video_ids,
 
 
 _root = os.getenv('DATASET_PATH')
-root = os.path.join(_root, 'uterus_myoma/Dataset/temp5')
+root = os.path.join(_root, 'uterus_myoma/Dataset/temp')
 fibroid_meta = {
     'thing_classes': ['rumor', 'not rumor'],
     'thing_colors': [(255., 140., 0.), (0., 255., 0.)],
@@ -125,10 +119,11 @@ FIBROID_VALIDATE_VIDEO_TO_FRAMES = {
 }
 
 visualize_meta_idxs = defaultdict(list)
-visualize_meta_idxs['fibroid_train_step6'] = [] 
-visualize_meta_idxs['fibroid_train'] = []  # 不抽样, 50个video, 随机抽一个scale, hybrid temporal scale training
+visualize_meta_idxs['fibroid_train_step[6]'] = [] 
+visualize_meta_idxs['fibroid_train'] = [] 
+visualize_meta_idxs['fibroid_train_ste[1]'] = [] 
 visualize_meta_idxs['fibroid_validate'] = []
-visualize_meta_idxs['fibroid_validate_step1'] = []
+visualize_meta_idxs['fibroid_validate_step[1]'] = []
 
 train_meta = copy.deepcopy(fibroid_meta)
 train_meta.update({
@@ -144,7 +139,7 @@ validate_meta.update({
     'get_frames_gt_mask_fn': partial(get_frames_mask, mask_path=os.path.join(root, 'test/labels'),),
 })
 evaluate_step_sizes = [1, None,] 
-train_step_sizes = [6, 12, 18, None]
+train_step_sizes = [1, 6, None]
 
 # validate
 for step_size in evaluate_step_sizes:
