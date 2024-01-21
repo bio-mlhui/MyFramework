@@ -28,7 +28,7 @@ __all__ = ['Trainer']
 # evaluat_function可以有多个eval数据集
 class Trainer:
     def __init__(self, configs):
-        torch.autograd.set_detect_anomaly(True)
+        torch.autograd.set_detect_anomaly(False)
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
         torch.backends.cudnn.benchmark = True
@@ -94,7 +94,7 @@ class Trainer:
         manual_stop_train = False
         for loader in self.train_loaders:
             for idx, batch_dict in enumerate(loader):
-                if manual_stop_train: # 手动停止实验, 保证load_ckpt的时候, 第一个iteration的sample下标就是num_sample
+                if manual_stop_train:
                     self.save_ckpt()
                 self.model.train()
                 meta_idxs = batch_dict.pop('meta_idxs')
@@ -103,9 +103,9 @@ class Trainer:
                 batch_dict['visualize_paths'] = self.visualize_path(meta_idxs=meta_idxs, 
                                                                     visualize=visualize) # visualize model训练过程
                 iteration_time = time.time()
+                self.optimizer.zero_grad()
                 loss_dict_unscaled, loss_dict_scaled, gradient_norm = self.model(batch_dict)
                 self.optimizer.step()
-                self.optimizer.zero_grad()
                 self.scheduler.step()   
                 iteration_time = time.time() - iteration_time
                 sample_idxs = comm.all_gather(meta_idxs) 

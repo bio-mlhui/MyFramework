@@ -70,6 +70,10 @@ class Res2Net(nn.Module):
         self.layer3 = self._make_layer(Bottle2neck, 256, layers[2], stride=2)
         self.layer4 = self._make_layer(Bottle2neck, 512, layers[3], stride=2)
 
+        state_dict:dict = torch.load(self.snapshot, map_location='cpu')
+        self.load_state_dict(state_dict, strict=False)
+        del state_dict
+
     def _make_layer(self, block, planes, blocks, stride=1):
         downsample = None
         if stride != 1 or self.inplanes != planes * block.expansion:
