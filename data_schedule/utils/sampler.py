@@ -5,7 +5,7 @@ from typing import TypeVar, Optional, Iterator
 T_co = TypeVar('T_co', covariant=True)
 from torch.utils.data.distributed import DistributedSampler
 import detectron2.utils.comm as comm
-from util.misc import all_gather
+from utils.misc import all_gather
 from torch.utils.data import Sampler
 import torch
 

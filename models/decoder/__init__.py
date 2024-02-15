@@ -1,7 +1,11 @@
 
 from .mask2former import (
-    Masked_Decoder_Multiscale
+    Video2D_Image_MaskedAttn_MultiscaleMaskDecoder, Image_MaskedAttn_MultiscaleMaskDecoder
 )
 from .frame_query_decoder import (
     FrameQuery_Refer
+)
+
+from .mask_decoder import (
+    Video2D_ImageConv_MaskDecoder, ImageConv_MaskDecoder
 )

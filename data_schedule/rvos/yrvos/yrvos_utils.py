@@ -18,6 +18,7 @@ from data_schedule.utils.video_clips import generate_windows_of_video
 from glob import glob
 from PIL import Image
 
+from tqdm import tqdm
 
 def check_yrvos_validity(root): 
     assert len(set(list(YRVOS_CATEGORIES.keys()))) == 65
@@ -4137,3 +4138,49 @@ def generate_samples_of_one_video(root, video_annotations, video_id, split, gene
                     'exp_id': exp_id,
                 })
         return samples
+
+
+from collections import defaultdict
+
+# 生成每个video, 每个obj的出现的帧的下标, 
+def get_each_obj_appear_frame_idxs(root, save_path='yrvos_train_appear_frame_idxs_by_video_by_obj_id.json'):
+    save_path = os.path.join(root, save_path)
+    if os.path.exists(save_path):
+        with open(save_path, 'r') as f:
+            appear_frame_idxs_by_video_by_obj_id = json.load(f)
+    else:
+        appear_frame_idxs_by_video_by_obj_id = defaultdict(dict)
+        with open(os.path.join(root, 'meta_expressions', 'train', f'meta_expressions.json'), 'r') as f:
+            video_to_texts = json.load(f)['videos']  
+        # {video_id: expressions: {exp_id: exp, obj_id:str}, frames: []}
+            
+        with open(os.path.join(root, 'train', f'meta.json'), 'r') as f:
+            video_to_objs = json.load(f)['videos']
+        # {video_id: objects: {obj_id: {category, frames}} 
+            
+        for vid_id in tqdm(video_to_texts.keys()):
+            vid_objs = list(video_to_objs[vid_id]['objects'].keys())
+            vid_objs = [int(taylor) for taylor in vid_objs]
+            all_frames = video_to_texts['frames'] # list[str]
+            vid_frames_masks, _ = get_frames_mask(mask_path=os.path.join(root, 'train/Annotations'),
+                                               video_id=vid_id, 
+                                               frames=all_frames) # t h w, 
+            assert len(vid_frames_masks) == len(all_frames)
+
+            vid_masks_by_obj = torch.stack([vid_frames_masks == taylor for taylor in vid_objs], dim=0) # N t h w
+
+            appear_frame_idxs_by_obj = vid_masks_by_obj.flatten(2).any(-1).unbind(0) # list[t], N
+            appear_frame_idxs_by_obj = [torch.where(taylor)[0] for taylor in appear_frame_idxs_by_obj] # list[list[int]], N
+
+            for taylor, cardib in zip(vid_objs, appear_frame_idxs_by_obj):
+                appear_frame_idxs_by_video_by_obj_id[vid_id][taylor] = cardib
+
+        with open(save_path, 'w') as f:
+            json.dump(appear_frame_idxs_by_video_by_obj_id, f)       
+    
+    return appear_frame_idxs_by_video_by_obj_id
+
+            
+
+        
+

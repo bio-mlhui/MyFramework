@@ -531,7 +531,7 @@ class MSDeformAttnTransformerEncoderOnly_fusionText(nn.Module):
 import copy
 from einops import rearrange
 from models.layers.utils import _get_clones
-
+from models.layers.position_encoding import build_position_encoding
 # video multiscale, text_dict
 
 # text和没有转换维度的multiscale进行fusion, multiscale进入encoder
@@ -677,33 +677,32 @@ class VideoMultiscale_Text_Deform2d(nn.Module):
 
         return ret, text_inputs
 
-
 @META_ARCH_REGISTRY.register()
-class VideoMultiscale_Deform2d(nn.Module):
-    # video, text 先proj, 再fusion, 
+class Iamge_Deform2D_MultiscaleEncoder(nn.Module):
     def __init__(
         self,
         configs,
         multiscale_shapes, # {'res2': .temporal_stride, .spatial_stride, .dim}
-        norm = "",
     ):
         super().__init__()
         d_model = configs['d_model']
         fpn_norm = configs['fpn_norm'] # fpn的norm
+        
         nlayers = configs['nlayers']
-        deform_attn = configs['deform_attn']
-        encoded_scales = configs['encoded_scales'] # list[str]
-        multiscale_shapes = dict(sorted(copy.deepcopy(multiscale_shapes).items(), key=lambda x: x[1].spatial_stride)) # 4, 8, 16, 32
-        self.multiscale_shapes = multiscale_shapes
-        self.encoded_scales = sorted(encoded_scales, key=lambda x:self.multiscale_shapes[x].spatial_stride) # res3, res4, res5
+
+        # 4, 8, 16, 32
+        self.multiscale_shapes = dict(sorted(copy.deepcopy(multiscale_shapes).items(), key=lambda x: x[1].spatial_stride))
+        self.encoded_scales = sorted(configs['encoded_scales'], 
+                                     key=lambda x:self.multiscale_shapes[x].spatial_stride) # res3, res4, res5
+        
         # 4 -> 8 -> 16 -> 32    
         self.scale_dims = [val.dim for val in multiscale_shapes.values()]
-        self.video_projs = META_ARCH_REGISTRY.get(configs['video_projs']['name'])(configs=configs['video_projs'],
-                                                                                  multiscale_shapes=multiscale_shapes,
-                                                                                  out_dim=d_model)
-        from models.layers.position_encoding import build_position_encoding
+        self.image_projs = META_ARCH_REGISTRY.get(configs['image_projs']['name'])(configs=configs['image_projs'],
+                                                                            multiscale_shapes=multiscale_shapes, out_dim=d_model)
+
         self.pos_2d = build_position_encoding(position_embedding_name='2d')
 
+        deform_attn = configs['deform_attn']
         self.transformer = MSDeformAttnTransformerEncoderOnly(
             d_model=d_model,
             dropout=deform_attn['dropout'],
@@ -714,33 +713,20 @@ class VideoMultiscale_Deform2d(nn.Module):
             num_feature_levels=len(self.encoded_scales),
             enc_n_points=deform_attn['enc_n_points']
         )
-        # 假设encode 的是最高的三层feature, 然后计算最底层的feature和三层feature的最底层之间的距离
-        # 8, 16, 32
-        # 2, 4
-        min_encode_stride = min([v.spatial_stride for k,v in multiscale_shapes.items() if k in self.encoded_scales])
-        min_stride = min([v.spatial_stride for k,v in multiscale_shapes.items()])
-        self.num_fpn_levels = int(np.log2(min_encode_stride) - np.log2(min_stride))
-        lateral_convs = []
-        output_convs = []
 
+        min_encode_stride = self.multiscale_shapes[self.encoded_scales[0]].spatial_stride # 8
+        min_stride = list(self.multiscale_shapes.values())[0].spatial_stride # 4
+        self.num_fpn_levels = int(np.log2(min_encode_stride) - np.log2(min_stride))
+        lateral_convs = [] 
+        output_convs = []
         use_bias = fpn_norm == ""
         for idx, in_channels in enumerate(self.scale_dims[:self.num_fpn_levels]):
             lateral_norm = get_norm(fpn_norm, d_model)
             output_norm = get_norm(fpn_norm, d_model)
 
-            lateral_conv = Conv2d(
-                in_channels, d_model, kernel_size=1, bias=use_bias, norm=lateral_norm
-            )
-            output_conv = Conv2d(
-                d_model,
-                d_model,
-                kernel_size=3,
-                stride=1,
-                padding=1,
-                bias=use_bias,
-                norm=output_norm,
-                activation=F.relu,
-            )
+            lateral_conv = Conv2d(in_channels, d_model, kernel_size=1, bias=use_bias, norm=lateral_norm)
+            output_conv = Conv2d(d_model, d_model, kernel_size=3, padding=1, bias=use_bias, norm=output_norm, activation=F.relu)
+
             self.add_module("adapter_{}".format(idx + 1), lateral_conv)
             self.add_module("layer_{}".format(idx + 1), output_conv)
 
@@ -748,58 +734,68 @@ class VideoMultiscale_Deform2d(nn.Module):
             output_convs.append(output_conv)
         # Place convs into top-down order (from low to high resolution)
         # to make the top-down computation in forward clearer.
-        self.lateral_convs = lateral_convs[::-1]
-        self.output_convs = output_convs[::-1]
+        self.lateral_convs = lateral_convs[::-1] # 8 4
+        self.output_convs = output_convs[::-1] # 8 4
 
     def forward(self, 
-                multiscales): # b t c h w)
-        multiscales = self.video_projs(multiscales) 
-        batch_size, _, nf, *_ = multiscales[list(self.multiscale_shapes.keys())[0]].shape
-
+                multiscales=None,
+                **kwargs): # b c h w
+        multiscales = self.image_projs(multiscales) 
         assert set(list(multiscales.keys())).issubset(set(list(self.multiscale_shapes.keys())))
         assert set(list(self.multiscale_shapes.keys())).issubset(set(list(multiscales.keys())))
 
-        # early fusion
-        # encoded_scales, text_dict = self.fusion_module(encoded_scales, text_dict)
-        # srcs, text_inputs = self.fusion_module(multiscale_feats=srcs, 
-        #                                             multiscale_poses=pos,
-        #                                             multiscale_is_flattened=False,
-        #                                             is_image_multiscale=True,
-        #                                             text_inputs=text_inputs)
-        # fusion的时候是 t h w 和 s 进行融合,  至于怎么融合是fusion module的事情
-    
         srcs = []
-        poses = []
+        poses = [] # 32, 16, 8
         for idx, scale_name in enumerate(self.encoded_scales[::-1]):
-            x = multiscales[scale_name].permute(0, 2, 1, 3, 4).flatten(0, 1).contiguous()
+            x = multiscales[scale_name] # b c h w
             srcs.append(x)
-            poses.append(self.pos_2d(torch.zeros_like(x)[:, 0, :, :].bool(), hidden_dim=x.shape[1])) # bt h w
+            poses.append(self.pos_2d(torch.zeros_like(x)[:, 0, :, :].bool(), hidden_dim=x.shape[1]))
 
-        memory, spatial_shapes, level_start_index = self.transformer(srcs, poses) # bt  [32,16, 8], c
+        memory, spatial_shapes, level_start_index = self.transformer(srcs, poses)
         bs = memory.shape[0]
         spatial_index = 0
         memory_features = [] # 32 16 8
         for lvl in range(len(self.encoded_scales)):
             h, w = spatial_shapes[lvl]
-            # [bs*t, c, h, w]
             memory_lvl = memory[:, spatial_index : spatial_index + h * w, :].reshape(bs, h, w, -1).permute(0, 3, 1, 2).contiguous()  
             memory_features.append(memory_lvl)
             spatial_index += h * w
 
         for idx, f in enumerate(list(self.multiscale_shapes.keys())[:self.num_fpn_levels][::-1]):
-            x = multiscales[f].permute(0, 2, 1, 3, 4).flatten(0, 1).contiguous()
-            lateral_conv = self.lateral_convs[idx]
-            output_conv = self.output_convs[idx]
-            cur_fpn = lateral_conv(x)
+            x = multiscales[f] # b c h w
+            cur_fpn = self.lateral_convs[idx](x)
             y = cur_fpn + F.interpolate(memory_features[-1], size=cur_fpn.shape[-2:], mode="bilinear", align_corners=False)
-            y = output_conv(y)
+            y = self.output_convs[idx](y)
             memory_features.append(y)
 
         assert len(memory_features) == len(list(self.multiscale_shapes.keys()))
 
         ret = {}
         for key, out_feat in zip(list(self.multiscale_shapes.keys()), memory_features[::-1]):
-            ret[key] = rearrange(out_feat, '(b t) c h w -> b c t h w', b=batch_size, t=nf)
-
+            ret[key] = out_feat
         return ret
-    
+        
+
+@META_ARCH_REGISTRY.register()
+class Video2D_Iamge_Deform2D_MultiscaleEncoder(nn.Module):
+    def __init__(
+        self,
+        configs,
+        multiscale_shapes,
+    ):
+        super().__init__()
+        self.image_homo = Iamge_Deform2D_MultiscaleEncoder(configs=configs,
+                                                           multiscale_shapes=multiscale_shapes)
+
+    def forward(self, 
+                multiscales=None,
+                **kwargs): # b c t h w)
+        batch_sisze, _, nf = multiscales[list(multiscales.keys())[0]].shape[:3]
+        multiscales = {key: value.permute(0, 2, 1, 3, 4).flatten(0, 1).contiguous() for key,value in multiscales.items()}
+        multiscales = self.image_homo(multiscales)
+        multiscales = {key: rearrange(value, '(b t) c h w -> b c t h w',b=batch_sisze, t=nf).contiguous()\
+                        for key,value in multiscales.items()}
+        return multiscales   
+
+
+

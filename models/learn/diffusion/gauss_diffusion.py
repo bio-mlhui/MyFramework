@@ -9,12 +9,12 @@ from torch import nn, Tensor
 from torch.nn import functional as F
 import torchvision.transforms.functional as Trans_F
 from einops import repeat, reduce, rearrange
-from util.misc import NestedTensor
+from utils.misc import NestedTensor
 from copy import deepcopy as dcopy
 import logging
 from tqdm import tqdm
 from functools import partial
-from util.misc import to_device
+from utils.misc import to_device
 from models.utils.visualize_amr import save_model_output
 from models.registry import register_model
 from data_schedule.utils.box_ops import box_xyxy_to_cxcywh, box_cxcywh_to_xyxy

@@ -547,7 +547,7 @@ class FrameQuery_VOS111(Video_SegmentationLoss_VOS111):
         mask_logits = torch.einsum("lbnc,bcthw->lbnthw", mask_embeds, mask_features)   # l b n t h w
 
         if not self.training:
-            mask_logits = F.interpolate(mask_logits.flatten(0, 2), scale_factor=self.mask_stride, mode='bilinear', align_corners=True)
+            mask_logits = F.interpolate(mask_logits.flatten(0, 2), scale_factor=self.mask_stride, mode='bilinear', align_corners=False)
             mask_logits = rearrange(mask_logits, '(l b n) t h w -> l b n t h w', l=L, b=batch_size,)
         mask_logits = mask_logits.unbind(0)
 

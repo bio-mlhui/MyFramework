@@ -8,11 +8,11 @@ from torch import nn, Tensor
 from torch.nn import functional as F
 import torchvision.transforms.functional as Trans_F
 from einops import repeat, reduce, rearrange
-from util.misc import NestedTensor
+from utils.misc import NestedTensor
 from copy import deepcopy as dcopy
 import logging
 from functools import partial
-from util.misc import to_device
+from utils.misc import to_device
 from models.utils.visualize_amr import save_model_output
 from models.registry import register_model
 from data_schedule.utils.box_ops import box_xyxy_to_cxcywh, box_cxcywh_to_xyxy
@@ -26,227 +26,9 @@ from models.optimization.optimizer import get_optimizer
 from detectron2.modeling import BACKBONE_REGISTRY, META_ARCH_REGISTRY
 
 from models.registry import MODELITY_INPUT_MAPPER_REGISTRY
-from data_schedule.registry import RVOS_TrainAPI_referent_text_clipped_video
-from data_schedule.registry import RVOS_EvalAPI_referent_text_clipped_video_request_ann
+from data_schedule.rvos.apis import RVOS_TrainAPI_ForEachRefer_clipped_video
 __all__ = ['decode_frame_query']
 
-
-from util.misc import nested_tensor_from_videos_list_with_stride
-class AUXMapper_v1:
-    RVOS_TrainAPI_referent_text_clipped_video
-    """ RVOS_TrainAPI_referent_text_clipped_video 的 aux mapper和collator
-    对于API是RVOS_TrainAPI_referent_text_clipped_video的model,
-        !!! 只能添加不能更改 
-        如果他有需要添加新的input/targets, 
-            可以再video_dict, refer_dict, video_refer_dict, targets里添加, 
-            如果这些key不能够表示新添加的知识, 就需要添加新的dict, 
-            修改对应的mapper, collate函数
-        examples:
-            添加CLIP的visual-text cross attention作为targets进行指导, 可以添加到targets/frame_targets
-            添加video的optical flow作为新的input, 可以添加到video dict里
-            添加使用外部model的video数据增强作为新的input, 可以添加到video_dict
-    train
-        'video_dict': {
-            'video': t 3 h w, 0-1,
-            'aux': None
-        }
-        'refer_dict': {
-            'text': str,
-            'aux': None
-        }
-        'video_refer_dict':{
-            'aux': None
-        }
-        'targets': {
-            'has_ann': b t (bool)
-            'boxes': list[N t' 4], x1y1x2y2
-            'masks': list[N t' h w] (bool)
-            'class_labels': list[N],
-            'referent_objs': list[int]
-        }
-        'frame_targets':{
-            'masks': list[n h w], bt'
-            'boxes': list[n 4], bt'
-            'class_labels': list[n], bt'
-            'referent_objs': list[list[int]], bt'
-        }
-        'meta_idx': int
-        'visualize': True/False
-    eval
-        输入输出: RVOS_EvalAPI_referent_text_clipped_video_request_ann
-    """
-    def __init__(self, aux_configs):
-        refer_auxes = aux_configs['refer_auxes']
-
-        refer_auxes_names = [config['name'] for config in refer_auxes]
-        assert len(list(set(refer_auxes_names))) == len(refer_auxes_names), '每个aux的名字必须不一样'
-        self.refer_auxes_names = refer_auxes_names
-        self.refer_auxes = [MODELITY_INPUT_MAPPER_REGISTRY.get(config['name'])(config) for config in refer_auxes]
-
-        # 添加任何dict, 
-        self.video_auxes = None
-        self.video_refer_auxes = None
-        self.targets_auxes = None
-
-    def mapper(self, old_data_dict, mode,):
-        RVOS_TrainAPI_referent_text_clipped_video
-        data_dict = dcopy(old_data_dict)
-        if mode == 'train':
-            RVOS_TrainAPI_referent_text_clipped_video
-            refer_text = data_dict['refer_dict']['text']
-            for aux, aux_name in zip(self.refer_auxes, self.refer_auxes_names):
-                data_dict['refer_dict'][aux_name] = aux.mapper(refer_text)
-        
-        elif mode == 'evaluate':
-            RVOS_EvalAPI_referent_text_clipped_video_request_ann
-            refer_text = data_dict['refer_dict']['text']
-            for aux, aux_name in zip(self.refer_auxes, self.refer_auxes_names):
-                data_dict['refer_dict'][aux_name] = aux.mapper(refer_text)        
-        return data_dict
-
-    def collate(self, batch_dict, mode, max_stride):
-        if mode == 'train':
-            RVOS_TrainAPI_referent_text_clipped_video
-            video_dict = self.collate_video_dict(batch_dict, max_stride=max_stride)
-            refer_dict = self.collate_refer_dict(batch_dict)
-            targets = [sample['targets'] for sample in batch_dict]
-            frame_targets = [sample['frame_targets'] for sample in batch_dict]
-
-            _, pad_T, _, pad_H, pad_W = video_dict['videos'].shape
-            collated_targets = self.collate_targets(old_targets=targets, pad_H=pad_H, pad_W=pad_W, pad_T=pad_T)
-            collated_frame_targets = self.collate_frame_targets(old_frame_targets=frame_targets, 
-                                                                old_clip_targets=targets,
-                                                                pad_H=pad_H, pad_W=pad_W, pad_T=pad_T)
-            
-            ret = {
-                'video_dict': video_dict,
-                'refer_dict': refer_dict,
-                'targets': collated_targets,
-                'frame_targets': collated_frame_targets,
-                'meta_idxs':  [sample['meta_idx'] for sample in batch_dict],
-                'visualize': [sample['visualize'] for sample in batch_dict],               
-            }   
-                        
-        elif mode == 'evaluate':
-            RVOS_EvalAPI_referent_text_clipped_video_request_ann
-            assert len(batch_dict) == 1
-            orig_t, _, orig_h, orig_w = batch_dict[0]['video_dict']['video'].shape # t 3 h w
-            video_dict = self.collate_video_dict(batch_dict, max_stride=max_stride) # 不pad
-            refer_dict = self.collate_refer_dict(batch_dict)
-            metas = [sample['meta'] for sample in batch_dict]
-
-            collated_metas = {}
-            for key in metas[0].keys():
-                collated_metas[key] = [mt[key] for mt in metas]
-            
-            ret = {
-                'video_dict': video_dict,
-                'refer_dict': refer_dict,
-                'metas': collated_metas,
-                'meta_idxs':  [sample['meta_idx'] for sample in batch_dict],
-                'visualize': [sample['visualize'] for sample in batch_dict],  
-                'orig_size': [[orig_t, orig_h, orig_w]]
-            }  
-        debug_data = False
-        if debug_data:
-            self.visualize_input_target_for_debug_data(ret) # ./test.png
-        return ret
-
-    def collate_video_dict(self, old_batch_dict, max_stride):
-        batch_dict = dcopy(old_batch_dict)
-        videos = [sample['video_dict']['video'] for sample in batch_dict]  # list[ti 3 hi wi] -> b T 3 H W
-        if type(max_stride) == int: # temporal max stride 为1, spatial max stride
-            pad_stride = [1, max_stride]
-        if (type(max_stride) == list) and (len(max_stride) == 2):
-            pad_stride = max_stride
-        videos = nested_tensor_from_videos_list_with_stride(videos, max_stride=pad_stride).tensors
-        video_dicts = {'videos': videos}
-        return video_dicts
-
-    def collate_refer_dict(self, old_batch_dict):
-        batch_dict = dcopy(old_batch_dict)
-        refer_dicts = {
-            'texts': [sample['refer_dict']['text'] for sample in batch_dict]
-        }  
-        for aux_name, aux in zip(self.refer_auxes_names, self.refer_auxes):
-            auxes = [sample['refer_dict'][aux_name] for sample in batch_dict] # list[dict] / list[tensor]
-            collated_auxes = aux.collate(auxes) # list[dict]
-            if isinstance(auxes[0], dict):
-                keys = collated_auxes.keys()
-                for key in keys:
-                    assert key not in refer_dicts
-                    refer_dicts[key] = collated_auxes[key]
-            else:
-                refer_dicts[aux_name] = collated_auxes
-
-        return refer_dicts
-
-    def collate_frame_targets(self, old_frame_targets, old_clip_targets, pad_H, pad_W, pad_T): # 
-        frame_targets = dcopy(old_frame_targets)
-        clip_targets = dcopy(old_clip_targets)
-        ret = {}
-        # frame_targets的mask表示 是 for each t: nq c * h w c, padding帧不考虑; has_ann padding的value是0
-        frame_has_ann = [clip_tgt['has_ann'] for clip_tgt in clip_targets] # list[t]
-        has_ann = torch.stack([F.pad(ha.float(), pad=(0, pad_T - len(ha)), value=0.).bool() for ha in frame_has_ann], dim=0).flatten() # bT
-        ret['has_ann'] = has_ann
-        masks = [ftarget['masks'] for sample in frame_targets for ftarget in sample] # list[Ni h w], bt'
-        masks = [F.pad(m.float(), pad=(0, pad_W-m.shape[-1], 0, pad_H-m.shape[-2])).bool() for m in masks] # list[Ni H W], bt'
-        ret['masks'] = masks # list[N h w], bt'
-
-        boxes = [ftarget['boxes'] for sample in frame_targets for ftarget in sample] # list[N 4], x1y1x2y2, bt'
-        boxes = [box_xyxy_to_cxcywh(bx) for bx in boxes]
-        boxes = [bx / torch.tensor([pad_W, pad_H, pad_W, pad_H], dtype=bx.dtype) for bx in boxes] # 0-1
-        ret['boxes'] = boxes # list[N 4], bt'
-        ret['class_labels'] = [ftarget['class_labels'] for sample in frame_targets for ftarget in sample] 
-        
-        if 'referent_objs' in frame_targets[0][0]:
-            ret['referent_objs'] = [ftarget['referent_objs'] for sample in frame_targets for ftarget in sample], # list[list[int]], bt
-        
-        return ret
-
-    def collate_targets(self, old_targets, pad_H, pad_W, pad_T):
-        # padding越大, 正确率高的越不可信
-        # 但是这个问题完全可以通过在训练的时候控制padding较小就行
-        targets = dcopy(old_targets)
-        has_ann = [sample['has_ann'] for sample in targets] # list[t], bool
-        pad_Ts = [pad_T - len(taylor_swift) for taylor_swift in has_ann]
-        # targets的mask表示 是 nq c * t h w c, 所以padding的部分也算上, padding的value是1
-        has_ann = torch.stack([F.pad(ha.float(), pad=(0, pad_T - len(ha)), value=1.).bool() for ha in has_ann], dim=0) # b T
-        
-        masks = [sample['masks'] for sample in targets] # list[N t' h w]
-        # 不能给没有annotation的指定ground truth mask
-        # padding的部分的ground truth都是0, h,w,t都是
-        masks = [F.pad(m.float(), pad=(0, pad_W-m.shape[-1], 0, pad_H-m.shape[-2], 0, taylor_swift), value=0.).bool() \
-                 for m, taylor_swift in zip(masks, pad_Ts)] # list[N T' H W]
-
-        # 把mask放缩到H/4, W/4
-        # for btc_idx in range(batch_size):
-        #     start = int(self.temporal_decoder_mask_out_stride // 2)
-        #     im_h, im_w = tgt_masks[btc_idx].shape[-2:]
-        #     tgt_masks[btc_idx] = tgt_masks[btc_idx][:, :, start::self.temporal_decoder_mask_out_stride, start::self.temporal_decoder_mask_out_stride] 
-        #     assert tgt_masks[btc_idx].size(2) * self.temporal_decoder_mask_out_stride == im_h
-        #     assert tgt_masks[btc_idx].size(3) * self.temporal_decoder_mask_out_stride == im_w
-
-        boxes = [sample['boxes'] for sample in targets] # list[N t' 4], x1y1x2y2
-        boxes = [F.pad(bx, pad=(0, 0, 0, taylow_swift), value=0.) for bx, taylow_swift in zip(boxes, pad_Ts)] # list[N T' 4]
-        boxes = [box_xyxy_to_cxcywh(bx) for bx in boxes]
-        boxes = [bx / torch.tensor([pad_W, pad_H, pad_W, pad_H], dtype=torch.float) for bx in boxes] # 0-1
-
-        targets = {'masks': masks, # list[Ni T'_i h w]
-                   'boxes': boxes, # list[Ni T'_i 4]
-                   'has_ann': has_ann, # b T
-                   'referent_objs': [sample['referent_objs'] for sample in targets], # list[list[int], ]
-                   'class_labels': [sample['class_labels'] for sample in targets]
-        } # list[Ni]
-        return targets
-
-    def collate_video_refer(self, batch_dict):
-        # 如果要加入新的 video_refer_dict, 
-        pass
-
-    def visualize_input_target_for_debug_data(self, ret):
-        videos = ret['video_dict']['videos'] # b T 3 H W
-        pass
 
 class Decode_FrameQuery(nn.Module): # frame decoder做object segmentation, temporal decoder做referent segmentation
     # model知道整个module-submodule结构
@@ -369,7 +151,7 @@ class Decode_FrameQuery(nn.Module): # frame decoder做object segmentation, tempo
         return params, log_lr_group_idx
 
     def forward(self, batch_dict):
-        RVOS_TrainAPI_referent_text_clipped_video
+        RVOS_TrainAPI_ForEachRefer_clipped_video
         videos = to_device(batch_dict.pop('video_dict')['videos'], self.device) # 0-1, float, b t 3 h w
         videos = (videos - self.pixel_mean) / self.pixel_std
         text_dict = to_device(batch_dict.pop('refer_dict'), self.device)
@@ -483,8 +265,12 @@ class Decode_FrameQuery(nn.Module): # frame decoder做object segmentation, tempo
 @register_model
 def decode_frame_query(configs, device):
     model =  Decode_FrameQuery(configs)
+    from .aux_mapper import AUXMapper_v1
     model.to(device)
     params_group, log_lr_group_idx = Decode_FrameQuery.get_optim_params_group(model=model, configs=configs)
+    to_train_num_parameters = len([n for n, p in model.named_parameters() if p.requires_grad])
+    assert len(params_group) == to_train_num_parameters, \
+        f'parames_group设计出错, 有{len(to_train_num_parameters) - len(params_group)}个参数没有列在params_group里'
     optimizer = get_optimizer(params_group, configs)
     scheduler = build_scheduler(configs=configs, optimizer=optimizer)
     model_input_mapper = AUXMapper_v1(configs['model']['input_aux'])

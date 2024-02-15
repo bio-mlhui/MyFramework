@@ -13,10 +13,8 @@ import pycocotools.mask as mask_util
 from pycocotools.mask import decode as decode_rle
 import data_schedule.vis.fibroid.metrics as metrics
 
-
-
-@register_vos_metric
-def fibroid_all_medi(model_preds, 
+@register_vis_metric
+def fibroid_other_medi(model_preds, 
                      dataset_meta,
                      **kwargs):
     assert comm.is_main_process()
@@ -74,3 +72,54 @@ def fibroid_all_medi(model_preds,
     }  
     return all_medi   
     
+
+from collections import defaultdict
+
+# by_vid, by_frame
+iou_dict = defaultdict(dict)
+
+@register_vis_metric
+def fibroid_mask_dice_iou(frame_pred, dataset_meta, **kwargs):
+    video_id = frame_pred['video_id']
+    frame_name = frame_pred['frame_name']
+    masks = frame_pred['masks'] # nq h w
+    get_frames_gt_mask_fn = dataset_meta.get('get_frames_gt_mask_fn')
+    scores = torch.tensor(frame_pred['classes']) # nq c, 保证c是2
+    foreground_scores = scores[:, :-1].sum(-1) # nq
+    max_idx = foreground_scores.argmax()
+    pred_mask = masks[max_idx].int() # h w
+
+    gt_mask, _ = get_frames_gt_mask_fn(video_id=video_id, frames=[frame_name]) # 1 h w
+    gt_mask = gt_mask[0].int() # h w
+
+    inter, union    = (pred_mask*gt_mask).sum(), (pred_mask+gt_mask).sum()
+    dice = (2*inter+1)/(union+1)
+    iou = (inter+1)/(union-inter+1)
+    iou_dict[video_id][frame_name] = iou
+    if iou > 0.6:
+        print(f'video_id: {video_id}, frame: {frame_name}: dice {dice}, iou {iou}')
+    return {'dice': dice, 'iou': iou}
+
+@register_vis_metric
+def fibroid_metric_aggregator(metrics_by_vid_frame, dataset_meta, eval_meta_keys, **kwargs):
+    # output: eval_metrics
+    # video: frame_name: metric/ vid_metrics
+
+    eval_metrics = {}
+    # video, frame_name
+    # perframe metrics
+    metric_names = metrics_by_vid_frame[list(eval_meta_keys.keys())[0]][eval_meta_keys[list(eval_meta_keys.keys())[0]][0]]
+    for taylor_swift in metric_names:
+        eval_metrics[taylor_swift] = torch.tensor([metrics_by_vid_frame[video][frame][taylor_swift]  for video in eval_meta_keys.keys() for frame in eval_meta_keys[video]]).mean()
+    
+    # metrics by each video
+    mean_iou_by_each_video = {}
+    mean_dice_by_each_video = {}
+    for video in eval_meta_keys:
+        mean_iou_by_each_video[video] = torch.tensor([metrics_by_vid_frame[video][fname]['iou'] for fname in eval_meta_keys[video]]).mean()
+        mean_dice_by_each_video[video] = torch.tensor([metrics_by_vid_frame[video][fname]['dice'] for fname in eval_meta_keys[video]]).mean()
+    
+    logging.debug(f'mean_iou_by_each_video: {mean_iou_by_each_video}')
+    logging.debug(f'mean_dice_by_each_video: {mean_dice_by_each_video}')
+    return eval_metrics
+

@@ -12,7 +12,7 @@ from functools import reduce, lru_cache
 from operator import mul
 from einops import rearrange
 import os
-from util.misc import NestedTensor
+from utils.misc import NestedTensor
 
 class Mlp(nn.Module):
     """ Multilayer perceptron."""

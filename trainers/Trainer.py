@@ -6,10 +6,11 @@ import logging
 import time
 import os
 import sys
-from util.misc import reduce_dict, to_device, reduce_scalar, is_dist_avail_and_initialized
+from utils.misc import reduce_dict, to_device, reduce_scalar, is_dist_avail_and_initialized
+
 import gc
 import wandb
-from util.misc import  SmoothedValue, MetricLogger
+from utils.misc import  SmoothedValue, MetricLogger
 from torch.nn.parallel import DistributedDataParallel as DDP
 import detectron2.utils.comm as comm
 import datetime
@@ -18,7 +19,7 @@ import torch.distributed.rpc as dist_rpc
 import torch.distributed as dist
 from data_schedule import build_schedule
 from models import model_entrypoint
-from util.misc import to_device
+from utils.misc import to_device
 
 __all__ = ['Trainer']
 # Assumption:
@@ -42,7 +43,7 @@ class Trainer:
         # model
         create_model = model_entrypoint(configs['model']['name'])
         self.model, self.optimizer, self.scheduler, model_aux_mapper, model_aux_collate_fn,\
-              log_lr_group_name_to_idx = create_model(configs, device=self.device) 
+            log_lr_group_name_to_idx = create_model(configs, device=self.device) 
         self.log_lr_group_name_to_idx = log_lr_group_name_to_idx
 
         # schedule
@@ -240,7 +241,7 @@ class Trainer:
              iteration_time,):
         
         loss_dict_unscaled_reduced = reduce_dict(loss_dict_unscaled) 
-        gradient_norm = reduce_scalar(gradient_norm)
+        gradient_norm_reduced = reduce_scalar(gradient_norm)
         loss_value = sum(reduce_dict(loss_dict_scaled).values()).item() 
 
         # logging
@@ -259,7 +260,7 @@ class Trainer:
             logger_updates.update({
                 'loss_value': loss_value,
                 'iteration_time': iteration_time,
-                'gradient_norm': gradient_norm,
+                'gradient_norm': gradient_norm_reduced,
             })
             self.metric_logger.update(**logger_updates)
             log_string = self.log_header(iteration_time, sample_idxs) + f'\n{str(self.metric_logger)}'
@@ -281,14 +282,14 @@ class Trainer:
         else:
             raise ValueError()
         if do_ckpt:
-            try: 
-                self.save_ckpt() # 先存储
-                self.evaluate() # 测试的随机状态独立于训练的状态
-                self.load_ckpt(os.path.join(self.iteration_dir, 'ckpt.pth.tar'),  # 训练的随机状态
-                               load_random=True, load_schedule=False, load_model=False, load_optimize=False,)
-            except:
-                if comm.is_main_process():
-                    logging.error(f'Iteration {self.num_iterations} evaluate错误')
+            # try: 
+            self.save_ckpt() # 先存储
+            self.evaluate() # 测试的随机状态独立于训练的状态
+            self.load_ckpt(os.path.join(self.iteration_dir, 'ckpt.pth.tar'),  # 训练的随机状态
+                            load_random=True, load_schedule=False, load_model=False, load_optimize=False,)
+            # except:
+            #     if comm.is_main_process():
+            #         logging.error(f'Iteration {self.num_iterations} evaluate错误')
         if is_dist_avail_and_initialized():
             dist.barrier()
 

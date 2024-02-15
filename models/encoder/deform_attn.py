@@ -16,7 +16,7 @@ import torch.nn.functional as F
 from torch import nn, Tensor
 from torch.nn.init import xavier_uniform_, constant_, uniform_, normal_
 
-from util.misc import inverse_sigmoid
+from utils.misc import inverse_sigmoid
 from .ops.modules import MSDeformAttn
 from .utils import find_scale_from_multiscales, find_scales_from_multiscales
 

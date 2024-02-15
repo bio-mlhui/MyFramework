@@ -34,3 +34,28 @@ def polyp_vps_evaluator(output_dir,
     # 提取最后的结果
     return {}
 
+@register_vis_metric
+def polyp_metric_aggregator(metrics_by_vid_frame, dataset_meta, eval_meta_keys, **kwargs):
+    # output: eval_metrics
+    # video: frame_name: metric/ vid_metrics
+
+    eval_metrics = {}
+    # video, frame_name
+    # perframe metrics
+    metric_names = metrics_by_vid_frame[list(eval_meta_keys.keys())[0]][eval_meta_keys[list(eval_meta_keys.keys())[0]][0]]
+    for taylor_swift in metric_names:
+        eval_metrics[taylor_swift] = torch.tensor([metrics_by_vid_frame[video][frame][taylor_swift]  for video in eval_meta_keys.keys() for frame in eval_meta_keys[video]]).mean()
+    
+    # metrics by each video
+    mean_iou_by_each_video = {}
+    mean_dice_by_each_video = {}
+    for video in eval_meta_keys:
+        mean_iou_by_each_video[video] = torch.tensor([metrics_by_vid_frame[video][fname]['iou'] for fname in eval_meta_keys[video]]).mean()
+        mean_dice_by_each_video[video] = torch.tensor([metrics_by_vid_frame[video][fname]['dice'] for fname in eval_meta_keys[video]]).mean()
+    
+    logging.debug(f'mean_iou_by_each_video: {mean_iou_by_each_video}')
+    logging.debug(f'mean_dice_by_each_video: {mean_dice_by_each_video}')
+    
+    return eval_metrics
+
+

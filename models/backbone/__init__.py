@@ -27,6 +27,6 @@ from .res2net import (
 )
 
 from .pvtv2 import (
-    PVT_V2_EachFrame
+    Video2D_PVT_V2, PVT_V2
 )
 

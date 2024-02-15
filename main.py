@@ -11,7 +11,7 @@ from termcolor import colored
 import logging
 import yaml
 import torch
-from util.misc import setup_for_distributed
+from utils.misc import setup_for_distributed
 import torch.distributed as dist
 from detectron2.utils.logger import setup_logger
 
@@ -93,6 +93,7 @@ def init_process_group_and_set_device(world_size, process_id, device_id):
     return device
 
 def run(rank, configs, world_size):
+    # os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:4096'
     os.environ["TOKENIZERS_PARALLELISM"] = "false"  # this disables a huggingface tokenizer warning (printed every epoch)
     os.environ['PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT'] = "4"
     os.environ['PYDEVD_DISABLE_FILE_VALIDATION'] = "1"
@@ -109,12 +110,13 @@ def run(rank, configs, world_size):
         mode = configs['trainer_mode']
         out_dir = configs['out_dir']
         if mode == 'eval':
-            # evaluate模式总是append
-            set_logging_file(out_dir, "eval.txt", mode='a')
-            path = os.path.join(out_dir, "eval_config.yaml")
+            num_of_eval_times = len([eval_txt for eval_txt in os.listdir(out_dir) if eval_txt.endswith('eval.txt')])
+            set_logging_file(out_dir, f"eval.txt", mode='w')
+            path = os.path.join(out_dir, f"config_eval.yaml")
         else:
-            set_logging_file(out_dir, "train.txt", mode='w' if mode == 'train_attmpt' else 'a')
-            path = os.path.join(out_dir, "config.yaml")
+            num_of_train_times = len([train_txt for train_txt in os.listdir(out_dir) if train_txt.endswith('train.txt')])
+            set_logging_file(out_dir, f"train.txt", mode='w')
+            path = os.path.join(out_dir, f"config_train.yaml")
             
         logging.debug("Running with full config:\n{}".format(_highlight(yaml.dump(configs, default_flow_style=False), ".yaml")))
         with open(path, "w") as f:

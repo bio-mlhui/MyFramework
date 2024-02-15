@@ -11,7 +11,7 @@ from data_schedule.vis.apis import VIS_TrainAPI_clipped_video
 from data_schedule.vis.apis import VIS_EvalAPI_clipped_video_request_ann
 import time
 
-from util.misc import nested_tensor_from_videos_list_with_stride
+from utils.misc import nested_tensor_from_videos_list_with_stride
 
 class AUXMapper_v1:
     def __init__(self, aux_configs):
@@ -25,7 +25,6 @@ class AUXMapper_v1:
         self.targets_auxes = None
 
     def mapper(self, data_dict, mode,):
-
         if mode == 'train':
             VIS_TrainAPI_clipped_video
             video = data_dict['video_dict']['video']
@@ -93,6 +92,18 @@ class AUXMapper_v1:
             pad_stride = max_stride
         videos = nested_tensor_from_videos_list_with_stride(videos, max_stride=pad_stride).tensors # b t c h w
         video_dicts = {'videos': videos, 'orig_sizes': orig_sizes}
+
+        for aux_name, aux in zip(self.video_auxes_names, self.video_auxes):
+            auxes = [sample['video_dict'][aux_name] for sample in batch_dict] # list[dict] / list[tensor]
+            collated_auxes = aux.collate(auxes, batch_videos=videos) # list[dict] / tensor
+            if isinstance(auxes[0], dict):
+                keys = collated_auxes.keys()
+                for key in keys:
+                    assert key not in video_dicts
+                    video_dicts[key] = collated_auxes[key]
+            else:
+                video_dicts[aux_name] = collated_auxes
+
         return video_dicts
 
     def collate_frame_targets(self, frame_targets, frame_has_ann, pad_H, pad_W, pad_T): # 
@@ -107,11 +118,11 @@ class AUXMapper_v1:
         classes = [ftarget['classes'] for sample in frame_targets for ftarget in sample] # list[ni], bt'
         ret['classes'] = classes
         
-        boxes = [ftarget['boxes'] for sample in frame_targets for ftarget in sample] # list[ni 4], x1y1x2y2, bt'
-        boxes = [box_xyxy_to_cxcywh(bx) for bx in boxes]
-        boxes = [bx / torch.tensor([pad_W, pad_H, pad_W, pad_H], dtype=bx.dtype) for bx in boxes] # 0-1
-        ret['boxes'] = boxes # list[ni 4], bt' 
-        
+        if 'boxes' in frame_targets[0][0]:
+            boxes = [ftarget['boxes'] for sample in frame_targets for ftarget in sample] # list[ni 4], x1y1x2y2, bt'
+            boxes = [box_xyxy_to_cxcywh(bx) for bx in boxes]
+            boxes = [bx / torch.tensor([pad_W, pad_H, pad_W, pad_H], dtype=bx.dtype) for bx in boxes] # 0-1
+            ret['boxes'] = boxes # list[ni 4], bt' 
         return ret
 
     def collate_targets(self, targets, pad_H, pad_W, pad_T):
@@ -124,10 +135,6 @@ class AUXMapper_v1:
         masks = [sample['masks'] for sample in targets] 
         masks = [F.pad(m.float(), pad=(0, pad_W-m.shape[-1], 0, pad_H-m.shape[-2]), value=0.).bool() \
                  for m in masks] # list[ni T' H W]
-        
-        boxes = [sample['boxes'] for sample in targets] # list[ni T' 4], x1y1x2y2
-        boxes = [box_xyxy_to_cxcywh(bx) for bx in boxes]
-        boxes = [bx / torch.tensor([pad_W, pad_H, pad_W, pad_H], dtype=torch.float) for bx in boxes] # 0-1
         classes = torch.tensor([sample['classes'] for sample in targets])
         # 把mask放缩到H/4, W/4
         # for btc_idx in range(batch_size):
@@ -136,13 +143,17 @@ class AUXMapper_v1:
         #     tgt_masks[btc_idx] = tgt_masks[btc_idx][:, :, start::self.temporal_decoder_mask_out_stride, start::self.temporal_decoder_mask_out_stride] 
         #     assert tgt_masks[btc_idx].size(2) * self.temporal_decoder_mask_out_stride == im_h
         #     assert tgt_masks[btc_idx].size(3) * self.temporal_decoder_mask_out_stride == im_w
-        targets = {
+        ret = {
             'masks': masks, # list[ni T' h w]
-            'boxes': boxes, # list[ni T' 4]
             'has_ann': has_ann, # b T
             'classes': classes, # ni
         } 
-        return targets
+        if 'boxes' in targets[0]:
+            boxes = [sample['boxes'] for sample in targets] # list[ni T' 4], x1y1x2y2
+            boxes = [box_xyxy_to_cxcywh(bx) for bx in boxes]
+            boxes = [bx / torch.tensor([pad_W, pad_H, pad_W, pad_H], dtype=torch.float) for bx in boxes] # 0-1
+            ret.update({'boxes': boxes,})
+        return ret
 
     def visualize_input_target_for_debug_data(self, ret):
         videos = ret['video_dict']['videos'] # b T 3 H W

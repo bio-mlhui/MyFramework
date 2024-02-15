@@ -73,7 +73,15 @@ class VIS_Video_or_Step_To_Clip_TrainMapper(VIS_TrainMapper):
                  mode, 
                  meta_idx_shift,
                  ):  
-        good_dataset_names = ['polyp_train', 'polyp_train_step[6]', 'polyp_train_step[1]', 'weakpolyp_train_step[1]']
+        good_dataset_names = ['polyp_train', 
+                              'polyp_train_step[6]', 
+                              'polyp_train_step[1]', 
+                              'weakpolyp_train_step[1]', 
+                              'weakpolyp_fibroid_train_step[1]',
+                              'weakpolyp_fibroid_train_temp7_step[1]',
+                              'weakpolyp_fibroid_train_temp8_step[1]',
+                              'weakpolyp_fibroid_train_temp9_step[1]',
+                              'weakpolyp_fibroid_train_temp10_step[1]']
         assert dataset_name in good_dataset_names
         assert mode == 'train'
         dataset_meta = MetadataCatalog.get(dataset_name)
@@ -147,7 +155,21 @@ class VIS_Step_EvalMapper(VIS_EvalMapper):
         assert dataset_name in ['polyp_hard_unseen_validate_step[1]', 
                                 'polyp_hard_seen_validate_step[1]', 
                                 'polyp_easy_unseen_validate_step[1]',
-                                'polyp_easy_seen_validate_step[1]']
+                                'polyp_easy_seen_validate_step[1]',
+                                'fibroid_validate_step[1]',
+                                'fibroid_train_step[1]',
+
+
+
+                                'fibroid_validate_temp7_step[1]',
+                                'fibroid_validate_temp8_step[1]',
+                                'fibroid_validate_temp9_step[1]',
+                                'fibroid_validate_temp10_step[1]',
+                                
+                                'fibroid_train_temp7_step[1]',
+                                'fibroid_train_temp8_step[1]',
+                                'fibroid_train_temp9_step[1]',
+                                'fibroid_train_temp10_step[1]',]
         assert mode == 'evaluate'
         dataset_meta = MetadataCatalog.get(dataset_name)
         mapper_config = configs['data'][mode][dataset_name]['mapper']

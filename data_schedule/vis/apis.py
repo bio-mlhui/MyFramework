@@ -54,6 +54,8 @@ class VIS_TrainAPI_clipped_video:
             'boxes': N/n 4, t' 
             'classes': N/n             
         }
+
+        # aux_mapper里添加 boxMask, 
     """
 
 class VIS_EvalAPI_clipped_video_request_ann:

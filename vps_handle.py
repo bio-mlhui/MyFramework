@@ -3,12 +3,9 @@ import os
 import cv2
 import numpy as np
 
-
-root = '/home/xuhuihui/datasets/SUN/SUN-SEG2'
-
-def preprocess(path_src):
+def preprocess(path_src, split_name):
     print('process', path_src)
-    path_dst = path_src.replace('/SUN-SEG2/', '/WeakPolyp-Processed/')
+    path_dst = path_src.replace(f'/{split_name}/', f'/{split_name}/uterus_myoma_WeakPolyP_{split_name}/')
     for folder in os.listdir(path_src+'/Frame'):
         print(folder)
         for name in os.listdir(path_src+'/Frame/'+folder):
@@ -29,9 +26,11 @@ def preprocess(path_src):
             os.makedirs(path_dst+'/Box/'  +folder, exist_ok=True)
             cv2.imwrite(path_dst+'/Box/'  +folder+'/'+name.replace('.jpg', '.png'), box)
 
-if not os.path.exists('/home/xuhuihui/datasets/SUN/WeakPolyp-Processed/'):
-    preprocess('/home/xuhuihui/datasets/SUN/SUN-SEG2/TrainDataset')
-    preprocess('/home/xuhuihui/datasets/SUN/SUN-SEG2/TestEasyDataset/Seen')
-    preprocess('/home/xuhuihui/datasets/SUN/SUN-SEG2/TestEasyDataset/Unseen')
-    preprocess('/home/xuhuihui/datasets/SUN/SUN-SEG2/TestHardDataset/Seen')
-    preprocess('/home/xuhuihui/datasets/SUN/SUN-SEG2/TestHardDataset/Unseen')
+split_name = 'temp8'
+dst_dir = f'{split_name}/uterus_myoma_WeakPolyP_{split_name}'
+
+root = '/home/xuhuihui/datasets/uterus_myoma/Dataset'
+
+if not os.path.exists(os.path.join(root, dst_dir)):
+    preprocess(os.path.join(root, f'{split_name}/test'), split_name=split_name)
+    preprocess(os.path.join(root, f'{split_name}/train'), split_name=split_name)

@@ -7,7 +7,7 @@ import torchvision
 from torch import nn
 from einops import rearrange
 from torchvision.models._utils import IntermediateLayerGetter
-from util.misc import NestedTensor, is_main_process
+from utils.misc import NestedTensor, is_main_process
 from detectron2.modeling import BACKBONE_REGISTRY
 
 class FrozenBatchNorm2d(torch.nn.Module):

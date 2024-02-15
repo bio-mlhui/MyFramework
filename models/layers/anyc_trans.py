@@ -52,10 +52,11 @@ class Conv2d_NormAct(torch.nn.Conv2d):
         out_dim = kwargs['out_channels']
         if norm is None:
             self.norm = None
-        elif norm == 'ln':
-            # b ..
-            self.norm = nn.LayerNorm(out_dim)
+        elif norm == 'bn2d':
+            # b c h w
+            self.norm = nn.BatchNorm2d(out_dim)
         elif 'gn' in norm:
+            # b c ..
             n_groups = int(norm.split('_')[-1])
             self.norm = nn.GroupNorm(n_groups, out_dim)
         else:
@@ -79,8 +80,6 @@ class Conv3d_NormAct(torch.nn.Conv3d):
         out_dim = kwargs['out_channels']
         if norm == None:
             self.norm = None
-        elif norm == 'ln':
-            self.norm = nn.LayerNorm(out_dim)
         elif 'gn' in norm:
             n_groups = int(norm.split('_')[-1])
             self.norm = nn.GroupNorm(n_groups, out_dim)

@@ -7,3 +7,4 @@
 # ------------------------------------------------------------------------------------------------
 
 from .ms_deform_attn import MSDeformAttn
+from .temporal_color_ssm import SS1D_Temporal_Multiscale

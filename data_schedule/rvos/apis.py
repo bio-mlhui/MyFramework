@@ -4,41 +4,73 @@
 # step_size
 class RVOS_Dataset:
     """
-    foreachrefer/测试集
+    foreachrefer训练集
         'video_id': str,
         'all_frames' : list[str],
-        'all_objs': {obj_id: {'class_label': 0,}},
-        'all_exps': {exp_id: {'expression': 'obj_ids': list[int]}}
-        exp_id
+        'referent_text': str
+        'referent_objs': list[obj_id(int)]
+        'all_objs': {obj_id(int): {'class_label': 0,}},
     
-    allexists:
+    测试集(for each refer)
+        'video_id': str,
+        'exp_id': str,
+        'referent_text': str
+        'all_frames': list[str]
+    
+    allexists训练集:
         'video_id': str,
         'all_frames' : list[str],
         'all_objs': {obj_id: {'class_label': 0,}},
-        'all_exps': {exp_id: {'expression': 'obj_ids': list[int]}}
-
+        'all_exps': {exp_id: {'expression': 'obj_ids': list[obj_id]}}
+    
+        
     训练集/测试集
     'frame_idx': 抽clip的时候的参考帧下标, 相对于all_frames, 具体怎么抽要传到frame_sampler里
     如果没有的话, (train)就从整个video抽取clip, (eval)或者对整个video进行测试
     """
 
 class RVOS_Aug_CallbackAPI:
-    """单个样本 不是batch
-    'video': list[Image], t
-    'masks': n t' h w, bool
-    'boxes': n t' 4, x1y1x2y2绝对值
+    """
+    'video': list[pil Image, rgb], t
     'has_ann': t, bool
-    'class_labels': n,
-    'callback_fns':
-    'referent_text'/'exist_texts'
+    'masks': N t' h w, bool
+    'classes': N,
+    'boxes': N t' 4, x1y1x2y2绝对值
+
+    
+    'referent_text'/'all_refer_exps',  如果是instance的话, semantic segmentation没有box
+    'referent_objs'/'all_referent_objs': list[int], N 的下标
 
     模型测试的输出api: 每一帧有多个mask/box预测, 每个预测都有类别的概率, 最后一个类别是背景类
     'video': t 3 h w, 0-1
     'pred_masks': list[no h w], t bool
     'pred_boxes': list[no 4], t, x1y1x2y2绝对值
     'pred_class': list[no c] t, 概率值
-    """
+    'callback_fns': list[fn]
+"""
 
+
+class RVOS_FrameSampler_InputOutput_API:
+    """
+    训练时抽帧
+        all_frames: list[str]
+        frame_idx: 参考帧, 根据参考帧和sampler的策略
+
+        video_id
+        
+        output:
+            frames: list[str], t
+            has_ann: t, bool
+    
+    测试时抽帧:
+        all_frames: list[str]
+        frame_idx: 参考帧
+        video_id
+        output:
+            frames: list[str], t
+            request_ann: t, bool
+    
+    """
 
 class RVOS_EvalAPI_referent_text_clipped_video_request_ann:
     """
@@ -60,7 +92,7 @@ class RVOS_EvalAPI_referent_text_clipped_video_request_ann:
     """
 
 
-class RVOS_TrainAPI_referent_text_clipped_video:
+class RVOS_TrainAPI_ForEachRefer_clipped_video:
     """
         'video_dict': {
             'video': t 3 h w, 0-1,

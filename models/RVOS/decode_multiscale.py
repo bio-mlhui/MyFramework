@@ -7,16 +7,16 @@ import numpy as np
 from torch import nn, Tensor
 from torch.nn import functional as F
 from einops import repeat, reduce, rearrange
-from util.misc import NestedTensor
+from utils.misc import NestedTensor
 
 import logging
 ###########################################################################
 # 共享的module, # b n t h w; b t c h w
 ###########################################################################
 import data_schedule.utils.box_ops as box_ops
-from util.misc import get_world_size, is_dist_avail_and_initialized, nested_tensor_from_videos_list_with_stride
+from utils.misc import get_world_size, is_dist_avail_and_initialized, nested_tensor_from_videos_list_with_stride
 from functools import partial
-from util.misc import to_device
+from utils.misc import to_device
 from models.utils.visualize_amr import save_model_output
 from models.registry import register_model
 

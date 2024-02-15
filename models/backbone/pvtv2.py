@@ -159,11 +159,13 @@ class PVT(nn.Module):
 
 from detectron2.modeling import BACKBONE_REGISTRY
 from einops import rearrange, reduce, repeat
-from .utils import VideoMultiscale_Shape
+from .utils import VideoMultiscale_Shape, ImageMultiscale_Shape
 import os
 import time
+
+
 @BACKBONE_REGISTRY.register()
-class PVT_V2_EachFrame(nn.Module):
+class PVT_V2(nn.Module):
     def __init__(self, configs) -> None:
         super().__init__()
         pt_path = os.getenv('PT_PATH')
@@ -178,28 +180,47 @@ class PVT_V2_EachFrame(nn.Module):
                 p.requires_grad_(False)
 
         self.multiscale_shapes = {}
+        for name, spatial_stride, dim  in zip(['res2', 'res3', 'res4', 'res5'], 
+                                              [4, 8, 16, 32],
+                                              [64, 128, 320, 512]):
+            self.multiscale_shapes[name] =  ImageMultiscale_Shape(spatial_stride=spatial_stride, dim=dim)
+        self.max_stride = 32
+
+    def forward(self, x):
+        layer_outputs = self.pvt_v2(x)
+        ret = {}
+        names = ['res2', 'res3', 'res4', 'res5']
+        for name, feat in zip(names, layer_outputs):
+            ret[name] = feat
+        return ret
+        
+    def num_parameters(self):
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+@BACKBONE_REGISTRY.register()
+class Video2D_PVT_V2(nn.Module):
+    def __init__(self, configs) -> None:
+        super().__init__()
+        self.image_homo = PVT_V2(configs=configs)
+
+        self.multiscale_shapes = {}
         for name, temporal_stride, spatial_stride, dim  in zip(['res2', 'res3', 'res4', 'res5'],  
                                                                [1, 1, 1, 1], 
                                                                [4, 8, 16, 32],
                                                                [64, 128, 320, 512]):
             self.multiscale_shapes[name] =  VideoMultiscale_Shape(temporal_stride=temporal_stride, 
                                                                   spatial_stride=spatial_stride, dim=dim)
-
         self.max_stride = [1, 32]
 
     
     def forward(self, x):
         batch_size, _, T = x.shape[:3]
-        x = rearrange(x, 'b c t h w -> (b t) c h w')
-        
-        layer_outputs = self.pvt_v2(x)
-        ret = {}
-        names = ['res2', 'res3', 'res4', 'res5']
-        for name, feat in zip(names, layer_outputs):
-            ret[name] = rearrange(feat.contiguous(), '(b t) c h w -> b c t h w',b=batch_size, t=T)
-        
-        return ret
-    
+        x = rearrange(x, 'b c t h w -> (b t) c h w').contiguous()
+        layer_outputs = self.image_homo(x)
 
+        layer_outputs = {key: rearrange(value.contiguous(), '(b t) c h w -> b c t h w',b=batch_size, t=T).contiguous() \
+                         for key, value in layer_outputs.items()}
+        return layer_outputs
+    
     def num_parameters(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)

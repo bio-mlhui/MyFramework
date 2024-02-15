@@ -31,6 +31,25 @@ class Naive_ReferenceFrame_FrameSampler:
                                             'polyp_easy_unseen_validate_step[1]',
                                             'polyp_hard_seen_validate_step[1]',
                                             'polyp_easy_seen_validate_step[1]',
+                                            'weakpolyp_fibroid_train_step[1]',
+                                            'fibroid_validate_step[1]',
+                                            'fibroid_train_step[1]',
+
+                                            'fibroid_train_temp7_step[1]',
+                                            'fibroid_train_temp8_step[1]',
+                                            'fibroid_train_temp9_step[1]',
+                                            'fibroid_train_temp10_step[1]',
+
+                                            'fibroid_validate_temp7_step[1]',
+                                            'fibroid_validate_temp8_step[1]',
+                                            'fibroid_validate_temp9_step[1]',
+                                            'fibroid_validate_temp10_step[1]',
+
+                                            'weakpolyp_fibroid_train_temp7_step[1]',
+                                            'weakpolyp_fibroid_train_temp8_step[1]',
+                                            'weakpolyp_fibroid_train_temp9_step[1]'
+                                            'weakpolyp_fibroid_train_temp10_step[1]'
+                                            
                                             ]
         self.reference_frame_step_size = dataset_meta.get('step_size')
 
@@ -73,6 +92,19 @@ class Naive_ReferenceFrame_FrameSampler:
                         select_id = random.sample(range(video_len), global_n - video_len) + list(range(video_len))           
                         for s_id in select_id:                                                                   
                             sample_indx.append(all_inds[s_id])
+        
+        elif (self.clip_position == 'center') and (self.clip_distribute == 'dense'):
+            half_size = (random_clip_size - 1) // 2
+            # 把负的换成0, 大于最大的换成最后一帧
+            sample_indx += list(range(frame_idx - half_size, frame_idx))
+            sample_indx += list(range(frame_idx+1, half_size + frame_idx + 1))
+
+            if len(sample_indx) < random_clip_size: # 向前补一个
+                sample_indx += [min(sample_indx)]
+            assert len(sample_indx) == random_clip_size
+            sample_indx = torch.tensor(sample_indx)
+            sample_indx = sample_indx.clamp_(min=0, max=video_len-1)
+            sample_indx = sample_indx.tolist()
         else:
             raise ValueError()
         sample_indx.sort()
@@ -133,3 +165,4 @@ class Naive_Hybrid_Temporal_Scales:
         sample_indx.sort()
         sampled_frames = [all_frames[idx] for idx in sample_indx]
         return sampled_frames
+    

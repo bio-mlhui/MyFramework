@@ -7,7 +7,7 @@ import random
 import torch
 import torchvision.transforms.functional as F
 
-from util.misc import interpolate
+from utils.misc import interpolate
 from einops import rearrange
 
 _imgseg_trainaug_entrypoints = {}

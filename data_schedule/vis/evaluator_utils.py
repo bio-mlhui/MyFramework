@@ -63,3 +63,5 @@ def web(frame_pred, output_dir, **kwargs):
         os.remove(png_path)
     mask.save(png_path)
     return {}
+
+

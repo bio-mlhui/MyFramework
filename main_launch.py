@@ -11,9 +11,8 @@ from termcolor import colored
 import logging
 import yaml
 import torch
-from util.misc import setup_for_distributed
+from utils.misc import setup_for_distributed
 import torch.distributed as dist
-
 def _highlight(code, filename):
     try:
         import pygments

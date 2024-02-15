@@ -14,354 +14,174 @@ from detectron2.modeling import META_ARCH_REGISTRY
 import detectron2.utils.comm as comm
 import data_schedule.utils.box_ops as box_ops
 from data_schedule.utils.segmentation import small_object_weighting
+from models.layers.utils import zero_module
+from utils.misc import is_dist_avail_and_initialized
+from collections import defaultdict
+from detectron2.projects.point_rend.point_features import (
+    get_uncertain_point_coords_with_randomness,
+    point_sample,
+)
+from torch.cuda.amp import autocast
 
-# referent/objects
-# referent 可以看成是objects只有一个的情况
-
-# 可以用到refer/vis身上
-class Image_SegmentationLoss(nn.Module):
-    def __init__(self, loss_config) -> None:
-        super().__init__()
-        self.style = loss_config['style']
-        self.matching_costs = loss_config['matching_costs']
-        self.aux_layers = loss_config['aux_layers']
-        self.losses = loss_config['losses']
-        self.foreground_weight = loss_config['foregound_weight']
-
-    def handle_targets(self, targets):
-        # 缩放target masks
-        if 'masks' in targets:
-            target_masks = targets['masks'] # list[ni h w]
-            batch_size = len(target_masks)
-            for btc_idx in range(batch_size):
-                start = int(self.mask_out_stride // 2)
-                im_h, im_w = target_masks[btc_idx].shape[-2:]
-                target_masks[btc_idx] = target_masks[btc_idx][:, start::self.mask_out_stride, start::self.mask_out_stride] 
-                assert target_masks[btc_idx].size(1) * self.mask_out_stride == im_h
-                assert target_masks[btc_idx].size(2) * self.mask_out_stride == im_w
-            targets['masks'] = target_masks
-
-        # 根据style改变目标
-        if self.style == 'referent':
-            if 'boxes' in targets:
-                # list[1 4]
-                targets['boxes'] = [box[[ref]] for box, ref in zip(targets['boxes'], targets['referent_idx'])]
-            if 'masks' in targets:
-                targets['masks'] = [mask[[ref]] for mask, ref in zip(targets['masks'], targets['referent_idx'])]
-        return targets
-
-    def compute_loss(self, model_outs, targets):
-        targets = self.handle_targets(targets)
-        # list[{'pred_masks', 'pred_boxes':}], {'masks', 'boxes'}
-
-        # list[ni h w]
-        num_objs = torch.stack(targets['masks'], dim=0).any(-1).int().sum()
-        num_objs = torch.as_tensor([num_objs], dtype=torch.float, device=self.device)
-        if is_dist_avail_and_initialized():
-            torch.distributed.all_reduce(num_objs)
-        num_objs = torch.clamp(num_objs / get_world_size(), min=1).item()
-
-        assert len(model_outs) == len(self.layer_weights)
-
-        loss_values = {}
-
-        for layer_weight, layer_out in zip(model_outs, self.layer_weights):
-            if layer_weight != 0:
-                matching_indices = self.matching(layer_out, targets)
-                for loss in self.losses:
-                    if loss == 'masks':
-                        loss_values.update(self.masks_loss(model_outs, targets, matching_indices, num_objs))
-                    if loss == 'boxes':
-                        loss_values.update(self.boxes_loss(model_outs, targets, matching_indices, num_objs))
-                    if loss == 'classes':
-                        loss_values.update(self.classes_loss(model_outs, targets, matching_indices, num_objs))
-                    if loss == 'scores':
-                        loss_values.update(self.scores_loss(model_outs, targets, matching_indices, num_objs))
-
-        return loss_values      
-
-    @torch.no_grad()
-    def matching(self, out_mask_logits, targets):
-        # b nq H W
-        # list[ni H W]
-        tgt_masks = targets['masks']
-        src_masks_logits = out_mask_logits  # b nq h w
-        batch_size, nq, h, w = src_masks_logits.shape 
-        indices = [] 
-        for i in range(batch_size):
-            out_mask = src_masks_logits[i]  # nq h w
-            tgt_mask = tgt_masks[i].to(out_mask) # ni H W
-            cost_mask = batch_sigmoid_ce_loss(out_mask.flatten(1), tgt_mask.flatten(1)) # nq hw : n hw -> nq n
-            cost_dice = batch_dice_loss(out_mask.flatten(1), tgt_mask.flatten(1))
-
-            C = self.matching_costs['mask'] * cost_mask + \
-                self.matching_costs['dice'] * cost_dice 
-            C = C.cpu()
-            indices.append(linear_sum_assignment(C))
-        return [
-            (torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64))
-            for i, j in indices
-        ]
-
-    def masks_loss(self, out_mask_logits, targets, matching_indices, num_boxes):
-        # b nq H W
-        # list[ni H W], b
-        tgt_masks = targets['masks']
-        src_masks = torch.cat([t[J] for t, (J, _) in zip(out_mask_logits, matching_indices)], dim=0)
-        tgt_masks = torch.cat([t[J] for t, (_, J) in zip(tgt_masks, matching_indices)], dim=0)
-        tgt_masks = tgt_masks.to(src_masks)
-        losses = {
-            "objdecoder_mask": ce_mask_loss(src_masks.flatten(1), tgt_masks.flatten(1), num_boxes=num_boxes),
-            "objdecoder_dice": dice_loss(src_masks.flatten(1), tgt_masks.flatten(1), num_boxes=num_boxes),
-        }
-        return losses    
-
-    def scores_loss(self, layer_gscore_output, matching_indices,  targets):
-        is_valid = targets['isvalid'] # list[ni], batch
-        referent_idx = targets['gt_referent_idx'] # list[int], batch
-        ref_is_valid = torch.tensor([isva[ridx].any() for isva, ridx in zip(is_valid, referent_idx)]).bool() # b
-        num_refs = (ref_is_valid.int().sum())
-        match_as_gt_indices = [] # list[int], bt
-        for ref_idx, (tgt_idx, src_idx) in zip(referent_idx,  matching_indices): # b
-            sel_idx = src_idx.tolist().index(ref_idx)
-            match_as_gt_idx = tgt_idx[sel_idx]
-            match_as_gt_indices.append(match_as_gt_idx.item())
-        match_as_gt_indices = torch.tensor(match_as_gt_indices).long().to(layer_gscore_output.device) # b
-        choose_loss = F.cross_entropy(layer_gscore_output[ref_is_valid], match_as_gt_indices[ref_is_valid], reduction='none') # b
-        return {'objdecoder_reason': choose_loss.sum() / num_refs}
-
-    def classes_loss():
-        pass
-
-    def boxes_loss():
-        pass
-
-
-# 考虑每个multiscale的维度都不相等
-@META_ARCH_REGISTRY.register()
-class Masked_Decoder_Multiscale(Image_SegmentationLoss):
-    """ 假设: multiscale的维度都是d_model
-    不利用text信息
+def calculate_uncertainty(logits):
     """
-    def __init__(self,
-                 configs,
-                 ):
-        assert configs['loss']['style'] == 'objects'
-        super().__init__(configs['loss'])
-        attn_configs = configs['attn']
-        inputs_projs = configs['inputs_projs'] # None/dict
+    We estimate uncerainty as L1 distance between 0.0 and the logit prediction in 'logits' for the
+        foreground class in `classes`.
+    Args:
+        logits (Tensor): A tensor of shape (R, 1, ...) for class-specific or
+            class-agnostic, where R is the total number of predicted masks in all images and C is
+            the number of foreground classes. The values are logits.
+    Returns:
+        scores (Tensor): A tensor of shape (R, 1, ...) that contains uncertainty scores with
+            the most uncertain locations having the highest uncertainty score.
+    """
+    assert logits.shape[1] == 1
+    gt_class_logits = logits.clone()
+    return -(torch.abs(gt_class_logits))
 
-        d_model = configs['d_model']
-        self.nqueries = configs['nqueries']
-        self.nlayers = configs['nlayers']
-        self.memory_scales = configs['memory_scales']
-        self.mask_scale = configs['mask_scale']
-        num_classes = configs['num_classes']
+class Image_SetMatchingLoss(nn.Module):
+    def __init__(self, 
+                 loss_config,
+                 num_classes,) -> None:
+        super().__init__()
+        self.num_classes = num_classes # n=1 / n=0 / n>1
+        self.matching_metrics = loss_config['matching_metrics'] # mask: mask/dice; point_sample_mask: ..
+        self.losses = loss_config['losses'] 
 
-        assert self.mask_scale not in self.memory_scales
-        # decoder的输入要把memory一下, 还有res也proj
-        # mask的表示: 每帧的query和mask feature进行卷积
-        self.inputs_projs = META_ARCH_REGISTRY.get(inputs_projs['name'])(inputs_projs, text_dim=None, out_dim=d_model)
-
-        self.query_poses = nn.Embedding(self.nqueries, d_model)
-        self.query_feats = nn.Embedding(self.nqueries, d_model)
-        self.level_embeds = nn.Embedding(len(self.memory_scales), d_model)
-
-        assert self.nlayers % len(self.memory_scales) == 0
-
-        self.cross_layers = _get_clones(CrossAttentionLayer(d_model=d_model,
-                                                            nhead=attn_configs['nheads'],
-                                                            dropout=0.0,
-                                                            activation=attn_configs['activation'],
-                                                            normalize_before=attn_configs['normalize_before']),
-                                        self.nlayers)
-        self.self_layers = _get_clones(SelfAttentionLayer(d_model=d_model,
-                                                          nhead=attn_configs['nheads'],
-                                                          dropout=0.0,
-                                                          activation=attn_configs['activation'],
-                                                          normalize_before=attn_configs['normalize_before']),
-                                       self.nlayers)  
-        self.ffn_layers = _get_clones(FFNLayer(d_model=d_model,
-                                               dim_feedforward=attn_configs['dim_feedforward'],
-                                               dropout=0.0,
-                                               activation=attn_configs['activation'],
-                                               normalize_before=attn_configs['normalize_before']),
-                                      self.nlayers)           
-        self.nheads = attn_configs['nheads']
-
-        self.query_norm = nn.LayerNorm(d_model)
-        self.query_box = MLP(d_model, d_model, 4, 3)
-        self.query_mask = MLP(d_model, d_model, d_model, 3)
-        self.query_class = nn.Linear(d_model, num_classes + 1)
-
-        self.pos_2d = build_position_encoding(position_embedding_name='2d')
+        self.aux_layer_weights = loss_config['aux_layer_weights']  # int/list
+        empty_weight = torch.ones(self.num_classes + 1)
+        empty_weight[-1] = loss_config['background_cls_eos']
+        self.register_buffer('empty_weight', empty_weight)
+        # self.register_buffer('small_obj_weight', torch.tensor(loss_config['small_obj_weight']).float())
 
     @property
     def device(self,):
-        return self.query_feats.weight.device
-
-    def get_memories_and_mask_features(self, multiscales):
-        # projection maybe
-        # b c h w -> hw b c
-        memories = [rearrange(multiscales[scale], 
-                              'b c t h w -> (b t) c h w') for scale in self.memory_scales]
-        size_list = [mem_feat.shape[-2:] for mem_feat in memories]
-        memories_poses = [self.pos_2d(torch.zeros_like(mem)[:, 0, :, :].bool(), hidden_dim=mem.shape[1]) for mem in memories]
-        memories = [rearrange(mem, 'bt c h w -> (h w) bt c') for mem in memories]
-        memories_poses = [rearrange(mem_pos, 'bt c h w -> (h w) bt c') for mem_pos in memories_poses]
-
-        mask_features = multiscales[self.mask_scale] # b c t h w
-        return memories, memories_poses, mask_features, size_list
-
-    def forward_heads(self, output, mask_features, attn_mask_target_size):
-        # b c t h w
-        batch_size, _, nf = mask_features.shape[:3]
-        decoder_output = self.query_norm(output) # n bt c
-        decoder_output = decoder_output.transpose(0, 1)   # bt n c
-
-        box_logits = self.query_box(decoder_output) # bt n 4
-        box_logits = rearrange(box_logits, '(b t) nq c -> b t nq c', b=batch_size, t=nf)
-
-        mask_embeds = self.query_mask(decoder_output)  # bt n c
-        mask_embeds = rearrange(mask_embeds, '(b t) n c -> b t n c', b=batch_size, t=nf)
-        mask_logits = torch.einsum("btqc,bcthw->btqhw", mask_embeds, mask_features)  
-
-        class_logits = self.query_class(decoder_output) # bt n class+1
-        class_logits = rearrange(class_logits, '(b t) n c -> b t n c',b=batch_size, t=nf)
-
-        attn_mask = mask_logits.detach().clone().flatten(0, 1)  # bt nq h w
-        attn_mask = F.interpolate(attn_mask, size=attn_mask_target_size, mode="bilinear", align_corners=False) # bt n h w, real
-        # b n h w -> b 1 n hw -> b head n hw -> b*head n hw
-        attn_mask = (attn_mask.flatten(2).unsqueeze(1).repeat(1, self.nheads, 1, 1).flatten(0, 1).sigmoid() < 0.5).bool()
-        
-        return class_logits, box_logits, mask_logits, attn_mask, rearrange(decoder_output, '(b t) n c -> b t n c', 
-                                                                           b=batch_size, t=nf)
+        return self.empty_weight.device
     
-    def forward(self, 
-                video_multiscales=None, # b c t h w,
-                text_inputs=None):
-        video_multiscales, text_inputs = self.inputs_projs(video_multiscales, text_inputs)
-        # list[hw bt c], list[hw bt c], b c t h w
-        memories, memories_poses, mask_features, size_list = self.get_memories_and_mask_features(video_multiscales)
-        batch_size_nf = memories[0].shape[1]
-        memories = [mem_feat + self.level_embeds.weight[i][None, None, :] for i, mem_feat in enumerate(memories)]
-        # nq bt c
-        query_poses = self.query_poses.weight.unsqueeze(1).repeat(1, batch_size_nf, 1)
-        query_feats = self.query_feats.weight.unsqueeze(1).repeat(1, batch_size_nf, 1)
-
-        ret = []
-        # bt nq c
-        class_logits, box_logits, mask_logits, attn_mask, frame_queries = self.forward_heads(query_feats, mask_features, attn_mask_target_size=size_list[0])
-        # b t n c, b t n 4, b t n h w, bt*head nq hw
-        ret.append({'pred_class':class_logits, 'pred_masks': mask_logits, 'pred_boxes': box_logits, 'frame_queries': frame_queries })
-        for i in range(self.nlayers):
-            level_index = i % len(self.memory_scales)
-            attn_mask[torch.where(attn_mask.sum(-1) == attn_mask.shape[-1])] = False  # 全masked掉的 全注意, 比如有padding
-            query_feats = self.cross_layers[i](
-                tgt=query_feats,  # n b c
-                memory=memories[level_index], # hw b  c
-                memory_mask=attn_mask, # b*head n hw
-                memory_key_padding_mask=None,
-                pos=memories_poses[level_index],  # hw b  c
-                query_pos=query_poses, # n b  c
-            )
-            query_feats = self.self_layers[i](
-                query_feats, # n b c
-                tgt_mask=None,
-                tgt_key_padding_mask=None,
-                query_pos=query_poses, # n b c
-            )
-            query_feats = self.ffn_layers[i](
-                query_feats # n b c
-            )
-            class_logits, box_logits, mask_logits, attn_mask, frame_queries = self.forward_heads(query_feats, mask_features, 
-                                                                                attn_mask_target_size=size_list[(i + 1) % len(self.memory_scales)])
-            
-            ret.append({'pred_class':class_logits, 'pred_masks': mask_logits, 'pred_boxes': box_logits, 'frame_queries': frame_queries })
+    def compute_loss(self, model_outs, targets):
+        if 'masks' in targets:
+            num_objs = torch.stack(targets['masks'], dim=0).flatten(1).any(-1).int().sum() 
+        elif 'boxes' in targets:
+            gt_boxes = torch.stack(targets['boxes'], dim=0) # bn 4
+            num_objs = (gt_boxes[:, 2:] > 0).all(-1).int().sum()
+        else:
+            raise ValueError('targets里没有boxes/masks, 需要确定数量')
         
-        keys = list(ret[0].keys())
-        collated_ret = {}
-        for key in keys:
-            collated_ret[key] = [ariana_grande[key] for ariana_grande in ret]
-        return collated_ret, text_inputs
+        num_objs = torch.as_tensor([num_objs], dtype=torch.float, device=self.device)
+        if is_dist_avail_and_initialized():
+            torch.distributed.all_reduce(num_objs)
+        num_objs = torch.clamp(num_objs / comm.get_world_size(), min=1).item()
+        if isinstance(self.aux_layer_weights, list):
+            assert len(self.aux_layer_weights) == (len(model_outs) - 1)
+        else:
+            self.aux_layer_weights = [self.aux_layer_weights] * (len(model_outs) - 1)
 
+        layer_weights = self.aux_layer_weights + [1.]
 
-
-
-class Image_SegmentationLoss_VIS111(nn.Module):
-    def __init__(self, loss_config) -> None:
-        super().__init__()
-        self.matching_costs = loss_config['matching_costs']
-        self.losses = loss_config['losses']
-        self.foreground_weight = loss_config['foregound_weight']
-        self.layer_weights = loss_config['layer_weights']
-
-        self.register_buffer('class_weights', torch.tensor(loss_config['class_weights']).float())
-
-    def compute_loss(self, model_outs_by_layer, targets):
-        # list[{'pred_masks', 'pred_boxes', 'pred_obj',}], {'masks', 'boxes'}
-        # list[ni h w]
-        num_objs = torch.cat(targets['masks'], dim=0).flatten(1).any(-1).int().sum().item()
-        batch_num_objs = sum(comm.all_gather(num_objs))
-        num_objs = torch.clamp(torch.tensor(batch_num_objs).float().to(self.device) / comm.get_world_size(), min=1).item()
-
-        assert len(model_outs_by_layer) == len(self.layer_weights)
         loss_values = {
-            'loss_mask': torch.tensor(0.).to(self.device),
-            'loss_dice': torch.tensor(0.).to(self.device),
-            'loss_l1': torch.tensor(0.).to(self.device),
-            'loss_giou': torch.tensor(0.).to(self.device),
-            'loss_class': torch.tensor(0.).to(self.device),
+            'mask_dice':0., 'mask_ce':0.,
+            'box_l1': 0., 'box_giou': 0.,
+            'class_ce':0.,
+
+            'mask_dice_smobj':0., 'mask_ce_smobj':0.,
+            'boxMask_dice':0., 'boxMask_ce':0.,
         }
-        for layer_weight, layer_out in zip(self.layer_weights, model_outs_by_layer):
-            if layer_weight != 0:
+        
+        if ('mask_ce_dice' in self.matching_metrics) or ('mask_ce_dice' in self.losses):
+            # mask interpolate
+            tgt_mask_shape = targets['masks'][0].shape[-2:] # list[n H W], b
+            for layer_idx in range(len(model_outs)):
+                # b nq h w
+                model_outs[layer_idx]['pred_masks'] = F.interpolate(model_outs[layer_idx]['pred_masks'],
+                                                                    size=tgt_mask_shape, mode='bilinear', align_corners=False)
+        for taylor, layer_out in zip(layer_weights, model_outs):
+            if taylor != 0:
                 matching_indices = self.matching(layer_out, targets)
                 for loss in self.losses:
-                    if loss == 'masks':
-                        loss_dict = self.masks_loss(layer_out, targets, matching_indices, num_objs)
-                    elif loss == 'boxes':
-                        loss_dict = self.boxes_loss(layer_out, targets, matching_indices, num_objs)
-                    elif loss == 'class':
-                        loss_dict = self.class_loss(layer_out, targets, matching_indices, num_objs)
+                    loss_extra_param = self.losses[loss]
+                    if loss == 'mask_dice_ce' :
+                        loss_dict = self.loss_mask_dice_ce(layer_out, targets, matching_indices, num_objs,
+                                                           loss_extra_param=loss_extra_param)
+                    elif loss == 'boxMask_dice_ce':
+                        pass
+                    elif loss == 'box_l1_giou':
+                        loss_dict = self.loss_box_l1_giou(layer_out, targets, matching_indices, num_objs,
+                                                          loss_extra_param=loss_extra_param)
+                    elif loss == 'class_ce':
+                        loss_dict = self.loss_class_ce(layer_out, targets, matching_indices, num_objs,
+                                                       loss_extra_param=loss_extra_param)
+                    elif loss == 'point_mask_dice_ce':
+                        loss_dict = self.loss_point_mask_dice_ce(layer_out, targets, matching_indices, num_objs,
+                                                                 loss_extra_param=loss_extra_param)
                     else:
                         raise ValueError()
-                    for key in loss_dict:
-                        loss_values[key] += loss_dict[key] * layer_weight
                     
+                    for key, value in loss_dict.items():
+                        loss_values[key] = loss_values[key] + value
+    
         return loss_values      
 
     @torch.no_grad()
-    def matching(self, model_outs, targets):
-        # b nq H W
-        # list[ni H W]
-        tgt_masks, has_ann, tgt_boxes = targets['masks'], targets['has_ann'], targets['boxes']
-        src_masks = model_outs['pred_masks'].flatten(0,1)[has_ann]  # bt' nq h w
-        src_boxes = model_outs['pred_boxes'].flatten(0, 1)[has_ann].sigmoid() # bt' nq 4
-        src_class = model_outs['pred_class'].flatten(0, 1)[has_ann].softmax(-1) # bt' nq c
-        batch_size, nq, h, w = src_masks.shape 
+    def matching(self, layer_out, targets):
+        batch_size = len(targets['masks']) if 'masks' in targets else len(targets['boxes'])
         indices = [] 
         for i in range(batch_size):
-            out_mask = src_masks[i]  # nq H W
-            tgt_mask = tgt_masks[i].to(out_mask) # ni H W
-            tgt_ids = [0] * len(tgt_mask) # list[int], ni
-            cost_mask = batch_sigmoid_ce_loss(out_mask.flatten(1), tgt_mask.flatten(1)) # nq hw : n hw -> nq n
-            cost_dice = batch_dice_loss(out_mask.flatten(1), tgt_mask.flatten(1))
-            out_bbox = src_boxes[i] # nq 4, logis
-            tgt_bbox = tgt_boxes[i] # ni 4 
-            cost_l1 = torch.cdist(out_bbox, tgt_bbox, p=1) 
-            cost_giou = - box_ops.generalized_box_iou(box_ops.box_cxcywh_to_xyxy(out_bbox),
-                                                      box_ops.box_cxcywh_to_xyxy(tgt_bbox))
-            
-            cost_class = - src_class[i][:, tgt_ids]
+            C = 0.
 
-            C = self.matching_costs['mask'] * cost_mask + \
-                self.matching_costs['dice'] * cost_dice + \
-                self.matching_costs['class'] * cost_class + \
-                self.matching_costs['l1'] * cost_l1 + \
-                self.matching_costs['giou'] * cost_giou
+            if 'class_prob' in self.matching_metrics:
+                out_cls = layer_out['pred_class'][i].softmax(-1) # nq c
+                tgt_cls = targets['classes'][i] # n
+                cost_class = - out_cls[:, tgt_cls] # nq n
+                C += self.matching_metrics['class_prob']['prob'] * cost_class
+
+            if 'mask_dice_ce' in self.matching_metrics:
+                out_mask = layer_out['pred_masks'][i]  # nq h w
+                tgt_mask = targets['masks'][i].to(out_mask) # ni H W
+                cost_mask = batch_sigmoid_ce_loss(out_mask.flatten(1), tgt_mask.flatten(1)) 
+                cost_dice = batch_dice_loss(out_mask.flatten(1), tgt_mask.flatten(1))
+                C += self.matching_metrics['mask_dice_ce']['ce'] * cost_mask + \
+                     self.matching_metrics['mask_dice_ce']['dice'] * cost_dice
+
+            if 'box_l1_giou' in self.matching_metrics:
+                out_box = layer_out['pred_boxes'][i].sigmoid() # nq 4
+                tgt_bbox = targets['boxes'][i] # ni 4 
+                cost_l1 = torch.cdist(out_box, tgt_bbox, p=1) 
+                cost_giou = 1 - box_ops.generalized_box_iou(box_ops.box_cxcywh_to_xyxy(out_box),
+                                                        box_ops.box_cxcywh_to_xyxy(tgt_bbox))
+                C += self.matching_metrics['box_l1_giou']['l1'] * cost_l1 + \
+                      self.matching_metrics['box_l1_giou']['giou'] + cost_giou
+ 
+            if 'point_mask_dice_ce' in self.matching_metrics:
+                out_mask = layer_out['pred_masks'][i]  # nq h w
+                tgt_mask = targets['masks'][i].to(out_mask) # ni H W
+
+                out_mask = out_mask[:, None]
+                tgt_mask = tgt_mask[:, None]
+                # all masks share the same set of points for efficient matching!
+                point_coords = torch.rand(1, self.matching_metrics['point_mask_dice_ce']['num_points'],
+                                           2, device=self.device)
+                # get gt labels
+                tgt_mask = point_sample(
+                    tgt_mask,
+                    point_coords.repeat(tgt_mask.shape[0], 1, 1),
+                    align_corners=False,
+                ).squeeze(1)
+
+                out_mask = point_sample(
+                    out_mask,
+                    point_coords.repeat(out_mask.shape[0], 1, 1),
+                    align_corners=False,
+                ).squeeze(1)
+
+                with autocast(enabled=False):
+                    out_mask = out_mask.float() # nq num_points
+                    tgt_mask = tgt_mask.float()
+                    cost_mask = batch_sigmoid_ce_loss(out_mask, tgt_mask)
+                    cost_dice = batch_dice_loss(out_mask, tgt_mask)
+                C += self.matching_metrics['point_mask_dice_ce']['ce'] * cost_mask + \
+                     self.matching_metrics['point_mask_dice_ce']['dice'] * cost_dice
             
             C = C.cpu()
-
             indices.append(linear_sum_assignment(C))
 
         return [
@@ -369,210 +189,283 @@ class Image_SegmentationLoss_VIS111(nn.Module):
             for i, j in indices
         ]
 
-    def masks_loss(self, model_outs, targets, matching_indices, num_objs):
-        # list[ni H W], bt'; bT
-        tgt_masks, has_ann = targets['masks'], targets['has_ann']
-        pred_masks = model_outs['pred_masks'].flatten(0, 1)[has_ann] # bT->bt' nq h w
-        src_masks = torch.cat([t[J] for t, (J, _) in zip(pred_masks, matching_indices)], dim=0) # n_sum h w
-        tgt_masks = torch.cat([t[J] for t, (_, J) in zip(tgt_masks, matching_indices)], dim=0) # n_sum h w
+    def loss_mask_dice_ce(self, outputs, targets, indices, num_objs, loss_extra_param):
+        src_masks = outputs['pred_masks'] # b nq h w
+        tgt_masks = targets['masks']
+        src_masks = torch.cat([t[J] for t, (J, _) in zip(src_masks, indices)], dim=0)
+        tgt_masks = torch.cat([t[J] for t, (_, J) in zip(tgt_masks, indices)], dim=0)
         tgt_masks = tgt_masks.to(src_masks)
         losses = {
-            "loss_mask": ce_mask_loss(src_masks.flatten(1), tgt_masks.flatten(1), num_boxes=num_objs),
-            "loss_dice": dice_loss(src_masks.flatten(1), tgt_masks.flatten(1), num_boxes=num_objs),
+            "mask_ce": ce_mask_loss(src_masks.flatten(1), tgt_masks.flatten(1), num_boxes=num_objs),
+            "mask_dice": dice_loss(src_masks.flatten(1), tgt_masks.flatten(1), num_boxes=num_objs),
         }
-        return losses    
-    
-    def boxes_loss(self, model_outs, targets, matching_indices, num_objs): 
-        # list[ni 4], bt'
-        tgt_boxes, has_ann = targets['boxes'], targets['has_ann']
-        src_boxes = model_outs['pred_boxes'].flatten(0, 1)[has_ann].sigmoid() # bt' nq 4  
+        return losses   
 
-        src_boxes = torch.cat([t[J] for t, (J, _) in zip(src_boxes, matching_indices)], dim=0) # n_sum 4
-        tgt_boxes = torch.cat([t[J] for t, (_, J) in zip(tgt_boxes, matching_indices)], dim=0) # n_sum 4
+    def loss_point_mask_dice_ce(self, outputs, targets, indices, num_objs, loss_extra_param):
+        src_masks = outputs['pred_masks'] # b nq h w
+        tgt_masks = targets['masks']
+        src_masks = torch.cat([t[J] for t, (J, _) in zip(src_masks, indices)], dim=0) # n_sigma h w
+        tgt_masks = torch.cat([t[J] for t, (_, J) in zip(tgt_masks, indices)], dim=0) # n_sigma h w
+        tgt_masks = tgt_masks.to(src_masks)
+
+        # No need to upsample predictions as we are using normalized coordinates :)
+        # N x 1 x H x W
+        src_masks = src_masks[:, None]
+        target_masks = tgt_masks[:, None]
+
+        with torch.no_grad():
+            # sample point_coords
+            point_coords = get_uncertain_point_coords_with_randomness(
+                src_masks,
+                lambda logits: calculate_uncertainty(logits),
+                loss_extra_param['num_points'],
+                loss_extra_param['oversample_ratio'],
+                loss_extra_param['importance_sample_ratio'],
+            )
+            # get gt labels
+            point_labels = point_sample(
+                target_masks,
+                point_coords,
+                align_corners=False,
+            ).squeeze(1)
+
+        point_logits = point_sample(
+            src_masks,
+            point_coords,
+            align_corners=False,
+        ).squeeze(1)
+
+        losses = {
+            "mask_dice": ce_mask_loss(point_logits, point_labels, num_objs),
+            "mask_ce": dice_loss(point_logits, point_labels, num_objs),
+        }
+
+        del src_masks
+        del target_masks
+        return losses        
+
+    def loss_class_ce(self, outputs, targets, indices, num_objs, loss_extra_param):
+        """Classification loss (NLL)
+        targets dicts must contain the key "labels" containing a tensor of dim [nb_target_boxes]
+        """
+        src_logits = outputs["pred_class"].float() # b nq c
+
+        idx = self._get_src_permutation_idx(indices)
+        # list[n], b -> bn
+        target_classes_o = torch.cat([t[J] for t, (_, J) in zip(targets['classes'], indices)]) 
+        target_classes = torch.full(
+            src_logits.shape[:2], self.num_classes, dtype=torch.int64, device=self.device
+        )
+        target_classes[idx] = target_classes_o
+
+        loss_ce = F.cross_entropy(src_logits.transpose(1, 2), target_classes, self.empty_weight)
+        losses = {"class_ce": loss_ce}
+        return losses
+
+    def loss_box_l1_giou(self, outputs, targets, indices, num_objs, loss_extra_param): 
+        tgt_boxes = targets['boxes'] # list[n 4], b
+
+        src_boxes = outputs['pred_boxes'].sigmoid() # b nq 4
+
+        src_boxes = torch.cat([t[J] for t, (J, _) in zip(src_boxes, indices)], dim=0) # n_sum 4
+        tgt_boxes = torch.cat([t[J] for t, (_, J) in zip(tgt_boxes, indices)], dim=0) # n_sum 4
         
-        losses = {}
-        loss_l1 = F.l1_loss(src_boxes, tgt_boxes, reduction='none') # n_sum 1
-        losses['loss_l1'] = loss_l1.sum() / num_objs
+        loss_l1 = F.l1_loss(src_boxes, tgt_boxes, reduction='none') # n_sum 4
 
         loss_giou = 1 - torch.diag(box_ops.generalized_box_iou(
                                     box_ops.box_cxcywh_to_xyxy(src_boxes),
                                     box_ops.box_cxcywh_to_xyxy(tgt_boxes)))
-        losses['loss_giou'] = loss_giou.sum() / num_objs
-        return losses
+        return {
+            'box_l1': loss_l1.sum(-1).sum() / num_objs,
+            'box_giou': loss_giou.sum() / num_objs
+        }
 
-
-    def get_src_permutation_idx(self, indices):
+    def _get_src_permutation_idx(self, indices):
         # permute predictions following indices
         batch_idx = torch.cat([torch.full_like(src, i) for i, (src, _) in enumerate(indices)])
         src_idx = torch.cat([src for (src, _) in indices])
         return batch_idx, src_idx
 
-    def get_tgt_permutation_idx(self, indices):
+    def _get_tgt_permutation_idx(self, indices):
         # permute targets following indices
         batch_idx = torch.cat([torch.full_like(tgt, i) for i, (_, tgt) in enumerate(indices)])
         tgt_idx = torch.cat([tgt for (_, tgt) in indices])
         return batch_idx, tgt_idx
 
-    def class_loss(self, model_outs, targets, matching_indices, num_objs):
-        # bT, list[ni h w] bt'
-        has_ann, tgt_masks = targets['has_ann'], targets['masks']
-        src_logits = model_outs["pred_class"].flatten(0,1)[has_ann] # bt' nq c
-        # list[ni], bt', 都是类0
-        tgt_labels = [torch.tensor([0] * len(bt_mk)).long().to(self.device) for bt_mk in tgt_masks]
-
-        # list[n], bt'
-        target_classes_o = torch.cat([t[J] for t, (_, J) in zip(tgt_labels, matching_indices)]).long()
-        idx = self.get_src_permutation_idx(matching_indices)
-
-        target_classes = torch.full(src_logits.shape[:2], len(self.class_weights) - 1, ).long().to(self.device)
-        target_classes[idx] = target_classes_o
-
-        loss_ce = F.cross_entropy(src_logits.transpose(1, 2), target_classes, weight=self.class_weights)
-        losses = {"loss_class": loss_ce}
-        return losses
 
 @META_ARCH_REGISTRY.register()
-class Masked_Decoder_Multiscale_VIS111(Image_SegmentationLoss_VIS111):
-    """ 假设: multiscale的维度都是d_model
-    不利用text信息
-    """
+class Image_MaskedAttn_MultiscaleMaskDecoder(nn.Module):
     def __init__(self,
                  configs,
-                 ):
-        super().__init__(configs['loss'])
-        attn_configs = configs['attn']
-        inputs_projs = configs['inputs_projs'] # None/dict
-
+                 multiscale_shapes):
+        super().__init__()
         d_model = configs['d_model']
+        attn_configs = configs['attn']
         self.nqueries = configs['nqueries']
         self.nlayers = configs['nlayers']
         self.memory_scales = configs['memory_scales']
         self.mask_scale = configs['mask_scale']
+        self.mask_spatial_stride = multiscale_shapes[self.mask_scale].spatial_stride
+        num_classes = configs['num_classes']
 
-        assert self.mask_scale not in self.memory_scales
-        # decoder的输入要把memory一下, 还有res也proj
-        # mask的表示: 每帧的query和mask feature进行卷积
-        self.inputs_projs = META_ARCH_REGISTRY.get(inputs_projs['name'])(inputs_projs, 
-                                                                          out_dim=d_model)
-
-        self.query_poses = nn.Embedding(self.nqueries, d_model)
+        inputs_projs = configs['inputs_projs']
+        self.inputs_projs = nn.Sequential()
+        if inputs_projs is not None:
+            self.inputs_projs = META_ARCH_REGISTRY.get(inputs_projs['name'])(inputs_projs, 
+                                                                             multiscale_shapes=multiscale_shapes,
+                                                                             out_dim=d_model)
+        self.query_poses =  nn.Embedding(self.nqueries, d_model)
         self.query_feats = nn.Embedding(self.nqueries, d_model)
         self.level_embeds = nn.Embedding(len(self.memory_scales), d_model)
-
         assert self.nlayers % len(self.memory_scales) == 0
-
         self.cross_layers = _get_clones(CrossAttentionLayer(d_model=d_model,
                                                             nhead=attn_configs['nheads'],
                                                             dropout=0.0,
-                                                            activation=attn_configs['activation'],
                                                             normalize_before=attn_configs['normalize_before']),
                                         self.nlayers)
         self.self_layers = _get_clones(SelfAttentionLayer(d_model=d_model,
                                                           nhead=attn_configs['nheads'],
                                                           dropout=0.0,
-                                                          activation=attn_configs['activation'],
                                                           normalize_before=attn_configs['normalize_before']),
                                        self.nlayers)  
         self.ffn_layers = _get_clones(FFNLayer(d_model=d_model,
                                                dim_feedforward=attn_configs['dim_feedforward'],
                                                dropout=0.0,
-                                               activation=attn_configs['activation'],
                                                normalize_before=attn_configs['normalize_before']),
-                                      self.nlayers)           
+                                      self.nlayers) 
+                  
         self.nheads = attn_configs['nheads']
-
         self.query_norm = nn.LayerNorm(d_model)
-        self.query_box = MLP(d_model, d_model, 4, 3)
-        self.query_mask = MLP(d_model, d_model, d_model, 3)
-
-        self.query_is_obj = nn.Linear(d_model, 2)
         self.pos_2d = build_position_encoding(position_embedding_name='2d')
-        self.mask_stride = 4
-
-
+        self.loss_module = Image_SetMatchingLoss(loss_config=configs['loss'], num_classes=num_classes)
+        
+        self.head_outputs = configs['head_outputs']
+        
+        assert 'mask' in self.head_outputs
+        self.query_mask = MLP(d_model, d_model, d_model, 3)
+        if 'class' in self.head_outputs:
+            self.query_class = nn.Linear(d_model, num_classes + 1)
+        if 'box' in self.head_outputs:
+            self.query_box = MLP(d_model, d_model, 4, 3)
+        # box_mask?
+        # polygn
+        
     @property
     def device(self,):
         return self.query_feats.weight.device
 
     def get_memories_and_mask_features(self, multiscales):
-        # projection maybe
         # b c h w -> hw b c
-        memories = [rearrange(multiscales[scale], 
-                              'b c t h w -> (b t) c h w') for scale in self.memory_scales]
+        memories = [multiscales[scale] for scale in self.memory_scales]
         size_list = [mem_feat.shape[-2:] for mem_feat in memories]
         memories_poses = [self.pos_2d(torch.zeros_like(mem)[:, 0, :, :].bool(), hidden_dim=mem.shape[1]) for mem in memories]
-        memories = [rearrange(mem, 'bt c h w -> (h w) bt c') for mem in memories]
-        memories_poses = [rearrange(mem_pos, 'bt c h w -> (h w) bt c') for mem_pos in memories_poses]
-
-        mask_features = multiscales[self.mask_scale] # b c t h w
+        memories = [rearrange(mem, 'b c h w -> (h w) b c') for mem in memories]
+        memories_poses = [rearrange(mem_pos, 'b c h w -> (h w) b c') for mem_pos in memories_poses]
+        mask_features = multiscales[self.mask_scale] # b c h w
         return memories, memories_poses, mask_features, size_list
 
-    def forward_heads(self, output, mask_features, attn_mask_target_size):
-        # b c t h w
-        batch_size, _, nf = mask_features.shape[:3]
-        decoder_output = self.query_norm(output) # n bt c
-        decoder_output = decoder_output.transpose(0, 1)   # bt n c
-
-        class_logits = self.query_is_obj(decoder_output) # bt nq 2
-        class_logits = rearrange(class_logits, '(b t) nq c -> b t nq c', b=batch_size, t=nf)
-        box_logits = self.query_box(decoder_output) # bt n 4
-        box_logits = rearrange(box_logits, '(b t) nq c -> b t nq c', b=batch_size, t=nf)
-
-        mask_embeds = self.query_mask(decoder_output)  # bt n c
-        mask_embeds = rearrange(mask_embeds, '(b t) n c -> b t n c', b=batch_size, t=nf)
-        mask_logits = torch.einsum("btqc,bcthw->btqhw", mask_embeds, mask_features)  
-
-        attn_mask = mask_logits.detach().clone().flatten(0, 1)  # bt nq h w
-        attn_mask = F.interpolate(attn_mask, size=attn_mask_target_size, mode="bilinear", align_corners=False) # bt n h w, real
-        # b n h w -> b 1 n hw -> b head n hw -> b*head n hw
-        attn_mask = (attn_mask.flatten(2).unsqueeze(1).repeat(1, self.nheads, 1, 1).flatten(0, 1).sigmoid() < 0.5).bool()
-        
-        if not self.training:
-            mask_logits = F.interpolate(mask_logits.flatten(0, 1), scale_factor=self.mask_stride, mode='bilinear', align_corners=True)
-            mask_logits = rearrange(mask_logits, '(b t) n h w -> b t n h w',b=batch_size, t=nf)
-        
-        return class_logits, box_logits, mask_logits, attn_mask, rearrange(decoder_output, '(b t) n c -> b t n c', 
-                                                                           b=batch_size, t=nf)
-    
     def forward(self, 
-                video_multiscales):
-        video_multiscales = self.inputs_projs(video_multiscales)
-        # list[hw bt c], list[hw bt c], b c t h w
-        memories, memories_poses, mask_features, size_list = self.get_memories_and_mask_features(video_multiscales)
-        batch_size_nf = memories[0].shape[1]
+                multiscales, # b c h w
+                ):
+        multiscales = self.inputs_projs(multiscales)
+        # hw b c; b c h w
+        memories, memories_poses, mask_features, size_list = self.get_memories_and_mask_features(multiscales)
         memories = [mem_feat + self.level_embeds.weight[i][None, None, :] for i, mem_feat in enumerate(memories)]
-        # nq bt c
-        query_poses = self.query_poses.weight.unsqueeze(1).repeat(1, batch_size_nf, 1)
-        query_feats = self.query_feats.weight.unsqueeze(1).repeat(1, batch_size_nf, 1)
+        batch_size = mask_features.shape[0]
+        query_poses = self.query_poses.weight.unsqueeze(1).repeat(1, batch_size, 1)
+        output = self.query_feats.weight.unsqueeze(1).repeat(1, batch_size, 1)
 
         ret = []
-        # bt nq c
-        class_logits, box_logits, mask_logits, attn_mask, frame_queries = self.forward_heads(query_feats, mask_features, attn_mask_target_size=size_list[0])
-        # b t n c, b t n 4, b t n h w, bt*head nq hw
-        ret.append({'pred_class': class_logits, 'pred_masks': mask_logits, 'pred_boxes': box_logits, 'frame_queries': frame_queries })
+        outputs_class, outputs_box, outputs_mask, attn_mask, queries = \
+            self.forward_heads(output, mask_features, attn_mask_target_size=size_list[0])
+        ret.append({'pred_class':outputs_class, 'pred_masks': outputs_mask, 'pred_boxes': outputs_box, 'queries': queries})
+
         for i in range(self.nlayers):
             level_index = i % len(self.memory_scales)
             attn_mask[torch.where(attn_mask.sum(-1) == attn_mask.shape[-1])] = False  # 全masked掉的 全注意, 比如有padding
-            query_feats = self.cross_layers[i](
-                tgt=query_feats,  # n b c
-                memory=memories[level_index], # hw b  c
-                memory_mask=attn_mask, # b*head n hw
+            output = self.cross_layers[i](
+                tgt=output,
+                memory=memories[level_index], 
+                memory_mask=attn_mask, 
                 memory_key_padding_mask=None,
-                pos=memories_poses[level_index],  # hw b  c
-                query_pos=query_poses, # n b  c
+                pos=memories_poses[level_index], 
+                query_pos=query_poses,
             )
-            query_feats = self.self_layers[i](
-                query_feats, # n b c
+            output = self.self_layers[i](
+                output,
                 tgt_mask=None,
                 tgt_key_padding_mask=None,
-                query_pos=query_poses, # n b c
+                query_pos=query_poses,
             )
-            query_feats = self.ffn_layers[i](
-                query_feats # n b c
+            output = self.ffn_layers[i](
+                output 
             )
-            # bt nq c
-            class_logits, box_logits, mask_logits, attn_mask, frame_queries = self.forward_heads(query_feats, mask_features, attn_mask_target_size=size_list[(i + 1) % len(self.memory_scales)])
-            # b t n c, b t n 4, b t n h w, bt*head nq hw
-            ret.append({'pred_class': class_logits, 'pred_masks': mask_logits, 'pred_boxes': box_logits, 'frame_queries': frame_queries })
-        
+            outputs_class, outputs_box, outputs_mask, attn_mask, queries = \
+                self.forward_heads(output, mask_features, attn_mask_target_size=size_list[(i + 1) % len(self.memory_scales)])
+            ret.append({'pred_class':outputs_class, 'pred_masks': outputs_mask, 'pred_boxes': outputs_box, 'queries': queries})
+
+        assert len(ret) == self.nlayers + 1        
         return ret
+
+    def forward_heads(self, output, mask_features, attn_mask_target_size):
+        decoder_output = self.query_norm(output)
+        decoder_output = decoder_output.transpose(0, 1).contiguous()
+
+        box_logits = self.query_box(decoder_output) if 'box' in self.head_outputs else None # b n 4
+        class_logits = self.query_class(decoder_output) if 'class' in self.head_outputs else None # b n class+1
+        mask_embeds = self.query_mask(decoder_output)  # b n c
+        mask_logits = torch.einsum("bqc,bchw->bqhw", mask_embeds, mask_features)  
+
+        # b nq h w
+        attn_mask = mask_logits.detach().clone() 
+        attn_mask = F.interpolate(attn_mask, size=attn_mask_target_size, mode="bilinear", align_corners=False)
+        # b*head nq hw
+        attn_mask = (attn_mask.flatten(2).unsqueeze(1).repeat(1, self.nheads, 1, 1).flatten(0, 1).sigmoid() < 0.5).bool()
+        
+        mask_logits = F.interpolate(mask_logits, scale_factor=self.mask_spatial_stride, mode='bilinear', align_corners=False)
+
+        if self.training:
+            return class_logits, box_logits, mask_logits, attn_mask, decoder_output # b nq h w
+        else:
+            return class_logits.softmax(-1) if class_logits is not None else None,\
+                  box_logits.sigmoid() if box_logits is not None else None, mask_logits, attn_mask, decoder_output # b nq h w
+    
+
+    def compute_loss(self, outputs, targets):
+        assert self.training
+        return self.loss_module.compute_loss(outputs, targets)
+
+@META_ARCH_REGISTRY.register()
+class Video2D_Image_MaskedAttn_MultiscaleMaskDecoder(nn.Module):
+    def __init__(self,
+                 configs,
+                 multiscale_shapes,
+                 ):
+        super().__init__()
+        self.image_homo = Image_MaskedAttn_MultiscaleMaskDecoder(configs=configs,
+                                                                 multiscale_shapes=multiscale_shapes,)
+    
+    def forward(self, multiscales): # b c t h w
+        batch_size, _, nf = multiscales[list(multiscales.keys())[0]].shape[:3]
+        # b c t h w -> bt c h w
+        multiscales = {key: value.permute(0, 2, 1, 3, 4).flatten(0, 1).contiguous() for key,value in multiscales.items()}
+
+        predictions = self.image_homo(multiscales) # bt nq class; bt nq h w; bt nq 
+        
+        for layer_idx in range(len(predictions)):
+            if 'box' in self.image_homo.head_outputs:
+                predictions[layer_idx]['pred_boxes'] = rearrange(predictions[layer_idx]['pred_boxes'], '(b t) nq c -> b t nq c',b=batch_size, t=nf)
+            if 'class' in self.image_homo.head_outputs:
+                predictions[layer_idx]['pred_class'] = rearrange(predictions[layer_idx]['pred_class'],'(b t) nq c -> b t nq c',b=batch_size, t=nf)
+            predictions[layer_idx]['pred_masks'] = rearrange(predictions[layer_idx]['pred_masks'], '(b t) nq h w -> b t nq h w',b=batch_size, t=nf)
+        return predictions      
+    
+    def compute_loss(self, predictions, targets, frame_targets):
+        has_ann = targets['has_ann'].flatten() # bT
+        for layer_idx in range(len(predictions)):
+            predictions[layer_idx]['pred_boxes'] = predictions[layer_idx]['pred_boxes'].flatten(0,1)[has_ann].contiguous() if 'box' in self.image_homo.head_outputs else None
+            predictions[layer_idx]['pred_class'] = predictions[layer_idx]['pred_class'].flatten(0,1)[has_ann].contiguous() if 'class' in self.image_homo.head_outputs else None
+            # bt nq h w
+            predictions[layer_idx]['pred_masks'] = predictions[layer_idx]['pred_masks'].flatten(0,1)[has_ann].contiguous()
+        return self.image_homo.compute_loss(predictions, frame_targets)
+    

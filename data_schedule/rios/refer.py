@@ -19,7 +19,7 @@ import torchvision.transforms.functional as F
 from data_schedule.registry import register_data_schedule
 from .augmentation_rios import image_aug_entrypoints
 
-from util.misc import is_dist_avail_and_initialized, all_gather, to_device
+from utils.misc import is_dist_avail_and_initialized, all_gather, to_device
 import torch.distributed as dist
 
 

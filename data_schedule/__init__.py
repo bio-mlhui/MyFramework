@@ -4,8 +4,6 @@ from collections import defaultdict
 
 if os.getenv('CURRENT_TASK') == "RVOS":
     from . import rvos
-elif os.getenv('CURRENT_TASK') == 'VOS':
-    from . import vos
 elif os.getenv('CURRENT_TASK') == 'VIS':
     from . import vis
 else:

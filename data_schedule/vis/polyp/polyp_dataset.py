@@ -14,6 +14,7 @@ from data_schedule.vis.apis import VIS_Dataset
 # TestEasyDataset/Seen TestHardDataset/Seen TestEasyDataset/Unseen TestHardDataset/Unseen
 
 # 单帧是vis, 整个视频是vos
+# 只有前后景区别
 def polyp_train(step_size, # none / int; 0, 6, 13, 19 ...
                 split_dataset_name,
                 video_ids,
@@ -29,10 +30,13 @@ def polyp_train(step_size, # none / int; 0, 6, 13, 19 ...
     metas = []
     for vid_id in tqdm(video_ids):
         all_frames = sorted(video_to_frames[vid_id])
-        all_frame_classes = np.array([image_to_class_id[f'{vid_id}/{frame}'] for frame in all_frames])
-        poly_class = np.unique(all_frame_classes).tolist()
-        assert len(poly_class) == 1, '这一个clip的前景Mask必须都是同一个polyp'
-        poly_class = poly_class[0]
+        # 不同前景有不同的类别
+        # all_frame_classes = np.array([image_to_class_id[f'{vid_id}/{frame}'] for frame in all_frames])
+        # poly_class = np.unique(all_frame_classes).tolist()
+        # assert len(poly_class) == 1, '这一个clip的前景Mask必须都是同一个polyp'
+        # poly_class = poly_class[0]
+        # 只有前景一个类别
+        poly_class = 0
         if step_size is None:  
             metas.append({
                 'video_id': vid_id,
@@ -140,14 +144,13 @@ for name in SET_NAME:
     elif mode == 'evaluate':
         prefix = SET_NAME_TO_PREFIX[name]
         validate_meta = copy.deepcopy(polyp_meta)
-        eval_meta_keys = [f'{vid}_{frame}' for vid in video_ids for frame in video_to_frames[vid]] 
 
         validate_meta.update({
             'mode': 'evaluate',
             'get_frames_fn': partial(get_frames, frames_path=os.path.join(root, os.path.join(set_dir, 'Frame'))),
             'eval_set_name': SET_NAME_TO_DIR[name],
             'get_frames_gt_mask_fn': partial(get_frames_mask, mask_path=os.path.join(root, os.path.join(set_dir, 'GT')),),
-            'eval_meta_keys': eval_meta_keys
+            'eval_meta_keys': video_to_frames
         })
         # validate
         for step_size in  [1, None,]:
@@ -178,7 +181,6 @@ video_to_frames = {
     vid: sorted([png[:-4] for png in os.listdir(os.path.join(set_dir, 'Frame', vid)) if png.endswith('.jpg')])\
         for vid in video_ids
 }
-mode = SET_NAME_TO_MODE[name]
 train_meta = copy.deepcopy(polyp_meta)
 train_meta.update({
     'mode': 'train',

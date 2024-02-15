@@ -1,6 +1,6 @@
 
 from typing import Iterator, Optional, Sized
-from util.misc import _max_by_axis, NestedTensor
+from utils.misc import _max_by_axis, NestedTensor
 import torch
 import numpy as np
 from torch.utils.data import Sampler

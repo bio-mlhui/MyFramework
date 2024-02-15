@@ -10,7 +10,7 @@ import torchvision.transforms as T
 import torchvision.transforms.functional as F
 from numpy import random as rand
 import copy
-from util.misc import interpolate
+from utils.misc import interpolate
 import numpy as np
 from PIL import Image
 import cv2

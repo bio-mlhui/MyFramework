@@ -7,7 +7,7 @@ import numpy as np
 from torch import nn, Tensor
 from torch.nn import functional as F
 from einops import repeat, reduce, rearrange
-from util.misc import NestedTensor
+from utils.misc import NestedTensor
 import matplotlib.pyplot as plt
 import copy
 import torch_geometric.nn as geo_nn
@@ -23,7 +23,7 @@ from .layers_unimodal_attention import FeatureResizer, CrossAttentionLayer, MLP,
 from .transformer_deformable import DeformableTransformerEncoder, DeformableTransformerEncoderLayer
 from .transformer import TransformerEncoder, TransformerEncoderLayer, _get_clones
 import util.box_ops as box_ops
-from util.misc import get_world_size, is_dist_avail_and_initialized, nested_tensor_from_videos_list_with_stride, nested_tensor_from_tensor_list_with_stride
+from utils.misc import get_world_size, is_dist_avail_and_initialized, nested_tensor_from_videos_list_with_stride, nested_tensor_from_tensor_list_with_stride
 from functools import partial
 
 class AMR_Grounding_2DObj(nn.Module):

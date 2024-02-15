@@ -6,10 +6,10 @@ import logging
 import time
 import os
 import sys
-from util.misc import reduce_dict, to_device
+from utils.misc import reduce_dict, to_device
 import gc
 import wandb
-from util.misc import  SmoothedValue, MetricLogger
+from utils.misc import  SmoothedValue, MetricLogger
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 import torch.distributed as dist

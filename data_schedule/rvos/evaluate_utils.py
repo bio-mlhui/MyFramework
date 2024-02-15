@@ -1,3 +1,96 @@
+_rvos_metric_entrypoints = {}
+
+def register_rvos_metric(fn):
+    rvos_metric_name = fn.__name__
+    if rvos_metric_name in _rvos_metric_entrypoints:
+        raise ValueError(f'rvos_metric name {rvos_metric_name} has been registered')
+    _rvos_metric_entrypoints[rvos_metric_name] = fn
+
+    return fn
+
+def rvos_metric_entrypoint(rvos_metric_name):
+    try:
+        return _rvos_metric_entrypoints[rvos_metric_name]
+    except KeyError as e:
+        print(f'rvos_metric Name {rvos_metric_name} not found')
+
+import torch  
+import os
+import shutil
+from PIL import Image
+
+@register_rvos_metric
+def metric_coco(model_preds, coco_file, output_dir=None):
+    coco_preds = [] 
+    for pred in model_preds:
+        video_id = pred['video_id']
+        frame_name = pred['frame_name']
+        masks = pred['masks'] # list[h w], ni
+        scores = pred['scores'] # ni
+        exp_id = pred['exp_id']
+
+        # list[list[rle], ni], T_ann
+        rles = [mask_util.encode(np.array(mask.cpu()[:, :, None], dtype=np.uint8, order="F"))[0] for mask in masks]
+
+        # rle, scalar, h w
+        for rle, refer_prob, mask in zip(rles, scores, masks):
+            image_id = generate_coco_img_id(video_id=video_id, frame=frame_name, exp_id=exp_id)
+            coco_preds.append({'image_id': image_id,
+                                'category_id': 1,
+                                'segmentation': rle,
+                                'score': refer_prob.item()})
+            
+    coco_perframe_preds = comm.all_gather(coco_perframe_preds)
+    coco_perframe_preds = [p for p_list in coco_perframe_preds for p in p_list]
+
+    eval_metrics = get_AP_PAT_IOU_PerFrame(coco_file, coco_perframe_preds)
+    return eval_metrics    
+   
+   
+@register_rvos_metric
+def mask_dice_iou(frame_pred, dataset_meta, **kwargs):
+    video_id = frame_pred['video_id']
+    frame_name = frame_pred['frame_name']
+    masks = frame_pred['masks'] # nq h w
+    get_frames_gt_mask_fn = dataset_meta.get('get_frames_gt_mask_fn')
+    scores = torch.tensor(frame_pred['classes']) # nq c
+    foreground_scores = scores[:, :-1].sum(-1) # nq
+    max_idx = foreground_scores.argmax()
+    pred_mask = masks[max_idx].int() # h w
+
+    gt_mask, _ = get_frames_gt_mask_fn(video_id=video_id, frames=[frame_name]) # 1 h w
+    gt_mask = gt_mask[0].int() # h w
+
+    inter, union    = (pred_mask*gt_mask).sum(), (pred_mask+gt_mask).sum()
+    dice = (2*inter+1)/(union+1)
+    iou = (inter+1)/(union-inter+1)
+
+    return {'dice': dice, 'iou': iou}
+
+
+@register_rvos_metric
+def web(frame_pred, output_dir, **kwargs):
+    os.makedirs(os.path.join(output_dir, 'web'), exist_ok=True) 
+    video_id = frame_pred['video_id']
+    frame_name = frame_pred['frame_name']
+    masks = frame_pred['masks'] # nq h w
+
+    scores = torch.tensor(frame_pred['classes']) # nq c
+    foreground_scores = scores[:, :-1].sum(-1) # nq
+    max_idx = foreground_scores.argmax()
+    pred_mask = masks[max_idx].int() # h w
+
+    mask = Image.fromarray(255 * pred_mask.int().numpy()).convert('L')
+    save_path = os.path.join(output_dir, 'web', video_id)
+
+    os.makedirs(save_path, exist_ok=True)
+    png_path = os.path.join(save_path, f'{frame_name}.png')
+    if os.path.exists(png_path):
+        os.remove(png_path)
+    mask.save(png_path)
+    return {}
+
+
 
 from typing import Optional, Union
 import os
@@ -16,6 +109,7 @@ from data_schedule.utils.segmentation import get_AP_PAT_IOU_PerFrame
 from pycocotools.mask import encode, area
 from data_schedule.utils.segmentation import bounding_box_from_mask
 import json
+
 
 # 把这些prediction mask可视化到output_dir, 并且打包
 def metric_web(model_preds, output_dir, remove_pngs=False):
@@ -48,33 +142,7 @@ def metric_web(model_preds, output_dir, remove_pngs=False):
     
     return {}
                        
-def metric_coco(model_preds, coco_file, output_dir=None):
-    coco_preds = [] 
-    for pred in model_preds:
-        video_id = pred['video_id']
-        frame_name = pred['frame_name']
-        masks = pred['masks'] # list[h w], ni
-        scores = pred['scores'] # ni
-        exp_id = pred['exp_id']
-
-        # list[list[rle], ni], T_ann
-        rles = [mask_util.encode(np.array(mask.cpu()[:, :, None], dtype=np.uint8, order="F"))[0] for mask in masks]
-
-        # rle, scalar, h w
-        for rle, refer_prob, mask in zip(rles, scores, masks):
-            image_id = generate_coco_img_id(video_id=video_id, frame=frame_name, exp_id=exp_id)
-            coco_preds.append({'image_id': image_id,
-                                'category_id': 1,
-                                'segmentation': rle,
-                                'score': refer_prob.item()})
-            
-    coco_perframe_preds = comm.all_gather(coco_perframe_preds)
-    coco_perframe_preds = [p for p_list in coco_perframe_preds for p in p_list]
-
-    eval_metrics = get_AP_PAT_IOU_PerFrame(coco_file, coco_perframe_preds)
-    return eval_metrics    
-                
-
+             
 def generate_coco_img_id(video_id, frame, exp_id):
     return f'v_{video_id}_f_{frame}_e_{exp_id}'
 

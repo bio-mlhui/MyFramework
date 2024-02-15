@@ -27,42 +27,40 @@ class VIS_TrainMapper(VIS_Mapper):
         assert mapper_config['augmentation']['name'] in ['Hflip_RandomResize', 'WeakPolyP_TrainAug']
         self.augmentation = VIS_TRAIN_AUG_REGISTRY.get(mapper_config['augmentation']['name'])(mapper_config['augmentation'])
 
-    def map_to_frame_targets(self, clip_rets):
+    def map_to_frame_targets(self, clip_targets):
         VIS_TrainAPI_clipped_video
+        clip_rets = copy.deepcopy(clip_targets)
         masks = clip_rets['masks'].transpose(0, 1).contiguous() # t' N h w
-        boxes = clip_rets['boxes'].transpose(0, 1).contiguous() # t' N 4
         class_labels = clip_rets['classes'] # [10, 32, 10, 4]
-
-        assert len(masks) == len(boxes)
+        has_box = 'boxes' in clip_rets
+        if has_box:
+            boxes = clip_rets['boxes'].transpose(0, 1).contiguous() # t' N 4
+            assert len(masks) == len(boxes)
         ret = []
-        for frame_mk, frame_bx in zip(masks, boxes):
+        for idx, frame_mk in enumerate(masks):
             frame_targets = {
                 'masks': frame_mk.unsqueeze(1), # N 1 h w
-                'boxes': frame_bx.unsqueeze(1), # N 1 4
                 'classes': class_labels, # N
             }
+            if has_box:
+                frame_targets.update({'boxes': boxes[idx].unsqueeze(1)}) # N 1 4
             if self.clip_global_targets_map_to_local_targets:
                 frame_targets = self.map_global_targets_to_local_targets(frame_targets)
-
             frame_targets['masks'] = frame_targets['masks'].squeeze(1)
-            frame_targets['boxes'] = frame_targets['boxes'].squeeze(1)
+            if has_box:
+                frame_targets['boxes'] = frame_targets['boxes'].squeeze(1)
             ret.append(frame_targets)
         return ret
 
     def map_global_targets_to_local_targets(self, ret):
         VIS_TrainAPI_clipped_video
         masks = ret['masks'] # N t' h w
-        boxes = ret['boxes'] # N t' 4
-        class_labels = ret['classes'] # N
         # 每个global object是否出现在了这个clip/frame
         global_obj_appear = masks.flatten(1).any(-1) # N [True, False, True, False, False, False, True]
-        masks = masks[global_obj_appear] # n t' h w
-        boxes = boxes[global_obj_appear] # n t' 4
-        class_labels = class_labels[global_obj_appear] # n
-        ret['masks'] = masks
-        ret['boxes'] = boxes
-        ret['classes'] = class_labels
-
+        ret['masks'] = ret['masks'][global_obj_appear]
+        ret['classes'] = ret['classes'][global_obj_appear]
+        if 'boxes' in ret:
+            ret['boxes'] = ret['boxes'][global_obj_appear] # n t' 4
         return ret
     
 

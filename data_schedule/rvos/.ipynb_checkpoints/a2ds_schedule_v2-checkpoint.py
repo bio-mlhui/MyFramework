@@ -21,7 +21,7 @@ from data_schedule.registry import register_data_schedule
 from data_schedule.videotext_aug_train import videotext_trainaug_entrypoints
 from data_schedule.videotext_aug_eval import videotext_evalaug_entrypoints
 
-from util.misc import is_dist_avail_and_initialized, all_gather, to_device
+from utils.misc import is_dist_avail_and_initialized, all_gather, to_device
 import torch.distributed as dist
 
 
