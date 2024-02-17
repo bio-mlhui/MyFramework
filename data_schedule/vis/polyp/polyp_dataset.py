@@ -128,7 +128,7 @@ for name in SET_NAME:
         })
 
         # train
-        for step_size in [1, 6, 12, None]:
+        for step_size in [1, 6, 9, 12, None]:
             step_identifer = '' if step_size is None else f'_step[{step_size}]'
             split_name = f'polyp_train{step_identifer}'
             train_meta.update({'name': split_name})

@@ -93,7 +93,7 @@ def init_process_group_and_set_device(world_size, process_id, device_id):
     return device
 
 def run(rank, configs, world_size):
-    # os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:4096'
+    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:512'
     os.environ["TOKENIZERS_PARALLELISM"] = "false"  # this disables a huggingface tokenizer warning (printed every epoch)
     os.environ['PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT'] = "4"
     os.environ['PYDEVD_DISABLE_FILE_VALIDATION'] = "1"

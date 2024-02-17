@@ -375,4 +375,3 @@ class LinearAttention(nn.Module):
         return self.to_out(out)
 
 
-

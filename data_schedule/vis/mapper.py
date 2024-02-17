@@ -75,6 +75,7 @@ class VIS_Video_or_Step_To_Clip_TrainMapper(VIS_TrainMapper):
                  ):  
         good_dataset_names = ['polyp_train', 
                               'polyp_train_step[6]', 
+                              'polyp_train_step[9]', 
                               'polyp_train_step[1]', 
                               'weakpolyp_train_step[1]', 
                               'weakpolyp_fibroid_train_step[1]',

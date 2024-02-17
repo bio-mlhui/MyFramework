@@ -436,4 +436,36 @@ class SS1D_Temporal_Multiscale(nn.Module):
         query = rearrange(query, '(b hw) t c -> (b t) hw c',b=batch_size)
         return query, None, None
 
+
+@META_ARCH_REGISTRY.register()
+class SelfAttn_Temporal_Multiscale(nn.Module):
+    def __init__(self, configs) -> None:
+        super().__init__()
+        d_model = configs['d_model']
+        self.homo = nn.MultiheadAttention(embed_dim=d_model,
+                                          num_heads=8,
+                                          dropout=0.)
         
+        # self.input_proj = nn.Linear(d_model, d_model)
+        # self.output_proj = nn.Linear(d_model, d_model)
+        self.pos_1d = build_position_encoding(position_embedding_name='1d')
+
+        # xavier_uniform_(self.input_proj.weight.data)
+        # constant_(self.input_proj.bias.data, 0.)
+        # xavier_uniform_(self.output_proj.weight.data)
+        # constant_(self.output_proj.bias.data, 0.)
+
+    def forward(self, 
+                query=None,  # bt hw_sigma c
+                video_aux_dict=None,
+                **kwargs
+                ):
+        nf = video_aux_dict['nf']
+        batch_size = query.shape[0] // video_aux_dict['nf']
+        # query = self.input_proj(query) # b t hw_sigma c
+        query = rearrange(query, '(b t) hw c -> (b hw) t c',t=nf, b=batch_size)
+        poses = self.pos_1d(mask=torch.zeros_like(query[..., 0]).bool(), hidden_dim=query.shape[-1]).permute(0, 2, 1).contiguous()
+        query = query + poses
+        query = self.homo(query) # b t c
+        query = rearrange(query, '(b hw) t c -> (b t) hw c',b=batch_size)
+        return query, None, None

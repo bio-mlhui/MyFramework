@@ -9,3 +9,7 @@ from .frame_query_decoder import (
 from .mask_decoder import (
     Video2D_ImageConv_MaskDecoder, ImageConv_MaskDecoder
 )
+
+from .mask2former_video import (
+    Video_MaskedAttn_MultiscaleMaskDecoder
+)

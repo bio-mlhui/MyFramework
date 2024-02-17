@@ -135,7 +135,7 @@ class AUXMapper_v1:
         masks = [sample['masks'] for sample in targets] 
         masks = [F.pad(m.float(), pad=(0, pad_W-m.shape[-1], 0, pad_H-m.shape[-2]), value=0.).bool() \
                  for m in masks] # list[ni T' H W]
-        classes = torch.tensor([sample['classes'] for sample in targets])
+        classes = [sample['classes'] for sample in targets]
         # 把mask放缩到H/4, W/4
         # for btc_idx in range(batch_size):
         #     start = int(self.temporal_decoder_mask_out_stride // 2)
@@ -146,7 +146,7 @@ class AUXMapper_v1:
         ret = {
             'masks': masks, # list[ni T' h w]
             'has_ann': has_ann, # b T
-            'classes': classes, # ni
+            'classes': classes, # list[ni], b
         } 
         if 'boxes' in targets[0]:
             boxes = [sample['boxes'] for sample in targets] # list[ni T' 4], x1y1x2y2

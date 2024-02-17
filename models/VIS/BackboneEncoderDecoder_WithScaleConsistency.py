@@ -344,7 +344,8 @@ class BackboneEncoderDecoder_WithScaleConsistency(nn.Module):
         vid_1         = F.interpolate(videos.flatten(0, 1), size=size1, mode='bilinear')
         vid_1          = rearrange(vid_1, '(b T) c h w -> b c T h w',b=batch_size, T=nf)
         pred1          = self.model_preds(vid_1, video_aux_dict=batch_dict['video_dict']) # {pred_masks: b 1 t h w}
-        pred1_loss = self.decoder.compute_loss(pred1, targets=targets, frame_targets=batch_dict['frame_targets'])
+        pred1_loss = self.decoder.compute_loss(pred1, targets=targets, frame_targets=batch_dict['frame_targets'],
+                                               video_aux_dict=batch_dict['video_dict'])
 
         # size2          = np.random.choice([256, 288, 320, 352, 384, 416, 448])
         # vid_2         = F.interpolate(videos.flatten(0,1), size=size2, mode='bilinear') 
@@ -359,16 +360,9 @@ class BackboneEncoderDecoder_WithScaleConsistency(nn.Module):
         # loss_value_dict.update(two_pred_loss)
 
         loss_value_dict = {key: pred1_loss[key] for key in list(self.loss_weight.keys())}
-        loss = sum([loss_value_dict[k] * self.loss_weight[k] for k in loss_value_dict.keys()])
+        # gradient_norm = get_total_grad_norm(self.model.parameters(), norm_type=2)
+        return loss_value_dict, self.loss_weight
 
-        loss.backward()       
-        if not math.isfinite(loss.item()):
-            logging.debug("Loss is {}, stopping training".format(loss.item()))
-            raise RuntimeError()
-        
-        loss_dict_scaled = {k: (v * self.loss_weight[k]) for k, v in loss_value_dict.items()} 
-        grad_total_norm = get_total_grad_norm(self.parameters(), norm_type=2)
-        return loss_value_dict, loss_dict_scaled, grad_total_norm 
             
     @torch.no_grad()
     def sample(self, batch_dict):
