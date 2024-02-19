@@ -5,6 +5,7 @@ from . import fibroid
 
 from . import mapper # 注册vis mappers
 from . import evaluator # 注册vis evaluator
+from . import evaluator_fast
 
 from . import vis_aug_eval  # 注册vis aug
 from . import vis_aug_train

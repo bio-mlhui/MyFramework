@@ -24,7 +24,7 @@ class VIS_TrainMapper(VIS_Mapper):
         self.get_frames_mask_fn = dataset_meta.get('get_frames_mask_fn')   
         self.clip_global_targets_map_to_local_targets = mapper_config['clip_global_targets_map_to_local_targets'] 
  
-        assert mapper_config['augmentation']['name'] in ['Hflip_RandomResize', 'WeakPolyP_TrainAug']
+        assert mapper_config['augmentation']['name'] in ['Hflip_RandomResize', 'WeakPolyP_TrainAug', 'Flanet_TrainAug']
         self.augmentation = VIS_TRAIN_AUG_REGISTRY.get(mapper_config['augmentation']['name'])(mapper_config['augmentation'])
 
     def map_to_frame_targets(self, clip_targets):

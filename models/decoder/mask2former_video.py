@@ -330,8 +330,8 @@ class Video_SetMatchingLoss(nn.Module):
         src_idx = self._get_src_permutation_idx(matching_indices) # list[batch_idx], n_sigma
         # n t h w 8 每个pixel和它周围8个Pixel的相似度
         images_lab_sim = torch.stack([video_aux_dict['images_lab_sim'][ind] for ind in src_idx[0].tolist()], dim=0)  
-        # n t h w 2 9, 每个pixel和它前后 patch 的相似度
-        bidirection_similairy = torch.stack([video_aux_dict['bidirection_similairy'][ind] for ind in src_idx[0].tolist()], dim=0)
+        # n t h w 9, 每个pixel和它前后 patch 的相似度
+        post_similarity = torch.stack([video_aux_dict['post_similarity'][ind] for ind in src_idx[0].tolist()], dim=0)
         color_shape = images_lab_sim.shape[2:4]
         src_masks = layer_out['pred_masks'].permute(0, 2, 1, 3, 4).contiguous() # b nq t h w
         tgt_masks = targets['masks']
@@ -343,7 +343,7 @@ class Video_SetMatchingLoss(nn.Module):
         tgt_masks = F.interpolate(tgt_masks, size=color_shape, mode='bilinear', align_corners=False)
         tgt_masks_pixel_appear = (tgt_masks.sum(1) > 1).float()[..., None] # n h w 1, 每个对象在该像素上是否出现过
 
-        past_src_masks = torch.roll(src_masks, shifts=1, dims=1).flatten(0, 1).unsqueeze(1) # nt 1 h w
+        # past_src_masks = torch.roll(src_masks, shifts=1, dims=1).flatten(0, 1).unsqueeze(1) # nt 1 h w
         post_src_masks = torch.roll(src_masks, shifts=-1,dims=1).flatten(0, 1).unsqueeze(1) # nt 1 h w
         current_src_masks = src_masks.flatten(0, 1).unsqueeze(1) # nt 1 h w
 
@@ -356,20 +356,19 @@ class Video_SetMatchingLoss(nn.Module):
 
         # nt 9 h w
         # 每一帧每一个对象 每个Pixel 和 前后patch的similarity
-        past_pairwise_losses_neighbor = compute_pairwise_term_neighbor(past_src_masks, current_src_masks, pairwise_size=video_aux_dict['patch_kernel_size'],
-                                                                     pairwise_dilation=video_aux_dict['patch_dilation']) 
-        post_pairwise_losses_neighbor = compute_pairwise_term_neighbor(post_src_masks, current_src_masks, pairwise_size=video_aux_dict['patch_kernel_size'],
+        # past_pairwise_losses_neighbor = compute_pairwise_term_neighbor(past_src_masks, current_src_masks, pairwise_size=video_aux_dict['patch_kernel_size'],
+        #                                                              pairwise_dilation=video_aux_dict['patch_dilation']) 
+        post_haosen = compute_pairwise_term_neighbor(post_src_masks, current_src_masks, pairwise_size=video_aux_dict['patch_kernel_size'],
                                                                   pairwise_dilation=video_aux_dict['patch_dilation'])
-        past_post_haosen = torch.stack([past_pairwise_losses_neighbor, post_pairwise_losses_neighbor], dim=1) # nt 2 9 h w
-        past_post_haosen = rearrange(past_post_haosen, '(n t) pp c h w -> n t h w pp c', n=src_masks.shape[0])
+        post_haosen = rearrange(post_haosen, '(n t) c h w -> n t h w c', n=src_masks.shape[0])
         
-        # n t h w 2 9 * n 1 h w 1 1
-        weight_neighbor = (bidirection_similairy >= 0.05).float() * tgt_masks_pixel_appear[:, None, :, :, None, :] # ori is 0.5, 0.01, 0.001, 0.005, 0.0001, 0.02, 0.05, 0.075, 0.1 , dy 0.5
+        # n t h w 9 * n 1 h w 1
+        weight_neighbor = (post_similarity >= 0.05).float() * tgt_masks_pixel_appear[:, None, :, :, :] # ori is 0.5, 0.01, 0.001, 0.005, 0.0001, 0.02, 0.05, 0.075, 0.1 , dy 0.5
 
         warmup_factor = min(self._iter.item() / float(self._warmup_iters), 1.0) #1.0
-        past_post_haosen = past_post_haosen.permute(1,4, 0, 2, 3, 5).flatten(0, 1).flatten(1) # t2 nhw9
-        weight_neighbor = weight_neighbor.permute(1,4, 0, 2, 3, 5).flatten(0, 1).flatten(1) # t2 nhw9
-        loss_pairwise_neighbor = (past_post_haosen * weight_neighbor).sum(-1) / weight_neighbor.sum(-1).clamp(min=1.0) * warmup_factor\
+        post_haosen = post_haosen.permute(1, 0, 2, 3, 4).flatten(1) # t nhw9
+        weight_neighbor = weight_neighbor.permute(1, 0, 2, 3, 4).flatten(1) # t nhw9
+        loss_pairwise_neighbor = (post_haosen * weight_neighbor).sum(-1) / weight_neighbor.sum(-1).clamp(min=1.0) * warmup_factor\
     
         losses = {
             "color_intra": loss_pairwise,

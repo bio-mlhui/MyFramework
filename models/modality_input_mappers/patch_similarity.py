@@ -117,16 +117,25 @@ class Video_PatchSimilarity:
         self.patch_kernel_size = configs['patch_kernel_size'] if 'patch_kernel_size' in configs else 3
         self.patch_dilation = configs['patch_dilation'] if 'patch_dilation' in configs else 3
 
+    # def topk_mask(self, images_lab_sim, k):
+    #     # b t h w 2 k^2
+    #     batch_size, nf, H, W = images_lab_sim.shape[:-2]
+    #     images_lab_sim_mask = torch.zeros_like(images_lab_sim)
+    #     topk, indices = torch.topk(images_lab_sim, k, dim =-1) # value, idx
+    #     # # b t h w 2(y,x 绝对)
+    #     # y_coords, x_coords = torch.meshgrid(torch.arange(H), torch.arange(W), indexing='ij') # in the same order as the cardinality of the inputs
+    #     # abs_coords = torch.stack([y_coords, x_coords], dim=2)[None, None, ...].repeat(batch_size, nf, 1, 1, 1) # b t h w 2
+
     def topk_mask(self, images_lab_sim, k):
-        # b t h w 2 k^2
-        batch_size, nf, H, W = images_lab_sim.shape[:-2]
+        # b t h w k^2
+        batch_size, nf, H, W = images_lab_sim.shape[:-1]
         images_lab_sim_mask = torch.zeros_like(images_lab_sim)
         topk, indices = torch.topk(images_lab_sim, k, dim =-1) # value, idx
         # # b t h w 2(y,x 绝对)
         # y_coords, x_coords = torch.meshgrid(torch.arange(H), torch.arange(W), indexing='ij') # in the same order as the cardinality of the inputs
         # abs_coords = torch.stack([y_coords, x_coords], dim=2)[None, None, ...].repeat(batch_size, nf, 1, 1, 1) # b t h w 2
 
-        images_lab_sim_mask = images_lab_sim_mask.scatter(5, indices, topk)
+        images_lab_sim_mask = images_lab_sim_mask.scatter(4, indices, topk)
         return images_lab_sim_mask  
               
     def mapper(self, video):
@@ -146,32 +155,34 @@ class Video_PatchSimilarity:
         images_lab_sim = rearrange(images_lab_sim, '(b t) c h w -> b t c h w',b=batch_size, t=T) # b t 8 h/4 w/4
         images_lab_sim = images_lab_sim.permute(0, 1, 3, 4, 2) # b t h w c # 每个像素和当前帧的patch的similarity
         images_lab = rearrange(images_lab, '(b t) c h w -> b t c h w',b=batch_size, t=T)
-        past_similarity = [] # list[b k^2 h w], T
+        # past_similarity = [] # list[b k^2 h w], T
         post_similarity = [] # list[b k^2 h w], T
         
         for temporal_idx in range(T):
-            past_idx = temporal_idx - 1
+            # past_idx = temporal_idx - 1
             post_idx = (temporal_idx + 1) % T
 
-            past_frames = images_lab[:, past_idx] 
+            # past_frames = images_lab[:, past_idx] 
             current_frames = images_lab[:, temporal_idx] # b 3 h w
             post_frames = images_lab[:, post_idx] 
 
-            past_similarity.append(get_neighbor_images_patch_color_similarity(past_frames, current_frames, 
-                                                                              kernel_size=self.patch_kernel_size, 
-                                                                              dilation=self.patch_dilation)) # b 9 h w
+            # past_similarity.append(get_neighbor_images_patch_color_similarity(past_frames, current_frames, 
+            #                                                                   kernel_size=self.patch_kernel_size, 
+            #                                                                   dilation=self.patch_dilation)) # b 9 h w
             post_similarity.append(get_neighbor_images_patch_color_similarity(post_frames, current_frames, 
                                                                               kernel_size=self.patch_kernel_size, 
                                                                               dilation=self.patch_dilation))
 
-        bidirection_similarity = torch.stack([torch.stack(past_similarity, dim=1), torch.stack(post_similarity, dim=1)], dim=2) # b T 2 k^2 h w
-        bidirection_similarity = bidirection_similarity.permute(0, 1, 4, 5, 2, 3) # b t h w 2 k^2
+        # bidirection_similarity = torch.stack([torch.stack(past_similarity, dim=1), torch.stack(post_similarity, dim=1)], dim=2) # b T 2 k^2 h w
+        # bidirection_similarity = bidirection_similarity.permute(0, 1, 4, 5, 2, 3) # b t h w 2 k^2
+        post_similarity = torch.stack(post_similarity, dim=1).permute(0, 1, 3, 4, 2) # b T h w k^2
+        post_similarity = self.topk_mask(post_similarity, k=5)
 
-        bidirection_similarity = self.topk_mask(bidirection_similarity, k=5) # # b t h w 2 9
+        # bidirection_similarity = self.topk_mask(bidirection_similarity, k=5) # # b t h w 2 9
         
         return { 
             'images_lab_sim': images_lab_sim, # b t h w 8 每个pixel和它周围8个Pixel的相似度
-            'bidirection_similairy': bidirection_similarity, # b t h w 2 9
+            'post_similarity': post_similarity, # b t h w 9
             'patch_kernel_size': self.patch_kernel_size,
             'patch_dilation': self.patch_dilation
         }

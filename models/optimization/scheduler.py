@@ -46,7 +46,7 @@ def build_scheduler(configs, optimizer):
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
                                                       lr_lambda=lambda x : 1,
                                                       last_epoch=-1,
-                                                      verbose=scheduler_configs['verbose'])
+                                                      verbose=False)
         return scheduler
 
     elif name == 'multistep_lr':

@@ -178,7 +178,50 @@ class FFNLayer(nn.Module):
             return self.forward_pre(tgt)
         return self.forward_post(tgt)
     
+class FFNLayer_mlpRatio(nn.Module):
 
+    def __init__(self, d_model, mlp_ratio=4, dropout=0.0,
+                 activation="gelu", normalize_before=False):
+        super().__init__()
+        dim_feedforward = d_model * mlp_ratio
+
+        # Implementation of Feedforward model
+        self.linear1 = nn.Linear(d_model, dim_feedforward)
+        self.dropout = nn.Dropout(dropout)
+        self.linear2 = nn.Linear(dim_feedforward, d_model)
+
+        self.norm = nn.LayerNorm(d_model)
+
+        self.activation = _get_activation_fn(activation)
+        self.normalize_before = normalize_before
+
+        self._reset_parameters()
+    
+    def _reset_parameters(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+
+    def with_pos_embed(self, tensor, pos: Optional[Tensor]):
+        return tensor if pos is None else tensor + pos
+
+    def forward_post(self, tgt):
+        tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt))))
+        tgt = tgt + self.dropout(tgt2)
+        tgt = self.norm(tgt)
+        return tgt
+
+    def forward_pre(self, tgt):
+        tgt2 = self.norm(tgt)
+        tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt2))))
+        tgt = tgt + self.dropout(tgt2)
+        return tgt
+
+    def forward(self, tgt):
+        if self.normalize_before:
+            return self.forward_pre(tgt)
+        return self.forward_post(tgt)
+    
 
 class VideoDivSelfAttentionLayer(nn.Module):
     def __init__(self, d_model, nhead, dropout=0.0,

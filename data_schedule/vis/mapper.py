@@ -75,6 +75,7 @@ class VIS_Video_or_Step_To_Clip_TrainMapper(VIS_TrainMapper):
                  ):  
         good_dataset_names = ['polyp_train', 
                               'polyp_train_step[6]', 
+                              'polyp_train_step[3]',
                               'polyp_train_step[9]', 
                               'polyp_train_step[1]', 
                               'weakpolyp_train_step[1]', 
@@ -187,9 +188,12 @@ class VIS_Step_EvalMapper(VIS_EvalMapper):
         video_id, all_frames, frame_idx = data_dict['video_id'], data_dict['all_frames'], data_dict['frame_idx']
         VIS_FrameSampler_InputOutput_API
         video_frames_paths = self.frames_sampler(all_frames=all_frames, frame_idx=frame_idx, video_id=video_id)
-        request_ann = torch.zeros(len(video_frames_paths)).bool() # t
-        # 只要参考帧的ann
-        request_ann[video_frames_paths.index(all_frames[frame_idx])] = True
+        if self.frames_sampler.clip_position == 'center' and self.frames_sampler.clip_sizes[0] == 3 and len(self.frames_sampler.clip_sizes) == 1:
+            request_ann = torch.zeros(len(video_frames_paths)).bool() # t
+            # 只要参考帧的ann
+            request_ann[1] = True
+        else:
+            raise ValueError('实现你自己的request ann, 因为frames可能重复')
         video_frames = self.get_frames_fn(video_id=video_id, frames=video_frames_paths)
         aug_ret = {
             'video': video_frames,

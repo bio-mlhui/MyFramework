@@ -16,6 +16,7 @@ from mamba_ssm import Mamba
 from einops import rearrange, reduce, repeat
 from detectron2.modeling import META_ARCH_REGISTRY
 
+# v1
 class SS2D(nn.Module):
     def __init__(
         self,
@@ -201,8 +202,6 @@ class SS2D(nn.Module):
             out = self.dropout(out)
         return out
 
-
-
 class SS2D_FrameQuery(nn.Module):
     def __init__(self, configs,):
         super().__init__()
@@ -244,7 +243,6 @@ class SS2D_FrameQuery(nn.Module):
 
         return frame_query_feats, None
 
-
 @META_ARCH_REGISTRY.register()
 class FrameQuery_SS2DLayer(nn.Module):
     def __init__(self, 
@@ -278,8 +276,7 @@ class FrameQuery_SS2DLayer(nn.Module):
         frame_query_feats = self.ffn(frame_query_feats)
         return frame_query_feats
 
-
-from models.layers.decoder_layers import CrossAttentionLayer, SelfAttentionLayer, FFNLayer
+from models.layers.decoder_layers import CrossAttentionLayer, SelfAttentionLayer, FFNLayer, FFNLayer_mlpRatio
 @META_ARCH_REGISTRY.register()
 class TemporalQuery_CrossSelf(nn.Module):
     def __init__(self, configs) -> None:
@@ -324,3 +321,131 @@ class TemporalQuery_CrossSelf(nn.Module):
             temporal_query_feats 
         )
         return temporal_query_feats
+    
+# v2 多层
+class SS2D_FrameQuery_v2(nn.Module):
+    def __init__(self, configs,):
+        super().__init__()
+        d_model = configs['d_model']
+        self.homo = SS2D(d_model=configs['d_model'],
+                        d_state=configs['d_state'] if 'd_state' in configs else 16,
+                        d_conv=configs['d_conv'] if 'd_conv' in configs else 3,
+                        expand=configs['expand'] if 'expand' in configs else 2,
+                        dt_rank=configs['dt_rank'] if 'dt_rank' in configs else 'auto',
+                        dt_min=configs['dt_min'] if 'dt_min' in configs else 0.001,
+                        dt_max=configs['dt_max'] if 'dt_max' in configs else 0.1,
+                        dt_init=configs['dt_init'] if 'dt_init' in configs else 'random',
+                        dt_scale=configs['dt_scale'] if 'dt_scale' in configs else 1.0,
+                        dt_init_floor=configs['dt_init_floor'] if 'dt_init_floor' in configs else 1e-4,
+                        dropout=configs['dropout'] if 'dropout' in configs else 0,
+                        conv_bias=configs['conv_bias'] if 'conv_bias' in configs else True,
+                        bias=configs['bias'] if 'bias' in configs else False,
+                        )
+        self.pos_1d = build_position_encoding(position_embedding_name='1d')  # t上的position embedding
+        self.norm = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(configs['dropout'])
+
+    def forward(self, 
+                frame_query_feats=None,  # n bt c  
+                frame_query_poses=None, # n bt c  # nq上的Position embedding
+                nf=None,
+                **kwargs
+                ):
+        batch_size = frame_query_feats.shape[1] // nf # b
+        tgt2 = frame_query_feats + frame_query_poses  
+        tgt2 = rearrange(tgt2, 'n (b t) c -> b t n c',b=batch_size,t=nf).contiguous()
+
+        sin_poses = self.pos_1d(torch.zeros_like(tgt2[..., 0].permute(0, 2, 1).flatten(0, 1)).bool(), 
+                                hidden_dim=tgt2.shape[-1]) # bn c t
+        sin_poses = rearrange(sin_poses, '(b n) c t -> b t n c', b=batch_size)
+        tgt2 += sin_poses
+
+        tgt2 = self.homo(tgt2) # b t n c
+        
+        tgt2 = tgt2.permute(2, 0, 1, 3).flatten(1, 2).contiguous() # n bt c
+
+
+        frame_query_feats = frame_query_feats + self.dropout(tgt2)
+        frame_query_feats = self.norm(frame_query_feats)
+
+        return frame_query_feats, None
+    
+from models.layers.utils import _get_clones
+@META_ARCH_REGISTRY.register()
+class FrameQuery_SS2DLayer_v2(nn.Module):
+    def __init__(self, 
+                 configs, 
+                 dropout=0.0):
+        super().__init__()
+        d_model = configs['d_model']
+        n_layers = configs['nlayers'] if 'nlayers' in configs else 1
+        self.nlayers = n_layers
+        self.self_attn = _get_clones(SS2D_FrameQuery_v2(configs), n_layers)
+
+        from models.layers.decoder_layers import FFNLayer
+        self.ffn = FFNLayer(d_model=d_model,
+                            dim_feedforward=configs['dim_feedforward'],
+                            dropout=configs['dropout'],)
+
+    def forward(self, 
+                frame_query_feats,  # n bt c  
+                frame_query_poses, # n bt c  # nq上的Position embedding
+                nf=None,
+                **kwargs):
+        
+        for i in range(self.nlayers):
+            frame_query_feats = self.self_attn[i](frame_query_feats=frame_query_feats,  # n bt c  
+                                                  frame_query_poses=frame_query_poses, # n bt c  # nq上的Position embedding
+                                                  nf=nf,)[0]
+            
+        frame_query_feats = self.ffn(frame_query_feats)
+        return frame_query_feats
+
+@META_ARCH_REGISTRY.register()
+class TemporalQuery_CrossSelf_v2(nn.Module):
+    def __init__(self, configs) -> None:
+        super().__init__()
+        d_model = configs['d_model']
+        attn_configs = configs['attn']
+        self.cross_layers = CrossAttentionLayer(d_model=d_model,
+                                                nhead=attn_configs['nheads'],
+                                                dropout=0.0,
+                                                normalize_before=attn_configs['normalize_before'])
+        self.self_layers = SelfAttentionLayer(d_model=d_model,
+                                                nhead=attn_configs['nheads'],
+                                                dropout=0.0,
+                                                normalize_before=attn_configs['normalize_before'])
+        self.ffn_layers = FFNLayer_mlpRatio(d_model=d_model,
+                                            mlp_ratio=attn_configs['ffn_mlp_ratio'],
+                                            dropout=0.0,
+                                            normalize_before=attn_configs['normalize_before'])
+    
+    def forward(self, 
+                temporal_query_feats, 
+                temporal_query_poses,
+                frame_query_feats, frame_query_poses,
+                video_aux_dict=None, **kwargs):
+        # nq b c; nq bt c
+        nq, batch_size, _ = temporal_query_feats.shape
+        nf = frame_query_feats.shape[1] // batch_size
+        nqf = frame_query_feats.shape[0]
+        frame_query_feats = rearrange(frame_query_feats, 'nq (b t) c -> (t nq) b c',b=batch_size, t=nf)
+        frame_query_poses = rearrange(frame_query_poses, 'nq (b t) c -> (t nq) b c',b=batch_size, t=nf)
+        temporal_query_feats = self.cross_layers(
+            tgt=temporal_query_feats, # n b c
+            memory=frame_query_feats,  # t nqf b c
+            pos=frame_query_poses, 
+            query_pos=temporal_query_poses,
+        )
+        temporal_query_feats = self.self_layers(
+            temporal_query_feats,
+            query_pos=temporal_query_poses,
+        )
+        temporal_query_feats = self.ffn_layers(
+            temporal_query_feats 
+        )
+        return temporal_query_feats
+
+
+
+
