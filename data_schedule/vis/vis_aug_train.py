@@ -218,6 +218,143 @@ class WeakPolyP_TrainAug:
         return ret
 
 
+
+@VIS_TRAIN_AUG_REGISTRY.register()
+class WeakPolyP_TrainAug_RotateImageToClip:
+    def __init__(self, configs) -> None:
+        self.transform = A.ReplayCompose([
+            A.Resize(352, 352),
+            A.HorizontalFlip(p=0.5),
+            A.VerticalFlip(p=0.5),
+            A.RandomRotate90(p=0.5),
+        ])
+
+        self.tensor_video = VideoToTensor()
+        self.add_box = ComputeBox()
+        self.ImageToSeqAugmenter = ImageToSeqAugmenter(perspective=True, affine=True, motion_blur=True,
+                                    rotation_range=(-20, 20), perspective_magnitude=0.08,
+                                    hue_saturation_range=(-5, 5), brightness_range=(-40, 40),
+                                    motion_blur_prob=0.25, motion_blur_kernel_sizes=(9, 11),
+                                    translate_range=(-0.1, 0.1))
+
+    def __call__(self, ret):
+        VIS_Aug_CallbackAPI
+        video = ret['video'] 
+        masks = ret['masks']  # n t' h w
+        has_ann = ret['has_ann'] # t
+        # change image to frame
+        assert len(video) == 1 and masks.shape[1] == 1
+        image, img_mask = video[0], masks[:, 0]
+        images, img_masks = self.ImageToSeqAugmenter()
+        
+        # list[PIL] -> list[h w 3, 0-1float], t
+        # n t' h w -> list[list[h w, 01uint8], 没有annotation的帧box是空] t
+        video, masks = pil_torch_to_numpy(video=video, masks=masks, has_ann=has_ann)
+
+        replay = self.transform(image=video[0], masks=[masks[0][0]])['replay']
+        auged_video = []
+        auged_mask = []
+        for vid, mk in zip(video, masks):
+            auged_each_frame = self.transform.replay(replay, image=vid, masks=mk)
+            auged_video.append(auged_each_frame['image'])
+            auged_mask.append(auged_each_frame['masks']) # list[h w, 01uint8]
+        
+        auged_video, auged_mask = numpy_to_pil_torch(video=auged_video, masks=auged_mask, has_ann=has_ann)
+
+        ret['video'] = auged_video
+        ret['masks'] = auged_mask
+        
+        ret = self.add_box(ret)
+        ret = self.tensor_video(ret)
+
+        return ret
+    
+import imgaug.augmenters as iaa
+from imgaug.augmentables.segmaps import SegmentationMapsOnImage
+from imgaug.augmentables.bbs import BoundingBox, BoundingBoxesOnImage
+import imgaug
+
+class ImageToSeqAugmenter(object):
+    def __init__(self, perspective=True, affine=True, motion_blur=True,
+                 brightness_range=(-50, 50), hue_saturation_range=(-15, 15), perspective_magnitude=0.12,
+                 scale_range=1.0, translate_range={"x": (-0.15, 0.15), "y": (-0.15, 0.15)}, rotation_range=(-20, 20),
+                 motion_blur_kernel_sizes=(7, 9), motion_blur_prob=0.5, seed=2024):
+
+        self.basic_augmenter = iaa.SomeOf((1, None), [
+                iaa.Add(brightness_range),
+                iaa.AddToHueAndSaturation(hue_saturation_range)
+            ]
+        )
+
+        transforms = []
+        if perspective:
+            transforms.append(iaa.PerspectiveTransform(perspective_magnitude))
+        if affine:
+            transforms.append(iaa.Affine(scale=scale_range,
+                                         translate_percent=translate_range,
+                                         rotate=rotation_range,
+                                         order=1,  # cv2.INTER_LINEAR
+                                         backend='auto'))
+        transforms = iaa.Sequential(transforms)
+        transforms = [transforms]
+
+        if motion_blur:
+            blur = iaa.Sometimes(motion_blur_prob, iaa.OneOf(
+                [
+                    iaa.MotionBlur(ksize)
+                    for ksize in motion_blur_kernel_sizes
+                ]
+            ))
+            transforms.append(blur)
+
+        self.frame_shift_augmenter = iaa.Sequential(transforms)
+        self.seed = seed
+    @staticmethod
+    def condense_masks(instance_masks):
+        condensed_mask = np.zeros_like(instance_masks[0], dtype=np.int8)
+        for instance_id, mask in enumerate(instance_masks, 1):
+            condensed_mask = np.where(mask, instance_id, condensed_mask)
+
+        return condensed_mask
+
+    @staticmethod
+    def expand_masks(condensed_mask, num_instances):
+        return [(condensed_mask == instance_id).astype(np.uint8) for instance_id in range(1, num_instances + 1)]
+
+    def __call__(self, image, masks=None, boxes=None): # list[n h]
+        det_augmenter = self.frame_shift_augmenter.to_deterministic()
+
+
+        if masks is not None:
+            masks_np, is_binary_mask = [], []
+            boxs_np = []
+
+            for mask in masks:
+                
+                if isinstance(mask, np.ndarray):
+                    masks_np.append(mask.astype(np.bool))
+                    is_binary_mask.append(False)
+                else:
+                    raise ValueError("Invalid mask type: {}".format(type(mask)))
+
+            num_instances = len(masks_np)
+            masks_np = SegmentationMapsOnImage(self.condense_masks(masks_np), shape=image.shape[:2])
+            # boxs_np = BoundingBoxesOnImage(boxs_np, shape=image.shape[:2])
+
+            imgaug.seed(self.seed)
+            aug_image, aug_masks = det_augmenter(image=self.basic_augmenter(image=image) , segmentation_maps=masks_np)
+            imgaug.seed(self.seed)
+            invalid_pts_mask = det_augmenter(image=np.ones(image.shape[:2] + (1,), np.uint8)).squeeze(2)
+            aug_masks = self.expand_masks(aug_masks.get_arr(), num_instances)
+            # aug_boxes = aug_boxes.remove_out_of_image().clip_out_of_image()
+            aug_masks = [mask for mask, is_bm in zip(aug_masks, is_binary_mask)]
+            return aug_image, aug_masks #, aug_boxes.to_xyxy_array()
+
+        else:
+            masks = [SegmentationMapsOnImage(np.ones(image.shape[:2], np.bool), shape=image.shape[:2])]
+            aug_image, invalid_pts_mask = det_augmenter(image=image, segmentation_maps=masks)
+            return aug_image, invalid_pts_mask.get_arr() == 0
+
 @VIS_TRAIN_AUG_REGISTRY.register()
 class Fibroid_TrainAug:
     def __init__(self, configs) -> None:

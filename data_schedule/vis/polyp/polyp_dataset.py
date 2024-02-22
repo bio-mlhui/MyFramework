@@ -120,6 +120,7 @@ for name in SET_NAME:
     }
     mode = SET_NAME_TO_MODE[name]
     if mode == 'train':
+        prefix = SET_NAME_TO_PREFIX[name]
         train_meta = copy.deepcopy(polyp_meta)
         train_meta.update({
             'mode': 'train',
@@ -130,7 +131,7 @@ for name in SET_NAME:
         # train
         for step_size in [1, 3, 6, 9, 12, None]:
             step_identifer = '' if step_size is None else f'_step[{step_size}]'
-            split_name = f'polyp_train{step_identifer}'
+            split_name = f'{prefix}{step_identifer}'
             train_meta.update({'name': split_name})
             DatasetCatalog.register(split_name, partial(polyp_train,
                                                         video_ids=video_ids, 
@@ -164,10 +165,6 @@ for name in SET_NAME:
                                                         video_to_frames=video_to_frames))    
             MetadataCatalog.get(split_name).set(**validate_meta, step_size=step_size,
                                                 visualize_meta_idxs=visualize_meta_idxs[split_name])
-
-
-
-
 
 # weakpolyp_train
 root = os.path.join(_root, 'SUN/WeakPolyp-Processed')

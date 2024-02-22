@@ -18,42 +18,82 @@ from data_schedule.utils.video_clips import generate_windows_of_video
 from glob import glob
 from PIL import Image
 
-SET_NAME = ['Poly_Train', 
-         'Poly_Hard_Seen', 
-         'Poly_Hard_Unseen', 
-         'Poly_Easy_Seen', 
-         'Poly_Easy_Unseen',]
+SET_NAME = ['polyp_train', 
+         'polyp_hard_seen_validate', 
+         'polyp_hard_unseen_validate', 
+         'polyp_easy_seen_validate', 
+         'polyp_easy_unseen_validate',
+
+         'Kvasir-train',
+         'Mayo-train',
+         '300-train',
+         'CVC-612-train',
+         '300-tv',
+         'CVC-612-test',
+         'CVC-612-val'
+         ]
 
 SET_NAME_TO_DIR = {
-    'Poly_Train': 'TrainDataset',
-    'Poly_Hard_Seen': 'TestHardDataset/Seen',
-    'Poly_Hard_Unseen': 'TestHardDataset/Unseen',
-    'Poly_Easy_Seen': 'TestEasyDataset/Seen',
-    'Poly_Easy_Unseen': 'TestEasyDataset/Unseen',
+    'polyp_train': 'TrainDataset',
+    'polyp_hard_seen_validate': 'TestHardDataset/Seen',
+    'polyp_hard_unseen_validate': 'TestHardDataset/Unseen',
+    'polyp_easy_seen_validate': 'TestEasyDataset/Seen',
+    'polyp_easy_unseen_validate': 'TestEasyDataset/Unseen',
+    
+    'Kvasir-train': 'MICCAI-VPS-dataset/Kvasir-SEG',
+    'Mayo-train': 'MICCAI-VPS-dataset/VPS-TrainSet/ASU-Mayo_Clinic/Train',
+    '300-train': 'MICCAI-VPS-dataset/VPS-TrainSet/CVC-ColonDB-300/Train',
+    '612-train': 'MICCAI-VPS-dataset/VPS-TrainSet/CVC-ClinicDB-612/Train',
+    '300-tv': 'MICCAI-VPS-dataset/VPS-TestSet/CVC-ColonDB-300',
+    '612-test': 'MICCAI-VPS-dataset/VPS-TestSet/CVC-ClinicDB-612-Test',
+    '612-val': 'MICCAI-VPS-dataset/VPS-TestSet/CVC-ClinicDB-612-Valid'
 }
 
 SET_NAME_TO_NUM_VIDEOS = {
-    'Poly_Train': 112,
-    'Poly_Hard_Seen': 17,
-    'Poly_Hard_Unseen': 37,
-    'Poly_Easy_Seen': 33,
-    'Poly_Easy_Unseen': 86        
+    'polyp_train': 112,
+    'polyp_hard_seen_validate': 17,
+    'polyp_hard_unseen_validate': 37,
+    'polyp_easy_seen_validate': 33,
+    'polyp_easy_unseen_validate': 86,
+    
+    'Kvasir-train': 1,
+    'Mayo-train': 10,
+    '300-train': 6,
+    '612-train': 18,
+    '300-tv': 6,
+    '612-test': 5,
+    '612-val': 5      
 }
 
 SET_NAME_TO_MODE = {
-    'Poly_Train': 'train',
-    'Poly_Hard_Seen': 'evaluate',
-    'Poly_Hard_Unseen': 'evaluate',
-    'Poly_Easy_Seen': 'evaluate',
-    'Poly_Easy_Unseen': 'evaluate'      
+    'polyp_train': 'train',
+    'polyp_hard_seen_validate': 'evaluate',
+    'polyp_hard_unseen_validate': 'evaluate',
+    'polyp_easy_seen_validate': 'evaluate',
+    'polyp_easy_unseen_validate': 'evaluate',
+    'Kvasir-train': 'train',
+    'Mayo-train': 'train',
+    '300-train': 'train',
+    '612-train': 'train',
+    '300-tv': 'evaluate',
+    '612-test': 'evaluate',
+    '612-val': 'evaluate'        
 }
 
 SET_NAME_TO_PREFIX = {
-    'Poly_Train': 'polyp_train',
-    'Poly_Hard_Seen': 'polyp_hard_seen_validate',
-    'Poly_Hard_Unseen': 'polyp_hard_unseen_validate',
-    'Poly_Easy_Seen': 'polyp_easy_seen_validate',
-    'Poly_Easy_Unseen': 'polyp_easy_unseen_validate' 
+    'polyp_train': 'polyp_train',
+    'polyp_hard_seen_validate': 'polyp_hard_seen_validate',
+    'polyp_hard_unseen_validate': 'polyp_hard_unseen_validate',
+    'polyp_easy_seen_validate': 'polyp_easy_seen_validate',
+    'polyp_easy_unseen_validate': 'polyp_easy_unseen_validate',
+    
+    'Kvasir-train': 'Kvasir-train',
+    'Mayo-train': 'Mayo-train',
+    '300-train': '300-train',
+    '612-train': '612-train',
+    '300-tv': '300-tv',
+    '612-test': '612-test',
+    '612-val': '612-val'  
 }
 
 CLASS_TO_ID = {
@@ -73,7 +113,12 @@ def get_frames(frames_path, video_id, frames):
 # t' h w, 0是背景, 1-是obj_id  ;  has_ann: t
 def get_frames_mask(mask_path, video_id, frames):
     # masks = [cv2.imread(os.path.join(mask_path, video_id, f'{f}.jpg')) for f in frames]
-    masks = [Image.open(os.path.join(mask_path, video_id, f'{f}.png')).convert('L') for f in frames]
+    if os.path.exists(os.path.join(mask_path, video_id, f'{frames[0]}.png')):
+        masks = [Image.open(os.path.join(mask_path, video_id, f'{f}.png')).convert('L') for f in frames]
+    elif os.path.exists(os.path.join(mask_path, video_id, f'{frames[0]}.jpg')):
+        masks = [Image.open(os.path.join(mask_path, video_id, f'{f}.jpg')).convert('L') for f in frames]
+    else:
+        raise ValueError()
     masks = [np.array(mk) for mk in masks]
     masks = torch.stack([torch.from_numpy(mk) for mk in masks], dim=0) # t h w
     # assert set(masks.unique().tolist()) == set([0, 255]), f'{masks.unique().tolist()}'
