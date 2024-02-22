@@ -22,5 +22,8 @@ from .input_projs import (
 from .multiscale_encoder import (
     Image_InterpolateTimes_MultiscaleEncoder,
     Video2D_InterpolateTimes_MultiscaleEncoder,
+)
 
+from .msdeformattn_masked import (
+    Video_Deform2D_DividedTemporal_MultiscaleEncoder_v2
 )

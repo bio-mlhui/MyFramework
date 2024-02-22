@@ -469,3 +469,219 @@ class SelfAttn_Temporal_Multiscale(nn.Module):
         query = self.homo(query) # b t c
         query = rearrange(query, '(b hw) t c -> (b t) hw c',b=batch_size)
         return query, None, None
+
+
+# masked mamba
+
+@META_ARCH_REGISTRY.register()
+class SS1D_Temporal_MaskedObjSequence(nn.Module):
+    def __init__(self, configs) -> None:
+        super().__init__()
+        d_model = configs['d_model']
+        self.homo = SS1D(d_model=configs['d_model'],
+                        d_state=configs['d_state'] if 'd_state' in configs else 16,
+                        d_conv=configs['d_conv'] if 'd_conv' in configs else 3,
+                        expand=configs['expand'] if 'expand' in configs else 2,
+                        dt_rank=configs['dt_rank'] if 'dt_rank' in configs else 'auto',
+                        dt_min=configs['dt_min'] if 'dt_min' in configs else 0.001,
+                        dt_max=configs['dt_max'] if 'dt_max' in configs else 0.1,
+                        dt_init=configs['dt_init'] if 'dt_init' in configs else 'random',
+                        dt_scale=configs['dt_scale'] if 'dt_scale' in configs else 1.0,
+                        dt_init_floor=configs['dt_init_floor'] if 'dt_init_floor' in configs else 1e-4,
+                        dropout=configs['dropout'] if 'dropout' in configs else 0,
+                        conv_bias=configs['conv_bias'] if 'conv_bias' in configs else True,
+                        bias=configs['bias'] if 'bias' in configs else False,
+                        )
+        
+        self.pos_1d = build_position_encoding(position_embedding_name='1d')
+
+        self.version = configs['version']
+        self.k_points = configs['k_points']
+
+    @torch.no_grad()
+    def get_temporal_mask(self, 
+                          mask_features=None,  # b c t h w
+                          temporal_query_feats=None,  # b nq c
+                          spatial_shapes=None,
+                          level_start_idx=None,
+                          query_norm=None,
+                          mask_mlp=None ): 
+        # b c t h w, b nq c
+        temporal_query_feats = query_norm[0](temporal_query_feats) # b nq c
+        mask_embeds = mask_mlp[0](temporal_query_feats)  # b n c
+        mask_logits = torch.einsum("bqc,bcthw->bqthw", mask_embeds, mask_features) 
+        batch_size, nq, nf, H, W = mask_logits.shape
+            
+        if self.version == 1:
+            # b n t h w
+            mask_logits = mask_logits.flatten(3) # b n t hw
+            temporal_mask = torch.zeros_like(mask_logits)
+            topk, indices = torch.topk(mask_logits, self.k_points, dim =-1) # value, idx; b n t k
+            y_coords = indices // W # b n t k
+            x_coords = indices % W # b n t k
+            abs_coords = torch.stack([y_coords, x_coords], dim=4) # b n t k 2
+            rel_coords = abs_coords.float() / torch.tensor([H, W], device=mask_logits.device).float() # b n t k 2
+            # neural tangent kernel
+            scale_seq_coordinates = []
+            for haosen in spatial_shapes:
+                haosen_h, haosen_w = haosen
+                scale_abs_coords = (rel_coords *haosen).long() # b n t k 2
+                scale_abs_coords_seq = scale_abs_coords[..., 0] * haosen_w + scale_abs_coords[..., 1] # b n t k
+                scale_seq_coordinates.append(scale_abs_coords_seq)
+            return scale_seq_coordinates    
+
+        elif self.version == 2:
+            # b n t h w
+            mask_logits = mask_logits.flatten(3) # b n t hw
+            topk, indices = torch.topk(mask_logits, self.k_points, dim =-1) # value, idx; b n t k
+            y_coords = indices // W # b n t k
+            x_coords = indices % W # b n t k
+            abs_coords = torch.stack([y_coords, x_coords], dim=4) # b n t k 2
+            rel_coords = abs_coords.float() / torch.tensor([H, W], device=mask_logits.device).float() # b n t k 2
+            # neural tangent kernel
+            scale_seq_coordinates = []
+            for haosen, start_idx in zip(spatial_shapes, level_start_idx):
+                haosen_h, haosen_w = haosen
+                scale_abs_coords = (rel_coords *haosen).long() # b n t k 2
+                scale_abs_coords_seq = scale_abs_coords[..., 0] * haosen_w + scale_abs_coords[..., 1] # b n t k
+                scale_seq_coordinates.append(scale_abs_coords_seq + start_idx)
+            scale_seq_coordinates = torch.stack(scale_seq_coordinates, dim=3).flatten(3) # b n t L k -> b n t Lk
+            return scale_seq_coordinates 
+
+        else:
+            raise ValueError() 
+        # if self.version == 0:
+        #     mask_logits = mask_logits.sigmoid() > 0.5 
+        #     mask_logits = mask_logits.flatten(0, 1) # bn t h w
+
+        #     temporal_mask = []
+        #     for haosen in spatial_shapes:
+        #         mask_logits = F.interpolate(mask_logits, size=haosen, mode='nearest').flatten(2) #bn t hw
+        #         temporal_mask.append(mask_logits)
+        #     temporal_mask = torch.cat(temporal_mask, dim=-1) # bn t hw_sigma
+        
+        #     temporal_mask = rearrange(temporal_mask, '(b n) t s -> b n t s',b=batch_size, n=nq)
+
+        #     temporal_mask[torch.where(temporal_mask.sum(-1) == temporal_mask.shape[-1])] = False 
+        #     return temporal_mask
+
+        # elif self.version == 2:
+        #     k=4
+        #     # b n t h w
+        #     mask_logits = mask_logits.flatten(3) # b n t hw
+        #     temporal_mask = torch.zeros_like(mask_logits)
+        #     topk, indices = torch.topk(temporal_mask, k, dim =-1) # value, idx; b n t k
+        #     y_coords = indices // W # b n t k
+        #     x_coords = indices % W # b n t k
+
+        #     abs_coords = torch.stack([y_coords, x_coords], dim=3) # b n t k 2
+        #     rel_coords = abs_coords.float() / torch.tensor([H, W], device=mask_logits.device).float() # b n t k 2
+        #     return rel_coords 
+
+    def forward(self, 
+                query=None,  # bt hw_sigma c
+                spatial_shapes=None,
+                level_start_index=None,
+                mask_features=None, # b c t h w
+                temporal_query_feats=None, # b nq c
+                query_norm = None,
+                mask_mlp = None,
+                **kwargs):
+        
+        hw_sigma = query.shape[1]
+        batch_size, _, nf, *_ = mask_features.shape
+        nq = temporal_query_feats.shape[1]
+        query = rearrange(query, '(b t) hw c -> (b hw) t c',t=nf, b=batch_size).contiguous()
+        poses = self.pos_1d(mask=torch.zeros_like(query[..., 0]).bool(), hidden_dim=query.shape[-1]).permute(0, 2, 1).contiguous()
+        query = query + poses # (b hw) t c
+
+        temporal_mask = self.get_temporal_mask(mask_features=mask_features, 
+                                               temporal_query_feats=temporal_query_feats,
+                                               spatial_shapes=spatial_shapes,
+                                               query_norm=query_norm,
+                                               mask_mlp=mask_mlp,
+                                               level_start_idx=level_start_index)  
+
+        if self.version == 1:
+            # list[b n t k], 32, 16, 8, hw的index
+            inputs = []
+            query = rearrange(query, '(b hw) t c -> b t hw c',b=batch_size, hw=hw_sigma)
+            for idx_mask, haosen, start_idx in zip(temporal_mask, spatial_shapes, level_start_index):
+                cardib = query[:, :, start_idx:(start_idx + haosen[0] * haosen[1])].contiguous() # b t hw c
+                cardib = repeat(cardib, 'b t hw c -> b n t hw c', n=nq).contiguous()
+                idx_mask = repeat(idx_mask, 'b n t k -> b n t k c', c=cardib.shape[-1])
+                sampled_points = torch.gather(cardib, dim=3, index=idx_mask).contiguous() # b n t k c
+                inputs.append(sampled_points)
+            
+            inputs = torch.stack(inputs, dim=0) # L b n t k c
+            L, _, nq, _, kk, _ = inputs.shape
+            inputs = inputs.flatten(0, 2).flatten(1, 2).contiguous() #  Lbn tk c
+            inputs = self.homo(inputs)
+            inputs = rearrange(inputs, '(L b n) (t k) c -> b n t (L k) c',L=L,b=batch_size,n=nq,t=nf,k=kk)
+            # list[b n t k] -> b n t (L k), hw_sigma的index
+            temporal_mask = [tm + start_idx for tm, start_idx in zip(temporal_mask, level_start_index)]
+            temporal_mask = torch.stack(temporal_mask, 3).flatten(3).unsqueeze(-1).repeat(1,1,1,1,inputs.shape[-1]) # b n t Lk c
+
+            residual = torch.zeros_like(query)[:, None].repeat(1, nq, 1, 1, 1) # b n t hw_sigma c
+            # The backward pass is implemented only for src.shape == index.shape
+            assert inputs.shape == temporal_mask.shape
+            residual.scatter_add_(dim=3, index=temporal_mask, src=inputs)
+            residual = residual.sum(1) # b t hw_sigma c
+            query = query + residual
+            query = query.flatten(0, 1).contiguous()
+            return query, None, None
+        
+        elif self.version == 2:
+            # b n t LK
+            inputs = []
+            query = rearrange(query, '(b hw) t c -> b t hw c',b=batch_size, hw=hw_sigma)
+            repeat_query = repeat(query, 'b t hw c -> b n t hw c',n=nq).contiguous()
+            temporal_mask = temporal_mask.unsqueeze(-1).repeat(1,1,1,1,query.shape[-1]) # b n t Lk c
+            sampled_points = torch.gather(repeat_query, dim=3, index=temporal_mask).contiguous() # b n t k c
+            L = len(spatial_shapes)
+            kk = sampled_points.shape[3] // L
+            sampled_points = rearrange(sampled_points, 'b n t (L K) c -> (L b n) (t K) c',L=len(spatial_shapes)).contiguous()
+            sampled_points = self.homo(sampled_points)
+            sampled_points = rearrange(sampled_points, '(L b n) (t k) c -> b n t (L k) c',L=L,b=batch_size,n=nq,t=nf,k=kk)
+
+            residual = torch.zeros_like(repeat_query) # b n t hw_sigma c
+            # The backward pass is implemented only for src.shape == index.shape
+            assert sampled_points.shape == temporal_mask.shape
+            residual.scatter_add_(dim=3, index=temporal_mask, src=sampled_points)
+            residual = residual.sum(1) # b t hw_sigma c
+            query = query + residual
+            query = query.flatten(0, 1).contiguous() # bt hw_siamga c
+            return query, None, None
+        else:
+            raise ValueError()
+        
+        # scatter, where, gather, index_fill
+
+        # elif self.version == 0:  
+ 
+        #     query = repeat(query, '(b hw) t c -> (b nf) (t hw) c', nf=nf).contiguous()
+        #     temporal_mask = temporal_mask.flatten(0, 1).flatten(1) # bn thw
+
+        #     max_len = max([haosen.int().sum() for haosen in temporal_mask])
+        #     # list[s c], bn
+        #     inputs = [F.pad(query[idx, haosen], pad=[0, 0, 0, max_len-len(haosen)], value=0.) for idx, haosen in enumerate(temporal_mask)]
+        #     query = self.homo(query) # b t c
+        #     query = rearrange(query, '(b hw) t c -> (b t) hw c',b=batch_size)
+        #     return query, None, None
+
+
+
+
+        # elif version == 2:
+        #     temporal_mask = rearrange(temporal_mask, 'b n t k 2 -> (b n t) k 2')
+        #     inputs = []
+        #     query = rearrange(query, '(b hw) t c -> b t hw c',b=batch_size, hw=hw_sigma)
+        #     for haosen, haosen_2 in zip(spatial_shapes, level_start_index):
+        #         cardib = query[:, :, haosen_2:(haosen_2 + haosen[0] * haosen[1])].contiguous() # b t hw c
+        #         cardib = repeat(cardib, 'b t (h w) c -> (b n t) c h w',h=haosen[0], w=haosen[1], n=nf).contiguous()
+
+        #         # n c h w, n p 2 -> n c p
+        #         sampled_points = point_sample(cardib, point_coords=temporal_mask).contiguous() # bnt c k
+        #         inputs.append(sampled_points)
+        #     for shape in spatial_shapes:
+

@@ -61,6 +61,8 @@ class BackboneEncoderDecoder_WithScaleConsistency(nn.Module):
          
         self.decoder = META_ARCH_REGISTRY.get(configs['model']['decoder']['name'])(configs['model']['decoder'],
                                                                                    multiscale_shapes=same_dim_multiscale_shapes)
+        if configs['model']['fusion']['name'] == 'Video_Deform2D_DividedTemporal_MultiscaleEncoder_v2':
+            self.fusion_encoder.hack_ref(query_norm=self.decoder.temporal_query_norm, mask_mlp=self.decoder.query_mask)
 
     @property
     def device(self):
