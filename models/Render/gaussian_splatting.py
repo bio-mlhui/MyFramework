@@ -16,7 +16,7 @@ from torch import nn
 import os
 from utils.system_utils import mkdir_p
 from plyfile import PlyData, PlyElement
-from utils.sh_utils import RGB2SH
+from models.Render.utils.sh_utils import RGB2SH
 from simple_knn._C import distCUDA2
 from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
@@ -40,16 +40,19 @@ class GaussianModel:
 
         self.rotation_activation = torch.nn.functional.normalize
 
-
+    # covariance -> scaling matrix, rotation matrix
+    # 第i个gs对位置x的opacity = 
     def __init__(self, sh_degree : int):
-        self.active_sh_degree = 0  # 每个point/grid corner的sh component的参数
+        self._scaling = torch.empty(0) # 3d vector
+        self._rotation = torch.empty(0) # uaternion, covariance
+        self._opacity = torch.empty(0) # opcacity
+        self._xyz = torch.empty(0) # position
+        # sh_coeff
+        self.active_sh_degree = 0
         self.max_sh_degree = sh_degree  
-        self._xyz = torch.empty(0)
+
         self._features_dc = torch.empty(0)
         self._features_rest = torch.empty(0)
-        self._scaling = torch.empty(0)
-        self._rotation = torch.empty(0)
-        self._opacity = torch.empty(0)
         self.max_radii2D = torch.empty(0)
         self.xyz_gradient_accum = torch.empty(0)
         self.denom = torch.empty(0)
@@ -123,8 +126,8 @@ class GaussianModel:
 
     def create_from_pcd(self, pcd : BasicPointCloud, spatial_lr_scale : float):
         self.spatial_lr_scale = spatial_lr_scale
-        fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()
-        fused_color = RGB2SH(torch.tensor(np.asarray(pcd.colors)).float().cuda())
+        fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda() # N 3
+        fused_color = RGB2SH(torch.tensor(np.asarray(pcd.colors)).float().cuda()) # N c
         features = torch.zeros((fused_color.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
         features[:, :3, 0 ] = fused_color
         features[:, 3:, 1:] = 0.0

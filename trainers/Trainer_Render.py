@@ -7,6 +7,7 @@ import time
 import os
 import sys
 from utils.misc import reduce_dict, to_device, reduce_scalar, is_dist_avail_and_initialized
+# from models.optimization.utils import get_total_grad_norm
 import gc
 import wandb
 from utils.misc import  SmoothedValue, MetricLogger
@@ -20,13 +21,13 @@ from data_schedule import build_schedule
 from models import model_entrypoint
 from utils.misc import to_device
 
-__all__ = ['Trainer']
-# Assumption:
-# train loader(data_schedule, batch_size, world_size) 不同就不同
-# train loader决定了一个iteration有多少sample, 
-# train loader在train attmpt开始, train resume都不变
-# evaluat_function可以有多个eval数据集
-class Trainer:
+__all__ = ['Trainer_Render']
+# 假设: 每个训练集里包含多个场景，对于每个场景, 有多个train_samples 
+# 对于static来说, train 是训练视角的多个图像, test是测试视角
+# 对于dynamic来说, train 是多个(a, t), 测试也是多个(a, t)
+# 针对每个场景进行 训练测试, for循环在main
+
+class Trainer_Render:
     def __init__(self, configs):
         torch.autograd.set_detect_anomaly(False)
         torch.backends.cuda.matmul.allow_tf32 = True
@@ -42,7 +43,7 @@ class Trainer:
         # model
         create_model = model_entrypoint(configs['model']['name'])
         self.model, self.optimizer, self.scheduler, model_aux_mapper, model_aux_collate_fn,\
-              log_lr_group_name_to_idx = create_model(configs, device=self.device) 
+            log_lr_group_name_to_idx = create_model(configs, device=self.device) 
         self.log_lr_group_name_to_idx = log_lr_group_name_to_idx
 
         # schedule
@@ -103,20 +104,25 @@ class Trainer:
                 batch_dict['visualize_paths'] = self.visualize_path(meta_idxs=meta_idxs, 
                                                                     visualize=visualize) # visualize model训练过程
                 iteration_time = time.time()
-                self.optimizer.zero_grad()
-                loss_dict_unscaled, loss_dict_scaled, gradient_norm = self.model(batch_dict)
+                loss_dict_unscaled, loss_weight = self.model(batch_dict)
+                loss = sum([loss_dict_unscaled[k] * loss_weight[k] for k in loss_weight.keys()])
+                assert math.isfinite(loss.item()), f"Loss is {loss.item()}, stopping training"
+                loss.backward()       
                 self.optimizer.step()
-                self.scheduler.step()   
                 iteration_time = time.time() - iteration_time
+                self.optimizer.zero_grad(set_to_none=True) # delete gradient 
+                self.scheduler.step() 
                 sample_idxs = comm.all_gather(meta_idxs) 
                 sample_idxs = [taylor for cardib in sample_idxs for taylor in cardib]
                 self.num_samples += len(sample_idxs)
                 self.num_iterations += 1
-                self._log(loss_dict_scaled=loss_dict_scaled,
-                          loss_dict_unscaled=loss_dict_unscaled,
+                loss_dict_unscaled_item = {key: torch.tensor(value.detach().item(), device=self.device) for key, value in loss_dict_unscaled.items()}
+                del loss, loss_dict_unscaled # delete graph
+                self._log(loss_dict_unscaled=loss_dict_unscaled_item,
+                          loss_weight=loss_weight,
                           sample_idxs=sample_idxs,
-                          gradient_norm=gradient_norm,
                           iteration_time=iteration_time)
+    
     def save_ckpt(self):
         rng_state_dict = {comm.get_rank(): {
             'cpu_rng_state': torch.get_rng_state(),
@@ -233,15 +239,12 @@ class Trainer:
         del checkpoint
 
     def _log(self, 
-             loss_dict_scaled,
              loss_dict_unscaled,
-             sample_idxs,
-             gradient_norm, 
+             loss_weight,
+             sample_idxs, 
              iteration_time,):
-        
         loss_dict_unscaled_reduced = reduce_dict(loss_dict_unscaled) 
-        gradient_norm = reduce_scalar(gradient_norm)
-        loss_value = sum(reduce_dict(loss_dict_scaled).values()).item() 
+        loss_value = sum([loss_dict_unscaled_reduced[key] * loss_weight[key] for key in loss_weight.keys()])
 
         # logging
         if comm.is_main_process():
@@ -259,7 +262,6 @@ class Trainer:
             logger_updates.update({
                 'loss_value': loss_value,
                 'iteration_time': iteration_time,
-                'gradient_norm': gradient_norm,
             })
             self.metric_logger.update(**logger_updates)
             log_string = self.log_header(iteration_time, sample_idxs) + f'\n{str(self.metric_logger)}'
@@ -267,9 +269,6 @@ class Trainer:
             logging.debug(log_string)
             wandb.log(wandb_log, step=self.num_samples)
 
-        if (self.num_iterations % 2000 == 0):
-            gc.collect()
-            torch.cuda.empty_cache()
         if is_dist_avail_and_initialized():
             dist.barrier()
 
@@ -280,15 +279,18 @@ class Trainer:
             do_ckpt = self.num_iterations in self.ckpted_iters
         else:
             raise ValueError()
+        if (self.num_iterations % 2000 == 0) or do_ckpt:
+            gc.collect()
+            torch.cuda.empty_cache()
         if do_ckpt:
-            try: 
-                self.save_ckpt() # 先存储
-                self.evaluate() # 测试的随机状态独立于训练的状态
-                self.load_ckpt(os.path.join(self.iteration_dir, 'ckpt.pth.tar'),  # 训练的随机状态
-                               load_random=True, load_schedule=False, load_model=False, load_optimize=False,)
-            except:
-                if comm.is_main_process():
-                    logging.error(f'Iteration {self.num_iterations} evaluate错误')
+            # try: 
+            self.save_ckpt() # 先存储
+            self.evaluate() # 测试的随机状态独立于训练的状态
+            self.load_ckpt(os.path.join(self.iteration_dir, 'ckpt.pth.tar'),  # 训练的随机状态
+                            load_random=True, load_schedule=False, load_model=False, load_optimize=False,)
+            # except:
+            #     if comm.is_main_process():
+            #         logging.error(f'Iteration {self.num_iterations} evaluate错误')
         if is_dist_avail_and_initialized():
             dist.barrier()
 

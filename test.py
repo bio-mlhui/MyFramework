@@ -5,20 +5,20 @@
 
 # print(fix_spelling(["a baby giant panda near a large giant panda"],max_length=2048))
 
-import albumentations as A
-import numpy as np
-import cv2
-import torch
-hflip = A.ReplayCompose(
-    [A.HorizontalFlip(p=0.5)],
-)
-image = cv2.imread('/home/xuhuihui/datasets/SUN-SEG/TrainDataset/Frame/case2_1/case_M_20181003094031_0U62363100354631_1_001_002-1_a1_ayy_image0002.jpg')
-image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-h, w, c = image.shape
-masks = (torch.randn([h, w]) > 0).numpy().astype(np.uint8)
-ret = hflip(image=image, mask=masks)
-ret['image']
-ret['mask']
+# import albumentations as A
+# import numpy as np
+# import cv2
+# import torch
+# hflip = A.ReplayCompose(
+#     [A.HorizontalFlip(p=0.5)],
+# )
+# image = cv2.imread('/home/xuhuihui/datasets/SUN-SEG/TrainDataset/Frame/case2_1/case_M_20181003094031_0U62363100354631_1_001_002-1_a1_ayy_image0002.jpg')
+# image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+# h, w, c = image.shape
+# masks = (torch.randn([h, w]) > 0).numpy().astype(np.uint8)
+# ret = hflip(image=image, mask=masks)
+# ret['image']
+# ret['mask']
       
 # # 测试infinite stream 
 # import torch
@@ -320,3 +320,36 @@ ret['mask']
 
 # print(epoch5_top10)
 # print(new_epoch_top10)
+
+
+from models.layers.gilbert.gilbert2d import gilbert2d_widthBigger, gilbert2d
+import matplotlib.pyplot as plt
+
+def draw_lines(height, width, coordinates):
+    # Create a figure and axis
+    fig, ax = plt.subplots()
+
+    # Set the limits of the plot based on height and width
+    ax.set_xlim(0, width)
+    ax.set_ylim(0, height)
+
+    # Hide the axes
+    ax.axis('off')
+
+    # Plot the lighter 2D grid
+    ax.grid(True, linestyle='--', linewidth=0.5, alpha=0.7)
+
+    # Plot the lines by connecting consecutive coordinates
+    for i in range(len(coordinates) - 1):
+        x1, y1 = coordinates[i]
+        x2, y2 = coordinates[i + 1]
+        ax.plot([x1, x2], [y1, y2],  color='black', linewidth=2, markersize=8)  # Adjust line appearance
+    plt.savefig('./test.png')
+
+
+# Example usage:
+height =8
+width = 8
+coordinates = list(gilbert2d_widthBigger(width, height))
+
+draw_lines(height, width, coordinates)

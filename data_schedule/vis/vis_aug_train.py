@@ -222,47 +222,63 @@ class WeakPolyP_TrainAug:
 @VIS_TRAIN_AUG_REGISTRY.register()
 class WeakPolyP_TrainAug_RotateImageToClip:
     def __init__(self, configs) -> None:
+        self.ImageToSeqAugmenter = ImageToSeqAugmenter(perspective=True, affine=True, motion_blur=True,
+                                    rotation_range=(-20, 20), perspective_magnitude=0.08,
+                                    hue_saturation_range=(-5, 5), brightness_range=(-40, 40),
+                                    motion_blur_prob=0.25, motion_blur_kernel_sizes=(9, 11),
+                                    translate_range=(-0.1, 0.1))
+        self.num_frames = configs['num_frames']
+        
         self.transform = A.ReplayCompose([
             A.Resize(352, 352),
             A.HorizontalFlip(p=0.5),
             A.VerticalFlip(p=0.5),
             A.RandomRotate90(p=0.5),
         ])
-
         self.tensor_video = VideoToTensor()
         self.add_box = ComputeBox()
-        self.ImageToSeqAugmenter = ImageToSeqAugmenter(perspective=True, affine=True, motion_blur=True,
-                                    rotation_range=(-20, 20), perspective_magnitude=0.08,
-                                    hue_saturation_range=(-5, 5), brightness_range=(-40, 40),
-                                    motion_blur_prob=0.25, motion_blur_kernel_sizes=(9, 11),
-                                    translate_range=(-0.1, 0.1))
 
+    def apply_random_sequence_shuffle(self, images, instance_masks):
+        perm = list(range(self.num_frames))
+        random.shuffle(perm)
+        images = [images[i] for i in perm]
+        instance_masks = [instance_masks[i] for i in perm]
+        return images, instance_masks
+    
     def __call__(self, ret):
         VIS_Aug_CallbackAPI
-        video = ret['video'] 
+        video = ret['video']  # list[pil], t
         masks = ret['masks']  # n t' h w
         has_ann = ret['has_ann'] # t
-        # change image to frame
-        assert len(video) == 1 and masks.shape[1] == 1
-        image, img_mask = video[0], masks[:, 0]
-        images, img_masks = self.ImageToSeqAugmenter()
-        
-        # list[PIL] -> list[h w 3, 0-1float], t
-        # n t' h w -> list[list[h w, 01uint8], 没有annotation的帧box是空] t
-        video, masks = pil_torch_to_numpy(video=video, masks=masks, has_ann=has_ann)
 
-        replay = self.transform(image=video[0], masks=[masks[0][0]])['replay']
+        # list[PIL] -> list[h w 3, uint8], t
+        # n t' h w -> list[list[h w], n, uint8], t
+        seq_images, seq_instance_masks = pil_torch_to_numpy(video=video, masks=masks, has_ann=has_ann, float_image=False)
+        assert len(seq_images) == 1 and len(seq_instance_masks) == 1
+        static_img, static_mask = seq_images[0], seq_instance_masks[0]
+        for t in range(self.num_frames - 1):
+            im_trafo, instance_masks_trafo = self.ImageToSeqAugmenter(static_img, static_mask) # h w 3, uint8; list[h w], n, uint8
+            seq_images.append(np.uint8(im_trafo))
+            seq_instance_masks.append(instance_masks_trafo)
+        # list[h w 3], t ;  # list[list[h w, 01uint8]] t 
+        seq_images, seq_instance_masks = self.apply_random_sequence_shuffle(seq_images, seq_instance_masks)         
+        has_ann = torch.ones(self.num_frames).bool() # T
+        seq_images = [np.float32(haosen) / 255.0 for haosen in seq_images] # list[h w 3, 0-1float], t
+        replay = self.transform(image=seq_images[0], masks=[seq_instance_masks[0][0]])['replay']
         auged_video = []
         auged_mask = []
-        for vid, mk in zip(video, masks):
+        for vid, mk in zip(seq_images, seq_instance_masks):
             auged_each_frame = self.transform.replay(replay, image=vid, masks=mk)
             auged_video.append(auged_each_frame['image'])
             auged_mask.append(auged_each_frame['masks']) # list[h w, 01uint8]
         
-        auged_video, auged_mask = numpy_to_pil_torch(video=auged_video, masks=auged_mask, has_ann=has_ann)
-
+        auged_video, auged_mask = numpy_to_pil_torch(video=auged_video, masks=auged_mask, has_ann=has_ann) # n t h w
+        # [haosen.save(f'./test{idx}.png') for idx, haosen in enumerate(auged_video)]
+        # import matplotlib.pyplot as plt
+        # [plt.imsave( f'./mask{idx}.png', auged_mask[0][idx].float().numpy()) for idx in range(len(auged_mask[0]))]
         ret['video'] = auged_video
         ret['masks'] = auged_mask
+        ret['has_ann'] = has_ann
         
         ret = self.add_box(ret)
         ret = self.tensor_video(ret)
@@ -273,7 +289,7 @@ import imgaug.augmenters as iaa
 from imgaug.augmentables.segmaps import SegmentationMapsOnImage
 from imgaug.augmentables.bbs import BoundingBox, BoundingBoxesOnImage
 import imgaug
-
+from datetime import datetime
 class ImageToSeqAugmenter(object):
     def __init__(self, perspective=True, affine=True, motion_blur=True,
                  brightness_range=(-50, 50), hue_saturation_range=(-15, 15), perspective_magnitude=0.12,
@@ -321,10 +337,8 @@ class ImageToSeqAugmenter(object):
     def expand_masks(condensed_mask, num_instances):
         return [(condensed_mask == instance_id).astype(np.uint8) for instance_id in range(1, num_instances + 1)]
 
-    def __call__(self, image, masks=None, boxes=None): # list[n h]
+    def __call__(self, image, masks=None, boxes=None): # n h w
         det_augmenter = self.frame_shift_augmenter.to_deterministic()
-
-
         if masks is not None:
             masks_np, is_binary_mask = [], []
             boxs_np = []
@@ -332,7 +346,7 @@ class ImageToSeqAugmenter(object):
             for mask in masks:
                 
                 if isinstance(mask, np.ndarray):
-                    masks_np.append(mask.astype(np.bool))
+                    masks_np.append(mask.astype(np.bool_))
                     is_binary_mask.append(False)
                 else:
                     raise ValueError("Invalid mask type: {}".format(type(mask)))
@@ -340,10 +354,10 @@ class ImageToSeqAugmenter(object):
             num_instances = len(masks_np)
             masks_np = SegmentationMapsOnImage(self.condense_masks(masks_np), shape=image.shape[:2])
             # boxs_np = BoundingBoxesOnImage(boxs_np, shape=image.shape[:2])
-
-            imgaug.seed(self.seed)
+            seed = int(datetime.now().strftime('%M%S%f')[-8:])
+            imgaug.seed(seed)
             aug_image, aug_masks = det_augmenter(image=self.basic_augmenter(image=image) , segmentation_maps=masks_np)
-            imgaug.seed(self.seed)
+            imgaug.seed(seed)
             invalid_pts_mask = det_augmenter(image=np.ones(image.shape[:2] + (1,), np.uint8)).squeeze(2)
             aug_masks = self.expand_masks(aug_masks.get_arr(), num_instances)
             # aug_boxes = aug_boxes.remove_out_of_image().clip_out_of_image()

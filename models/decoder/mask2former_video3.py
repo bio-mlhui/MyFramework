@@ -40,111 +40,6 @@ def calculate_uncertainty(logits):
     assert logits.shape[1] == 1
     gt_class_logits = logits.clone()
     return -(torch.abs(gt_class_logits))
-
-def unfold_wo_center(x, kernel_size, dilation):
-    assert x.dim() == 4
-    assert kernel_size % 2 == 1
-
-    # using SAME padding
-    padding = (kernel_size + (dilation - 1) * (kernel_size - 1)) // 2
-    unfolded_x = F.unfold(
-        x, kernel_size=kernel_size,
-        padding=padding,
-        dilation=dilation
-    )
-
-    unfolded_x = unfolded_x.reshape(
-        x.size(0), x.size(1), -1, x.size(2), x.size(3)
-    )
-
-    # remove the center pixels
-    size = kernel_size ** 2
-    unfolded_x = torch.cat((
-        unfolded_x[:, :, :size // 2],
-        unfolded_x[:, :, size // 2 + 1:]
-    ), dim=2)
-
-    return unfolded_x
-
-def unfold_w_center(x, kernel_size, dilation):
-    assert x.dim() == 4
-    assert kernel_size % 2 == 1
-
-    # using SAME padding
-    padding = (kernel_size + (dilation - 1) * (kernel_size - 1)) // 2
-    unfolded_x = F.unfold(
-        x, kernel_size=kernel_size,
-        padding=padding,
-        dilation=dilation
-    )
-
-    unfolded_x = unfolded_x.reshape(
-        x.size(0), x.size(1), -1, x.size(2), x.size(3)
-    )
-
-    return unfolded_x
-
-def compute_pairwise_term(mask_logits, pairwise_size, pairwise_dilation):
-    assert mask_logits.dim() == 4
-    # nt 1 h w
-    log_fg_prob = F.logsigmoid(mask_logits)
-    log_bg_prob = F.logsigmoid(-mask_logits)
-
-    log_fg_prob_unfold = unfold_wo_center(
-        log_fg_prob, kernel_size=pairwise_size,
-        dilation=pairwise_dilation
-    ) # nt 1 8 h w
-    log_bg_prob_unfold = unfold_wo_center(
-        log_bg_prob, kernel_size=pairwise_size,
-        dilation=pairwise_dilation
-    )
-
-    # the probability of making the same prediction = p_i * p_j + (1 - p_i) * (1 - p_j)
-    # we compute the the probability in log space to avoid numerical instability
-    log_same_fg_prob = log_fg_prob[:, :, None] + log_fg_prob_unfold
-    log_same_bg_prob = log_bg_prob[:, :, None] + log_bg_prob_unfold
-
-    max_ = torch.max(log_same_fg_prob, log_same_bg_prob)
-    log_same_prob = torch.log(
-        torch.exp(log_same_fg_prob - max_) +
-        torch.exp(log_same_bg_prob - max_)
-    ) + max_
-
-    # loss = -log(prob)
-    return -log_same_prob[:, 0] # nt 8 h w
-
-# nt 9 h w, neighbor的每个pixel和mask_logits的对应patch的loss
-def compute_pairwise_term_neighbor(mask_logits, mask_logits_neighbor, pairwise_size, pairwise_dilation):
-    assert mask_logits.dim() == 4
-    #nt 1 h w
-    log_fg_prob_neigh = F.logsigmoid(mask_logits_neighbor)
-    log_bg_prob_neigh = F.logsigmoid(-mask_logits_neighbor)
-
-    log_fg_prob = F.logsigmoid(mask_logits)
-    log_bg_prob = F.logsigmoid(-mask_logits)
-    
-    log_fg_prob_unfold = unfold_w_center(
-        log_fg_prob, kernel_size=pairwise_size,
-        dilation=pairwise_dilation
-    ) # nt 1 9 h w
-    log_bg_prob_unfold = unfold_w_center(
-        log_bg_prob, kernel_size=pairwise_size,
-        dilation=pairwise_dilation
-    )
-
-    # the probability of making the same prediction = p_i * p_j + (1 - p_i) * (1 - p_j)
-    # we compute the the probability in log space to avoid numerical instability
-    log_same_fg_prob = log_fg_prob_neigh[:, :, None] + log_fg_prob_unfold
-    log_same_bg_prob = log_bg_prob_neigh[:, :, None] + log_bg_prob_unfold
-
-    max_ = torch.max(log_same_fg_prob, log_same_bg_prob)
-    log_same_prob = torch.log(
-        torch.exp(log_same_fg_prob - max_) +
-        torch.exp(log_same_bg_prob - max_)
-    ) + max_
-
-    return -log_same_prob[:, 0] 
-
 # 假设: 每个sample的 has_ann 都相同
 class Video_SetMatchingLoss(nn.Module):
     def __init__(self, 
@@ -493,17 +388,16 @@ class Video_SetMatchingLoss(nn.Module):
         tgt_idx = torch.cat([tgt for (_, tgt) in indices])
         return batch_idx, tgt_idx
 
-# 只有video level的监督
 @META_ARCH_REGISTRY.register()
-class Video_MaskedAttn_MultiscaleMaskDecoder_v2(nn.Module):
+class Video_MaskedAttn_MultiscaleMaskDecoder_v3(nn.Module):
     def __init__(self,
                  configs,
                  multiscale_shapes):
         super().__init__()
         d_model = configs['d_model']
         attn_configs = configs['attn']
-        self.frame_nqueries = configs['frame_nqueries'] # 20
-        self.nlayers = configs['nlayers'] 
+        self.video_nqueries = configs['video_nqueries']
+        self.nlayers = configs['nlayers']
         self.memory_scales = configs['memory_scales']
         self.mask_scale = configs['mask_scale']
         self.mask_spatial_stride = multiscale_shapes[self.mask_scale].spatial_stride
@@ -515,26 +409,27 @@ class Video_MaskedAttn_MultiscaleMaskDecoder_v2(nn.Module):
             self.inputs_projs = META_ARCH_REGISTRY.get(inputs_projs['name'])(inputs_projs, 
                                                                              multiscale_shapes=multiscale_shapes,
                                                                              out_dim=d_model)
-        self.frame_query_poses =  nn.Embedding(self.frame_nqueries, d_model)
-        self.frame_query_feats = nn.Embedding(self.frame_nqueries, d_model)
-
         self.level_embeds = nn.Embedding(len(self.memory_scales), d_model)
         assert self.nlayers % len(self.memory_scales) == 0
-
-        self.frame_cross_layers = _get_clones(CrossAttentionLayer(d_model=d_model,
+        self.cross_layers = _get_clones(CrossAttentionLayer(d_model=d_model,
                                                             nhead=attn_configs['nheads'],
                                                             dropout=0.0,
                                                             normalize_before=attn_configs['normalize_before']),
-                                              self.nlayers)
-        
-        temporal_self_layer = META_ARCH_REGISTRY.get(configs['temporal_self_layer']['name'])(configs['temporal_self_layer'])
-        self.temporal_self_layers = _get_clones(temporal_self_layer, self.nlayers)
-
-        temporal_cross_layer = META_ARCH_REGISTRY.get(configs['temporal_cross_layer']['name'])(configs['temporal_cross_layer'])
-        self.temporal_cross_layers = _get_clones(temporal_cross_layer, self.nlayers) 
+                                        self.nlayers)
+        self.self_layers = _get_clones(SelfAttentionLayer(d_model=d_model,
+                                                          nhead=attn_configs['nheads'],
+                                                          dropout=0.0,
+                                                          normalize_before=attn_configs['normalize_before']),
+                                       self.nlayers)  
+        self.ffn_layers = _get_clones(FFNLayer(d_model=d_model,
+                                               dim_feedforward=attn_configs['dim_feedforward'],
+                                               dropout=0.0,
+                                               normalize_before=attn_configs['normalize_before']),
+                                      self.nlayers) 
                   
         self.nheads = attn_configs['nheads']
-        self.frame_query_norm = nn.LayerNorm(d_model)
+        self.temporal_query_poses = nn.Embedding(self.video_nqueries, d_model)
+        self.temporal_query_feats = nn.Embedding(self.video_nqueries, d_model)
         self.temporal_query_norm = nn.LayerNorm(d_model)
         self.pos_3d = build_position_encoding(hidden_dim=d_model, position_embedding_name='3d') # b t c h w
         
@@ -545,91 +440,214 @@ class Video_MaskedAttn_MultiscaleMaskDecoder_v2(nn.Module):
             self.query_class = nn.Linear(d_model, num_classes + 1)    
 
         self.loss_module = Video_SetMatchingLoss(loss_config=configs['loss'], num_classes=num_classes)
-
+        
     @property
     def device(self,):
-        return self.frame_query_poses.weight.device
+        return self.temporal_query_feats.weight.device
 
     def get_memories_and_mask_features(self, multiscales):
         # b c t h w 
         memories = [multiscales[scale] for scale in self.memory_scales]
         size_list = [mem_feat.shape[-2:] for mem_feat in memories]
-        memories_poses = [self.pos_3d(mem.permute(0, 2, 1, 3, 4)).permute(0, 2, 1, 3, 4) for mem in memories] 
-        memories = [rearrange(mem, 'b c t h w -> (h w) (b t) c').contiguous() for mem in memories]
-        memories_poses = [rearrange(mem_pos, 'b c t h w -> (h w) (b t) c').contiguous() for mem_pos in memories_poses]
+        memories_poses = [self.pos_3d(mem.permute(0, 2, 1,3, 4)).permute(0, 2, 1, 3, 4) for mem in memories]  # b c t h w
+        memories = [rearrange(mem, 'b c t h w -> (t h w) b c').contiguous() for mem in memories]
+        memories_poses = [rearrange(mem_pos, 'b c t h w -> (t h w) b c').contiguous() for mem_pos in memories_poses]
         mask_features = multiscales[self.mask_scale] # b c t h w
         return memories, memories_poses, mask_features, size_list
 
-    def forward(self, fusion_encoder_output, video_aux_dict=None):
-        multiscales, temporal_query_feats, temporal_query_poses = fusion_encoder_output
-        temporal_query_feats = temporal_query_feats.permute(1, 0, 2) # n b c
-        temporal_query_poses = temporal_query_poses.permute(1, 0, 2)
+    def forward(self, 
+                multiscales, # b c t h w
+                video_aux_dict=None
+                ):
+        multiscales = multiscales[0]
         multiscales = self.inputs_projs(multiscales)
-        batch_size, _, nf = multiscales[list(multiscales.keys())[0]].shape[:3]
-
-        # hw bt c; b c t h w
+        # thw b c; b c t h w
         memories, memories_poses, mask_features, size_list = self.get_memories_and_mask_features(multiscales)
         memories = [mem_feat + self.level_embeds.weight[i][None, None, :] for i, mem_feat in enumerate(memories)]
-
-        # nqf bt c
-        frame_query_poses = self.frame_query_poses.weight.unsqueeze(1).repeat(1, batch_size * nf, 1)
-        frame_query_feats = self.frame_query_feats.weight.unsqueeze(1).repeat(1, batch_size * nf, 1)
+        batch_size, _, nf, *_ = mask_features.shape
+        
+        # nq b c
+        temporal_query_poses = self.temporal_query_poses.weight.unsqueeze(1).repeat(1, batch_size, 1)
+        temporal_query_feats = self.temporal_query_feats.weight.unsqueeze(1).repeat(1, batch_size, 1)
 
         vid_ret = []
-        # b nq class, b nq h w
-        vid_class, vid_mask, frame_cross_attn_mask = \
-            self.forward_heads(frame_query_feats=frame_query_feats, 
-                               temporal_query_feats=temporal_query_feats,
+        # b nq class, b nq t h w; b*head nq thw
+        vid_class, vid_mask, attn_mask = \
+            self.forward_heads(temporal_query_feats=temporal_query_feats,
                                mask_features=mask_features, attn_mask_target_size=size_list[0]) # first sight you re not human
         vid_ret.append({'pred_class':vid_class, 'pred_masks': vid_mask})
 
         for i in range(self.nlayers):
             level_index = i % len(self.memory_scales)
-            frame_cross_attn_mask[torch.where(frame_cross_attn_mask.sum(-1) == frame_cross_attn_mask.shape[-1])] = False 
+            attn_mask[torch.where(attn_mask.sum(-1) == attn_mask.shape[-1])] = False  # 全masked掉的 全注意, 比如有padding
 
-            frame_query_feats = self.frame_cross_layers[i](
-                tgt=frame_query_feats, # nqf bt c
-                memory=memories[level_index], # hw bt c
-                memory_mask=frame_cross_attn_mask, 
+            temporal_query_feats = self.cross_layers[i](
+                tgt=temporal_query_feats, # nq b c
+                memory=memories[level_index],  # thw b c
+                memory_mask=attn_mask,  # b*h nq thw
                 memory_key_padding_mask=None,
-                pos=memories_poses[level_index], 
-                query_pos=frame_query_poses,
+                pos=memories_poses[level_index], # thw b c
+                query_pos=temporal_query_poses, # nq b c
             )
-            frame_query_feats = self.temporal_self_layers[i](
-                frame_query_feats=frame_query_feats, 
-                frame_query_poses=frame_query_poses,
-                nf=nf
+            temporal_query_feats = self.self_layers[i](
+                temporal_query_feats,
+                tgt_mask=None,
+                tgt_key_padding_mask=None,
+                query_pos=temporal_query_poses,
             )
-
-            temporal_query_feats = self.temporal_cross_layers[i](
-                temporal_query_feats=temporal_query_feats, 
-                temporal_query_poses=temporal_query_poses,
-
-                frame_query_feats=frame_query_feats,
-                frame_query_poses=frame_query_poses,
+            temporal_query_feats = self.ffn_layers[i](
+                temporal_query_feats 
             )
-
-            # b nq class, b nq h w
-            vid_class, vid_mask, frame_cross_attn_mask = \
-                self.forward_heads(frame_query_feats=frame_query_feats, 
-                                temporal_query_feats=temporal_query_feats,
-                                mask_features=mask_features, attn_mask_target_size=size_list[(i + 1) % len(self.memory_scales)]) # first sight you re not human
+            # b nq class, b nq t h w
+            vid_class, vid_mask, attn_mask = \
+                self.forward_heads(temporal_query_feats=temporal_query_feats,
+                                  mask_features=mask_features, attn_mask_target_size=size_list[(i + 1) % len(self.memory_scales)]) # first sight you re not human
             vid_ret.append({'pred_class':vid_class, 'pred_masks': vid_mask})
         
         return vid_ret
 
-    def forward_heads(self, frame_query_feats, temporal_query_feats,  mask_features, attn_mask_target_size):
-        nf = mask_features.shape[2]
-        frame_query_feats = self.frame_query_norm(frame_query_feats) # nqf bt c
-        frame_query_feats = frame_query_feats.transpose(0, 1).contiguous() # bt nqf c
-        frame_mask_logits = torch.einsum("bqc,bchw->bqhw", frame_query_feats, mask_features.permute(0, 2,1,3,4).flatten(0,1))  #bt nq h w
+    def forward_heads(self, temporal_query_feats,  mask_features, attn_mask_target_size): # nq b c; b c t h w
+        batch_size, _, nf, *_ = mask_features.shape
+
+        temporal_query_feats = self.temporal_query_norm(temporal_query_feats) # nq b c
+        temporal_query_feats = temporal_query_feats.transpose(0, 1).contiguous() # b nq c
+
+        class_logits = self.query_class(temporal_query_feats) if 'class' in self.head_outputs else None # b n class+1
+        mask_embeds = self.query_mask(temporal_query_feats)  # b n c
+        mask_logits = torch.einsum("bqc,bcthw->bqthw", mask_embeds, mask_features) 
+        batch_size, nq, nf = mask_logits.shape[:3]
+        mask_logits = F.interpolate(mask_logits.flatten(0, 1), scale_factor=self.mask_spatial_stride, mode='bilinear', align_corners=False)
+        mask_logits = rearrange(mask_logits, '(b n) t h w -> b t n h w',b=batch_size, n=nq)
 
         # bt nq h w
-        attn_mask = frame_mask_logits.detach().clone() 
-        attn_mask = F.interpolate(attn_mask, size=attn_mask_target_size, mode="bilinear", align_corners=False)
-        # b*head nq hw
-        attn_mask = (attn_mask.flatten(2).unsqueeze(1).repeat(1, self.nheads, 1, 1).flatten(0, 1).sigmoid() < 0.5).bool()
+        attn_mask = mask_logits.detach().clone().flatten(0, 1)
+        attn_mask = (F.interpolate(attn_mask, size=attn_mask_target_size, mode="bilinear", align_corners=False) < 0.5).bool()
+        attn_mask = repeat(attn_mask, '(b t) nq h w -> (b head) nq (t h w)', b=batch_size, t=nf, head=self.nheads)
         
+        if self.training:
+            return class_logits, mask_logits, attn_mask
+        else:
+            return class_logits.softmax(-1).unsqueeze(1).repeat(1, nf, 1, 1) if class_logits is not None else None, mask_logits, attn_mask
+    
+    def compute_loss(self, outputs, targets, video_aux_dict, **kwargs):
+        assert self.training
+        return self.loss_module.compute_loss(model_outs=outputs,
+                                             targets=targets,
+                                             video_aux_dict=video_aux_dict)
+
+
+
+@META_ARCH_REGISTRY.register()
+class Video_MaskedAttn_MultiscaleMaskDecoder_v4(nn.Module):
+    def __init__(self,
+                 configs,
+                 multiscale_shapes):
+        super().__init__()
+        d_model = configs['d_model']
+        attn_configs = configs['attn']
+        self.video_nqueries = configs['video_nqueries']
+        self.nlayers = configs['nlayers']
+        self.mask_scale = configs['mask_scale']
+        self.mask_spatial_stride = multiscale_shapes[self.mask_scale].spatial_stride
+        num_classes = configs['num_classes']
+        from models.layers.anyc_trans import Linear_NormAct
+        self.input_projs = _get_clones(Linear_NormAct(in_features=d_model, out_features=d_model, norm='ln'), 3)
+        self.cross_layers = _get_clones(CrossAttentionLayer(d_model=d_model,
+                                                            nhead=attn_configs['nheads'],
+                                                            dropout=0.0,
+                                                            normalize_before=attn_configs['normalize_before']),
+                                        self.nlayers)
+        self.self_layers = _get_clones(SelfAttentionLayer(d_model=d_model,
+                                                          nhead=attn_configs['nheads'],
+                                                          dropout=0.0,
+                                                          normalize_before=attn_configs['normalize_before']),
+                                       self.nlayers)  
+        self.ffn_layers = _get_clones(FFNLayer(d_model=d_model,
+                                               dim_feedforward=attn_configs['dim_feedforward'],
+                                               dropout=0.0,
+                                               normalize_before=attn_configs['normalize_before']),
+                                      self.nlayers) 
+                  
+        self.nheads = attn_configs['nheads']
+        self.temporal_query_poses = nn.Embedding(self.video_nqueries, d_model)
+        self.temporal_query_feats = nn.Embedding(self.video_nqueries, d_model)
+        self.temporal_query_norm = nn.LayerNorm(d_model)
+        
+        self.head_outputs = configs['head_outputs']
+        assert 'mask' in self.head_outputs
+        self.query_mask = MLP(d_model, d_model, d_model, 3)
+        if 'class' in self.head_outputs:
+            self.query_class = nn.Linear(d_model, num_classes + 1)    
+
+        self.loss_module = Video_SetMatchingLoss(loss_config=configs['loss'], num_classes=num_classes)
+        
+    @property
+    def device(self,):
+        return self.temporal_query_feats.weight.device
+
+    def get_memories_and_mask_features(self, multiscales):
+        # b c t h w 
+        memories = [multiscales[scale] for scale in self.memory_scales]
+        size_list = [mem_feat.shape[-2:] for mem_feat in memories]
+        memories_poses = [self.pos_3d(mem.permute(0, 2, 1,3, 4)).permute(0, 2, 1, 3, 4) for mem in memories]  # b c t h w
+        memories = [rearrange(mem, 'b c t h w -> (t h w) b c').contiguous() for mem in memories]
+        memories_poses = [rearrange(mem_pos, 'b c t h w -> (t h w) b c').contiguous() for mem_pos in memories_poses]
+        mask_features = multiscales[self.mask_scale] # b c t h w
+        return memories, memories_poses, mask_features, size_list
+
+    def forward(self, 
+                encoder_output, # b c t h w
+                video_aux_dict=None
+                ):
+        multiscales = encoder_output[0]
+        memory = []  # nqf bt c
+        for idx, proj in enumerate(self.input_projs):
+            memory.append(proj(encoder_output[1][idx]))
+        
+        frame_poses = encoder_output[2] # nq bt c
+        mask_features = multiscales[self.mask_scale] # b c t h w
+        batch_size, _, nf, *_ = mask_features.shape
+        memory = [rearrange(haosen, 'nqf (b t) c -> (t nqf) b c', t=nf, b=batch_size) for haosen in memory]
+        frame_poses = rearrange(frame_poses, 'nqf (b t) c -> (t nqf) b c', t=nf, b=batch_size)
+        # nq b c
+        temporal_query_poses = self.temporal_query_poses.weight.unsqueeze(1).repeat(1, batch_size, 1)
+        temporal_query_feats = self.temporal_query_feats.weight.unsqueeze(1).repeat(1, batch_size, 1)
+
+        vid_ret = []
+        # b nq class, b nq t h w
+        vid_class, vid_mask = \
+            self.forward_heads(temporal_query_feats=temporal_query_feats, mask_features=mask_features,) # first sight you re not human
+        vid_ret.append({'pred_class':vid_class, 'pred_masks': vid_mask})
+
+        for i in range(self.nlayers):
+            level_index = i % len(memory)
+
+            temporal_query_feats = self.cross_layers[i](
+                tgt=temporal_query_feats, # nq b c
+                memory=memory[level_index],  # t_nqf b c
+                memory_mask=None,  # b*h nq thw
+                memory_key_padding_mask=None,
+                pos=frame_poses, # thw b c
+                query_pos=temporal_query_poses, # nq b c
+            )
+            temporal_query_feats = self.self_layers[i](
+                temporal_query_feats,
+                tgt_mask=None,
+                tgt_key_padding_mask=None,
+                query_pos=temporal_query_poses,
+            )
+            temporal_query_feats = self.ffn_layers[i](
+                temporal_query_feats 
+            )
+            # b nq class, b nq t h w
+            vid_class, vid_mask = \
+                self.forward_heads(temporal_query_feats=temporal_query_feats, mask_features=mask_features) # first sight you re not human
+            vid_ret.append({'pred_class':vid_class, 'pred_masks': vid_mask})
+        
+        return vid_ret
+
+    def forward_heads(self, temporal_query_feats,  mask_features): # nq b c; b c t h w
+        batch_size, _, nf, *_ = mask_features.shape
 
         temporal_query_feats = self.temporal_query_norm(temporal_query_feats) # nq b c
         temporal_query_feats = temporal_query_feats.transpose(0, 1).contiguous() # b nq c
@@ -642,9 +660,9 @@ class Video_MaskedAttn_MultiscaleMaskDecoder_v2(nn.Module):
         mask_logits = rearrange(mask_logits, '(b n) t h w -> b t n h w',b=batch_size, n=nq)
 
         if self.training:
-            return class_logits, mask_logits, attn_mask
+            return class_logits, mask_logits
         else:
-            return class_logits.softmax(-1).unsqueeze(1).repeat(1, nf, 1, 1) if class_logits is not None else None, mask_logits, attn_mask
+            return class_logits.softmax(-1).unsqueeze(1).repeat(1, nf, 1, 1) if class_logits is not None else None, mask_logits
     
     def compute_loss(self, outputs, targets, video_aux_dict, **kwargs):
         assert self.training

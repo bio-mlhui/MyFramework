@@ -24,13 +24,15 @@ SET_NAME = ['polyp_train',
          'polyp_easy_seen_validate', 
          'polyp_easy_unseen_validate',
 
+        'polyp_hard_validate',
+        'polyp_easy_validate',
          'Kvasir-train',
          'Mayo-train',
          '300-train',
-         'CVC-612-train',
+         '612-train',
          '300-tv',
-         'CVC-612-test',
-         'CVC-612-val'
+         '612-test',
+         '612-val'
          ]
 
 SET_NAME_TO_DIR = {
@@ -39,6 +41,9 @@ SET_NAME_TO_DIR = {
     'polyp_hard_unseen_validate': 'TestHardDataset/Unseen',
     'polyp_easy_seen_validate': 'TestEasyDataset/Seen',
     'polyp_easy_unseen_validate': 'TestEasyDataset/Unseen',
+    
+    'polyp_hard_validate': 'TestHardDataset/Combine',
+    'polyp_easy_validate': 'TestEasyDataset/Combine',
     
     'Kvasir-train': 'MICCAI-VPS-dataset/Kvasir-SEG',
     'Mayo-train': 'MICCAI-VPS-dataset/VPS-TrainSet/ASU-Mayo_Clinic/Train',
@@ -55,7 +60,8 @@ SET_NAME_TO_NUM_VIDEOS = {
     'polyp_hard_unseen_validate': 37,
     'polyp_easy_seen_validate': 33,
     'polyp_easy_unseen_validate': 86,
-    
+    'polyp_hard_validate': 54,
+    'polyp_easy_validate': 119,
     'Kvasir-train': 1,
     'Mayo-train': 10,
     '300-train': 6,
@@ -71,6 +77,8 @@ SET_NAME_TO_MODE = {
     'polyp_hard_unseen_validate': 'evaluate',
     'polyp_easy_seen_validate': 'evaluate',
     'polyp_easy_unseen_validate': 'evaluate',
+    'polyp_hard_validate': 'evaluate',
+    'polyp_easy_validate': 'evaluate',
     'Kvasir-train': 'train',
     'Mayo-train': 'train',
     '300-train': 'train',
@@ -86,7 +94,8 @@ SET_NAME_TO_PREFIX = {
     'polyp_hard_unseen_validate': 'polyp_hard_unseen_validate',
     'polyp_easy_seen_validate': 'polyp_easy_seen_validate',
     'polyp_easy_unseen_validate': 'polyp_easy_unseen_validate',
-    
+    'polyp_hard_validate': 'polyp_hard_validate',
+    'polyp_easy_validate': 'polyp_easy_validate',
     'Kvasir-train': 'Kvasir-train',
     'Mayo-train': 'Mayo-train',
     '300-train': '300-train',

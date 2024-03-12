@@ -16,3 +16,7 @@ from .mask2former_video import (
 from .mask2former_video2 import (
     Video_MaskedAttn_MultiscaleMaskDecoder_v2
 )
+
+from .mask2former_video3 import (
+    Video_MaskedAttn_MultiscaleMaskDecoder_v3, Video_MaskedAttn_MultiscaleMaskDecoder_v4
+)

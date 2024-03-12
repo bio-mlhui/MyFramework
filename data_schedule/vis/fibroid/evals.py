@@ -119,6 +119,8 @@ def fibroid_metric_aggregator(metrics_by_vid_frame, dataset_meta, eval_meta_keys
         mean_iou_by_each_video[video] = torch.tensor([metrics_by_vid_frame[video][fname]['iou'] for fname in eval_meta_keys[video]]).mean()
         mean_dice_by_each_video[video] = torch.tensor([metrics_by_vid_frame[video][fname]['dice'] for fname in eval_meta_keys[video]]).mean()
     
+    mean_iou_by_each_video = dict(sorted(mean_iou_by_each_video.items(), key=lambda x: x[1]))
+    mean_dice_by_each_video = dict(sorted(mean_dice_by_each_video.items(), key=lambda x: x[1]))
     logging.debug(f'mean_iou_by_each_video: {mean_iou_by_each_video}')
     logging.debug(f'mean_dice_by_each_video: {mean_dice_by_each_video}')
     return eval_metrics

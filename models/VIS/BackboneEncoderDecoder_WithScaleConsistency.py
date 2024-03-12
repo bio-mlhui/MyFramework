@@ -72,7 +72,7 @@ class BackboneEncoderDecoder_WithScaleConsistency(nn.Module):
         # b 3 t h w -> b 3 t h w
         multiscales = self.video_backbone(x=videos) # b c t h w
         multiscales = self.fusion_encoder(multiscales, video_aux_dict=video_aux_dict) 
-        return self.decoder(multiscales)
+        return self.decoder(multiscales, video_aux_dict=video_aux_dict)
 
     def forward(self, batch_dict):
         assert self.training

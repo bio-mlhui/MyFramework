@@ -567,6 +567,7 @@ class Video_MaskedAttn_MultiscaleMaskDecoder(nn.Module):
 
     def forward(self, 
                 multiscales, # b c t h w
+                video_aux_dict=None
                 ):
         multiscales = self.inputs_projs(multiscales)
         batch_size, _, nf = multiscales[list(multiscales.keys())[0]].shape[:3]
@@ -606,7 +607,8 @@ class Video_MaskedAttn_MultiscaleMaskDecoder(nn.Module):
             frame_query_feats = self.temporal_self_layers[i](
                 frame_query_feats=frame_query_feats, 
                 frame_query_poses=frame_query_poses,
-                nf=nf
+                nf=nf,
+                video_aux_dict=video_aux_dict,
             )
 
             temporal_query_feats = self.temporal_cross_layers[i](
@@ -617,7 +619,6 @@ class Video_MaskedAttn_MultiscaleMaskDecoder(nn.Module):
                 frame_query_poses=frame_query_poses,
             )
 
-            vid_ret = []
             # b nq class, b nq h w
             vid_class, vid_mask, frame_cross_attn_mask = \
                 self.forward_heads(frame_query_feats=frame_query_feats, 

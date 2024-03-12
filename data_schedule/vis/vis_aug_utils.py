@@ -46,7 +46,7 @@ def get_tgt_size(image_size, size, max_size=None):
     else:
         return get_size_with_aspect_ratio(image_size, size, max_size)
 
-def pil_torch_to_numpy(video, masks, has_ann):
+def pil_torch_to_numpy(video, masks, has_ann, float_image=True):
     # n t' h w
     # list[pil_image, rgb], t
     # t
@@ -62,8 +62,12 @@ def pil_torch_to_numpy(video, masks, has_ann):
             fnumpy_masks.append(mk.numpy().astype(np.uint8))
         numpy_masks[taylor] = fnumpy_masks
     
-    # list[h w 3, 0-1float], t
-    video = [F.to_tensor(frame).permute(1,2,0).numpy() for frame in video]
+    if float_image:
+        # list[h w 3, 0-1float], t
+        video = [F.to_tensor(frame).permute(1,2,0).numpy() for frame in video]
+    else:
+        # uint8
+        video = [np.array(frame) for frame in video]
     
     return video, numpy_masks
 

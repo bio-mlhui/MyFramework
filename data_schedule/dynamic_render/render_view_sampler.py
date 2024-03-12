@@ -1,26 +1,6 @@
 
 from detectron2.utils.registry import Registry
-import random
-import numpy as np
-import torch
-import logging
-from detectron2.utils import comm
-""" 
-frame_idx, all_frames -> frames
-包含怎么抽其他帧, 
-    method, position,
-合法的定义,
-    naive sampler是指不借助任何model, data 选择其他帧, 没有任何其他知识, 
-    比如要用到optical flow确定动作的快慢, 动作快的抽的scale大一些, 动作小的丑的scale小一些
-    比如要用到其他model, 或者model内部的一些知识, 则需要把sample放到model里, model的接口也要变
-frame_sampler 训练和测试
-"""
-VIS_FRAMES_SAMPLER_REGISTRY = Registry('VIS_FRAMES_SAMPLER')
-
-import random
-class Frames_Sampler:
-    def __init__(self) -> None:
-        pass
+RENDER_FRAMES_SAMPLER_REGISTRY = Registry('RENDER_FRAMES_SAMPLER')
 
 @VIS_FRAMES_SAMPLER_REGISTRY.register()
 class Naive_ReferenceFrame_FrameSampler:
@@ -38,9 +18,10 @@ class Naive_ReferenceFrame_FrameSampler:
                                             'weakpolyp_fibroid_train_step[1]',
                                             'fibroid_validate_step[1]',
                                             'fibroid_train_step[1]',
-
-                                            'fibroid_train_temp7_step[1]',
-                                            'fibroid_train_temp8_step[1]',
+                                            'Kvasir-train_step[1]',
+                                            'Mayo-train_step[6]', '300-train_step[6]', '612-train_step[6]',
+                                            'fibroid_train_temp7_step[6]',
+                                            'fibroid_train_temp8_step[6]',
                                             'fibroid_train_temp9_step[1]',
                                             'fibroid_train_temp10_step[1]',
 

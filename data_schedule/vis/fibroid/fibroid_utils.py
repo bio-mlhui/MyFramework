@@ -37,7 +37,7 @@ SET_NAME = [
 
         'fibroid_validate_temp7',
         'fibroid_train_temp7',
-        'weakpolyp_fibroid_train_temp7',
+        # 'weakpolyp_fibroid_train_temp7',
 
         'fibroid_validate_temp8',
         'fibroid_train_temp8',
@@ -66,9 +66,9 @@ SET_NAME_TO_NUM_VIDEOS = {
     'weakpolyp_train': 80,
 
 
-    'fibroid_train_temp7': 83,
-    'fibroid_validate_temp7': 17,
-    'weakpolyp_fibroid_train_temp7': 83 ,     
+    'fibroid_train_temp7': 85,
+    'fibroid_validate_temp7': 15,
+    'weakpolyp_fibroid_train_temp7': 85 ,     
 
 
     'fibroid_train_temp8': 83,
