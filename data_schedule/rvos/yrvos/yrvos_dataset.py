@@ -10,10 +10,12 @@ import copy
 from detectron2.data import DatasetCatalog, MetadataCatalog
 from collections import defaultdict
 from .yrvos_utils import YRVOS_CATEGORIES, YRVOS_TRAIN_VIDEO_IDS, YRVOS_TEST_VIDEO_IDS,\
-                check_yrvos_validity, visualize_youtube_rvos, get_frames, get_frames_mask, normalize_text, get_each_obj_appear_frame_idxs
+                check_yrvos_validity, visualize_youtube_rvos, \
+                    get_frames, get_frames_mask, normalize_text, get_each_obj_appear_frame_idxs, connect_vid_text, disconnect_vid_text
 from data_schedule.rvos.apis import RVOS_Dataset
-from data_schedule.rvos.evaluate_utils import generate_coco_gt_file
 
+# 数据集的mask标注的每个instance必须是从1,2,3,4; 0是没有标注的地方(background)
+# 保证 obj_ids是int而不是string, 并且等于mask图片上的int
 
 def yrvos_train(root, 
                 for_each_refer_text,
@@ -21,30 +23,30 @@ def yrvos_train(root,
                 split_dataset_name,
                 video_ids):
     check_yrvos_validity(root)
-    # visualize_youtube_rvos_train_set,, 在logging.debug(yrvos_train_info)
     with open(os.path.join(root, 'meta_expressions', 'train', f'meta_expressions.json'), 'r') as f:
         video_to_texts = json.load(f)['videos']  
-    # {video_id: expressions: {exp_id: exp, obj_id:str}, 
-    #            frames: []}
+    # {video_id: expressions: {exp_id: exp, obj_id:str},  frames: []}
     with open(os.path.join(root, 'train', f'meta.json'), 'r') as f:
         video_to_objs = json.load(f)['videos']
     # {video_id: objects: {obj_id: {category, frames}} 
 
     logging.debug(f'{split_dataset_name} Generating metas...')   
     metas = []
-    for vid_id in tqdm(video_ids):
+    for vid_id in video_ids:
         all_frames = sorted(video_to_texts[vid_id]['frames'])
         all_exps = video_to_texts[vid_id]['expressions'] # {exp_id: exp, obj_id}
         assert len(set(list(all_exps.keys()))) == len(list(all_exps.keys()))
-        all_exps = {exp_id: {'exp': all_exps[exp_id]['exp'], 'obj_ids': [int(all_exps[exp_id]['obj_id'])],} # youtube_rvos只有一个物体
-                            for exp_id in all_exps.keys()}
         all_objs = video_to_objs[vid_id]['objects'] # {obj_id: {category, frames}
-        assert len(set(list(all_objs.keys()))) == len(list(all_objs.keys()))
+        all_obj_ids = list(all_objs.keys())
+        assert len(set(all_obj_ids)) == len(all_obj_ids)
+        
         all_objs = {int(obj_id): {'class_label': YRVOS_CATEGORIES[all_objs[obj_id]['category']]}
                             for obj_id in all_objs.keys()} # 不要假设连续
+        assert 0 not in list(all_objs.keys())
+        all_exps = {exp_id: {'exp': all_exps[exp_id]['exp'], 'obj_ids': [int(all_exps[exp_id]['obj_id'])],} # youtube_rvos只有一个物体
+                            for exp_id in all_exps.keys()}
         if step_size is None:
             if for_each_refer_text:
-                RVOS_Dataset
                 for exp_id in all_exps.keys():
                     metas.append({
                         'video_id': vid_id,
@@ -52,10 +54,9 @@ def yrvos_train(root,
                         'referent_objs': all_exps[exp_id]['obj_ids'],
                         'all_frames' : all_frames,
                         'all_objs': all_objs,
-                        'meta_idx': len(metas)
+                        'meta_idx': len(metas),
                     })    
             else:
-                RVOS_Dataset
                 metas.append({
                     'video_id': vid_id,
                     'all_frames' : all_frames,
@@ -96,40 +97,31 @@ def yrvos_train(root,
 def yrvos_evaluate(root,
                    eval_video_ids,
                    split_dataset_name,
-                   step_size,
-                   for_each_refer):
-    assert for_each_refer
+                   step_size,):
     if (step_size is not None) and (step_size > 1):
         logging.warning('为什么 evaluate的时候step size大于1呢')
         raise ValueError()
     check_yrvos_validity(root)
-    if 'validate' in split_dataset_name:
-        with open(os.path.join(root, 'meta_expressions', 'train', 'meta_expressions.json'), 'r') as f:
-            video_to_texts = json.load(f)['videos']           
-        # {video_id: expressions: {exp_id: exp}, 
-        #            frames: []}
-        coco_file_name = os.path.join(root, f'{split_dataset_name}_coco_gt.json')
-        raise NotImplementedError()
-        generate_coco_gt_file(get_frames_mask_fn=MetadataCatalog.get(split_dataset_name).get('get_frames_mask_fn'),
-                              video_to_texts=video_to_texts, coco_file_name=coco_file_name,
-                              video_ids=eval_video_ids)
+    # if 'validate' in split_dataset_name:
+    #     with open(os.path.join(root, 'meta_expressions', 'train', 'meta_expressions.json'), 'r') as f:
+    #         video_to_texts = json.load(f)['videos']           
+    #     # {video_id: expressions: {exp_id: exp}, 
+    #     #            frames: []}
+    #     coco_file_name = os.path.join(root, f'{split_dataset_name}_coco_gt.json')
+    #     raise NotImplementedError()
+    #     generate_coco_gt_file(get_frames_mask_fn=MetadataCatalog.get(split_dataset_name).get('get_frames_mask_fn'),
+    #                           video_to_texts=video_to_texts, coco_file_name=coco_file_name,
+    #                           video_ids=eval_video_ids)
 
-    elif 'test' in split_dataset_name:
-        with open(os.path.join(root, 'meta_expressions', 'valid', 'meta_expressions.json'), 'r') as f:
-            video_to_texts = json.load(f)['videos'] 
-        # {video_id: expressions: {exp_id: exp}, 
-        #            frames: []}  
-    else:
-        raise ValueError()
+    with open(os.path.join(root, 'meta_expressions', 'valid', 'meta_expressions.json'), 'r') as f:
+        video_to_texts = json.load(f)['videos'] 
+    # {video_id: expressions: {exp_id: exp}, frames: []}  
 
     metas = []
     for video_id in eval_video_ids:
-        # {video_id: expressions: {exp_id: exp}, 
-        #            frames: []}
         all_frames = sorted(video_to_texts[video_id]['frames'])
         all_exps = video_to_texts[video_id]['expressions'] 
         if step_size == None:
-            RVOS_Dataset
             for exp_id in all_exps.keys():
                 metas.append({
                     'video_id': video_id,
@@ -139,8 +131,7 @@ def yrvos_evaluate(root,
                     'meta_idx': len(metas)
                 })
     
-        else:   
-            RVOS_Dataset 
+        else:    
             for exp_id in all_exps.keys():
                 for frame_idx in range(0, len(all_frames), step_size):
                     metas.append({
@@ -177,11 +168,13 @@ def yrvos_evaluate(root,
 _root = os.getenv('DATASET_PATH')
 root = os.path.join(_root, 'youtube_rvos')
 yrvos_meta = {
+    'root': root,
     'category_to_ids':YRVOS_CATEGORIES,
     'thing_classes': ['refer', 'not_refer'],
     'thing_colors': [(255., 140., 0.), (0., 255., 0.)],
     'normalize_text_fn': normalize_text,
-    'root': root
+    'connect_vidText_fn': connect_vid_text,
+    'disconnect_vidText_fn': disconnect_vid_text,
 }
 
 visualize_meta_idxs = defaultdict(list)
@@ -212,36 +205,26 @@ test_meta.update({
 # test eval_meta_keys
 with open(os.path.join(root, 'meta_expressions', 'valid', 'meta_expressions.json'), 'r') as f:
     test_video_to_exps = json.load(f)['videos']
-# {video_id: expressions: {exp_id: exp}, 
-#            frames: []}
-eval_meta_keys = []
+
+eval_meta_keys = {} # vidText: frame
 for eval_vid in YRVOS_TEST_VIDEO_IDS:
-    vid_expressions = test_video_to_exps[eval_vid]['expressions']
-    vid_frames = test_video_to_exps[eval_vid]['frames']
-    for eval_vid_exp_id in vid_expressions.keys():
-        for eval_vid_frame in vid_frames:
-            eval_meta_keys.append(f'{eval_vid}_{eval_vid_frame}_{eval_vid_exp_id}')
-assert len(eval_meta_keys) == 22046
+    for eval_exp_id in  test_video_to_exps[eval_vid]['expressions'].keys():
+        eval_meta_keys[connect_vid_text(eval_vid, eval_exp_id)] = sorted(test_video_to_exps[eval_vid]['frames'])
+assert sum([len(eval_meta_keys[key]) for key in eval_meta_keys.keys()]) == 22046
 for step_size in [1, None,]:
     step_identifer = '' if step_size is None else f'_step[{step_size}]'
     split_name = f'yrvos_test{step_identifer}_ForEachRefer'
     DatasetCatalog.register(split_name, partial(yrvos_evaluate,
                                                 eval_video_ids=YRVOS_TEST_VIDEO_IDS, 
                                                 split_dataset_name=split_name,
-                                                root=root, 
                                                 step_size=step_size,
-                                                for_each_refer=True))    
+                                                root=root))    
     MetadataCatalog.get(split_name).set(**test_meta, step_size=step_size,
                                         eval_meta_keys = eval_meta_keys,
                                         visualize_meta_idxs=visualize_meta_idxs[split_name])
 
-
-    
-# train
-# 
 for step_size in  [1, 6, 12, 18, None]:
     step_identifer = '' if step_size is None else f'_step[{step_size}]'
-
     for wfer in [True, False]:
         wfer_postfix = '_ForEachRefer' if wfer else '_AllExistsText'
         split_name = f'yrvos_train{step_identifer}{wfer_postfix}'

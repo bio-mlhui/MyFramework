@@ -28,7 +28,7 @@ class FrameQuerySwin(nn.Module):
         self.window_size = configs['window_size']
         d_model = configs['d_model']
         inputs_projs_config = configs['inputs_projs']
-
+        self.num_heads = swin_attn['nheads']
         self.attn_layers = _get_clones(SelfAttentionLayer(d_model=d_model,
                                                           nhead=swin_attn['nheads'],
                                                           dropout=0.0,
@@ -41,24 +41,30 @@ class FrameQuerySwin(nn.Module):
                                                activation=swin_attn['activation'],
                                                normalize_before=swin_attn['normalize_before']),
                                       self.nlayers)  
-        self.inputs_proj = META_ARCH_REGISTRY.get(inputs_projs_config['name'])(inputs_projs_config,
-                                                                             out_dim=d_model, text_dim=None, )
+        if inputs_projs_config is not None:
+            self.inputs_proj = META_ARCH_REGISTRY.get(inputs_projs_config['name'])(inputs_projs_config,
+                                                                                out_dim=d_model, text_dim=None, )
+        else:
+            self.inputs_proj = nn.Sequential()
+            
         self.fusion_module = fusion_module
 
     def forward(self,
                 frame_query_by_layer=None, # list[b t nq c]
                 text_inputs=None):
         B, T, nqf, _ = frame_query_by_layer[0].shape
-        # list[b t nq c]
-        frame_query = frame_query_by_layer[-self.used_layers:] # 训练的时候用后三层, 测试的时候用最后一层
-        L = len(frame_query)
-        frame_query = torch.stack(frame_query, dim=0).flatten(0, 1) # lb t nq c
-        frame_query = self.input_proj(frame_query)
-
-        if self.early_fusion[0] is not None:
-            frame_query, text_inputs = self.early_fusion[0](frame_queries=frame_query,
-                                                            is_video_frame_query=True,
-                                                            text_inputs=text_inputs)
+        L = len(frame_query_by_layer)
+        frame_query = torch.stack(frame_query_by_layer, dim=0).flatten(0, 1) # lb t nq c
+        frame_query, amr_feats, text_feats = self.fusion_module(frame_queries=frame_query,
+                                                                    is_video_frame_query=True,
+                                                                    time_pad=torch.zeros_like(frame_query[:, :, 0, 0]).bool(), # b t
+                                                                    text_feats=text_inputs.text_feats,
+                                                                    text_pad_masks=text_inputs.text_pad_masks,
+                                                                    amrs=text_inputs.amr,
+                                                                    amr_token_feats=text_inputs.amr_feats,
+                                                                    amr_token_seg_ids=text_inputs.amr_seg_ids,)
+        text_inputs.amr_feats = amr_feats
+        text_inputs.text_feats = text_feats
             
         frame_query = frame_query.permute(1, 2, 0, 3).contiguous() # t nq lb c
 
@@ -73,7 +79,8 @@ class FrameQuerySwin(nn.Module):
 
         # t nq LB c
         frame_query, text_inputs = self.encode_frame_query(frame_query, enc_mask, text_inputs)
-        frame_query = frame_query[:T].flatten(0,1)              # tnq LB c
+        frame_query = frame_query[:T]          # t nq LB c
+        frame_query = frame_query.permute(2, 0, 1, 3)
 
         return frame_query, text_inputs
 
@@ -88,13 +95,6 @@ class FrameQuerySwin(nn.Module):
             frame_query = frame_query.flatten(0, 1)
             for i in range(self.nlayers):
                 frame_query = self.attn_layers[i](frame_query) # (t nqf) b c
-                if self.layer_fusion_modules[i] is not None:
-                    frame_query = rearrange(frame_query, '(t nq) b c -> b t nq c',t=t_pad)
-                    frame_query, text_inputs = self.layer_fusion_modules[i](frame_queries=frame_query,
-                                                                    is_video_frame_query=True,
-                                                                    time_pad = attn_mask, # b t
-                                                                    text_inputs=text_inputs)
-                    frame_query = rearrange(frame_query, 'b t nq c -> (t nq) b c')
                 frame_query = self.ffn_layers[i](frame_query)
             frame_query = frame_query.view(return_shape)
             return frame_query, text_inputs
@@ -121,13 +121,6 @@ class FrameQuerySwin(nn.Module):
                     frame_query = self._window_attn(frame_query, window_mask, layer_idx,)
                 else:
                     frame_query = self._shift_window_attn(frame_query, shift_window_mask, layer_idx,)
-                if self.layer_fusion_modules[layer_idx] is not None:
-                    frame_query = rearrange(frame_query, 't nq b c -> b t nq c')
-                    frame_query, text_inputs = self.layer_fusion_modules[layer_idx](frame_queries=frame_query, # b t nq c
-                                                                    is_video_frame_query=True,
-                                                                    time_pad = attn_mask, # b t
-                                                                    text_inputs=text_inputs)
-                    frame_query = rearrange(frame_query, 'b t nq c -> t nq b c')
                 frame_query = self.ffn_layers[layer_idx](frame_query)
             return frame_query, text_inputs
 

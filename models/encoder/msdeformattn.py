@@ -615,27 +615,31 @@ class VideoMultiscale_Text_Deform2d(nn.Module):
         self.output_convs = output_convs[::-1]
 
     def forward(self, 
-                multiscales=None, # b t c h w
+                multiscales=None, # b c t h w
                 text_inputs=None): 
         batch_size, _, nf, *_ = multiscales[list(self.multiscale_shapes.keys())[0]].shape
 
         assert set(list(multiscales.keys())).issubset(set(list(self.multiscale_shapes.keys())))
         assert set(list(self.multiscale_shapes.keys())).issubset(set(list(multiscales.keys())))
         # transform to 2d
-        encoded_scales = {scale: multiscales[scale].clone() for scale in self.encoded_scales}
-        encoded_scales, text_inputs = self.video_text_projs(encoded_scales, text_inputs)
-        # early fusion
-        # encoded_scales, text_dict = self.fusion_module(encoded_scales, text_dict)
-        # srcs, text_inputs = self.fusion_module(multiscale_feats=srcs, 
-        #                                             multiscale_poses=pos,
-        #                                             multiscale_is_flattened=False,
-        #                                             is_image_multiscale=True,
-        #                                             text_inputs=text_inputs)
-        # fusion的时候是 t h w 和 s 进行融合,  至于怎么融合是fusion module的事情
-    
-        # bt c h w
+        encoded_scales, text_inputs = self.video_text_projs(multiscales, text_inputs)
         encoded_scales = {key: value.permute(0, 2, 1, 3, 4).flatten(0, 1) for key, value in encoded_scales.items()}
-
+        # early fusion
+        encoded_scales, amr_feats, text_feats = self.fusion_module(multiscale_feats=[value for value in encoded_scales.values()],
+                                                                   # bt c h w
+                                                                   multiscale_poses=[self.pos_2d(torch.zeros_like(value)[:, 0, :, :].bool(), hidden_dim=value.shape[1]) \
+                                                                                     for value in encoded_scales.values()],
+                                                                    multiscale_is_flattened=False,
+                                                                    is_video_multiscale=True,
+                                                                    text_feats=text_inputs.text_feats,
+                                                                    text_pad_masks=text_inputs.text_pad_masks,
+                                                                    amrs=text_inputs.amr,
+                                                                    amr_token_feats=text_inputs.amr_feats,
+                                                                    amr_token_seg_ids=text_inputs.amr_seg_ids,)
+        encoded_scales = {key: value for key, value in zip(list(multiscales.keys()), encoded_scales)}
+        text_inputs.amr_feats = amr_feats
+        text_inputs.text_feats = text_feats
+    
         srcs = []
         poses = []
         for idx, scale_name in enumerate(self.encoded_scales[::-1]):

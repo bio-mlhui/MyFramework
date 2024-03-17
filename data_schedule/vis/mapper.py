@@ -34,6 +34,7 @@ class VIS_Video_EvalMapper(VIS_EvalMapper):
                                 'fibroid_validate_temp8',
                                 'fibroid_validate_temp7',
                                 'polyp_easy_validate', 'polyp_hard_validate',
+                                'visha_test'
                                 ]
         assert mode == 'evaluate'
         dataset_meta = MetadataCatalog.get(dataset_name)
@@ -92,7 +93,8 @@ class VIS_Video_or_Step_To_Clip_TrainMapper(VIS_TrainMapper):
                               'fibroid_train_temp8_step[6]',
                               'fibroid_train_temp7_step[6]',
                               'weakpolyp_fibroid_train_temp9_step[1]',
-                              'weakpolyp_fibroid_train_temp10_step[1]']
+                              'weakpolyp_fibroid_train_temp10_step[1]',
+                              'visha_train_step[6]']
         assert dataset_name in good_dataset_names
         assert mode == 'train'
         dataset_meta = MetadataCatalog.get(dataset_name)

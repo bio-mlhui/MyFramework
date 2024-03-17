@@ -44,7 +44,7 @@ class GaussianModel:
     # 第i个gs对位置x的opacity = 
     def __init__(self, sh_degree : int):
         self._scaling = torch.empty(0) # 3d vector
-        self._rotation = torch.empty(0) # uaternion, covariance
+        self._rotation = torch.empty(0) # quaternion
         self._opacity = torch.empty(0) # opcacity
         self._xyz = torch.empty(0) # position
         # sh_coeff

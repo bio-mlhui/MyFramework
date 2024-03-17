@@ -37,7 +37,7 @@ class RVOS_VideoForEachRefer_EvalMapper(RVOS_EvalMapper):
                  mode,
                  meta_idx_shift,
                  ): 
-        assert dataset_name in ['yrvos_test_ForEachRefer']
+        assert dataset_name in ['yrvos_test_ForEachRefer', 'a2ds_test_ForEachRefer']
         assert mode == 'evaluate'
         dataset_meta = MetadataCatalog.get(dataset_name)
         assert dataset_meta.get('step_size') == None
@@ -86,7 +86,7 @@ class RVOS_StepForEachRefer_EvalMapper(RVOS_EvalMapper):
                  dataset_name,
                  mode,
                  meta_idx_shift,) -> None:
-        assert dataset_name in ['yrvos_test_step[1]_ForEachRefer']
+        assert dataset_name in ['yrvos_test_step[1]_ForEachRefer', 'a2ds_test_step[1]_ForEachRefer']
         assert mode == 'evaluate'
         dataset_meta = MetadataCatalog.get(dataset_name)
         mapper_config = configs['data'][mode][dataset_name]['mapper']
@@ -94,6 +94,7 @@ class RVOS_StepForEachRefer_EvalMapper(RVOS_EvalMapper):
                          dataset_meta=dataset_meta,
                          mapper_config=mapper_config)
         assert dataset_meta.get('step_size') is not None 
+        self.all_request = mapper_config['all_request']
         self.frames_sampler = RVOS_FRAMES_SAMPLER_REGISTRY.get(mapper_config['frames_sampler']['name'])(sampler_configs=mapper_config['frames_sampler'],
                                                                                                        dataset_meta=dataset_meta)
 
@@ -108,8 +109,11 @@ class RVOS_StepForEachRefer_EvalMapper(RVOS_EvalMapper):
         video_frames_paths = self.frames_sampler(frame_idx=frame_idx, 
                                             all_frames=all_frames, 
                                             video_id=video_id,) # 各种frame_sampler需要的所有数据
-        request_ann = torch.zeros(len(video_frames_paths)).bool() # t
-        request_ann[video_frames_paths.index(all_frames[frame_idx])] = True
+        if self.all_request:
+            request_ann = torch.ones(len(video_frames_paths)).bool() # t
+        else:
+            request_ann = torch.zeros(len(video_frames_paths)).bool() # t
+            request_ann[video_frames_paths.index(all_frames[frame_idx])] = True
         video_frames = self.get_frames_fn(video_id=video_id, frames=video_frames_paths)
         aug_ret = {
             'video': video_frames,
@@ -177,8 +181,8 @@ class RVOS_Video_Or_Step_ForEachRefer_ClipForEachRefer_TrainMapper(RVOS_TrainMap
                 那么referent_objs 根据legimate_clip策略, appear index 进行修改
                 新的refenrt_objs是 是apper_index.index(ro) for ro in renfert_ojb
         """
-        good_dataset_names = ['yrvos_train_step[6]_ForEachRefer', 
-                              'yrvos_train_ForEachRefer']
+        good_dataset_names = ['yrvos_train_step[6]_ForEachRefer',  'yrvos_train_step[12]_ForEachRefer', 'yrvos_train_ForEachRefer',
+                              'a2ds_train_step[6]_ForEachRefer',]
         assert (dataset_name in good_dataset_names) and (mode == 'train')
         dataset_meta = MetadataCatalog.get(dataset_name)
         mapper_config = configs['data'][mode][dataset_name]['mapper']
@@ -191,12 +195,9 @@ class RVOS_Video_Or_Step_ForEachRefer_ClipForEachRefer_TrainMapper(RVOS_TrainMap
 
     def _call(self, data_dict):
         RVOS_Dataset
-        video_id, all_frames, referent_text, referent_objs, all_objs = \
-            data_dict['video_id'], data_dict['all_frames'], data_dict['referent_text'], \
-               data_dict['referent_objs'],  data_dict['all_objs']
-        
-        referent_text = self.normalize_text_fn(referent_text)
-
+        video_id, referent_text, referent_objs, all_objs, all_frames  = \
+            data_dict['video_id'], self.normalize_text_fn(data_dict['referent_text']), data_dict['referent_objs'], \
+                 data_dict['all_objs'], data_dict['all_frames'], 
         frame_idx = data_dict['frame_idx'] if 'frame_idx' in data_dict else None
 
         all_obj_ids = list(all_objs.keys()) # [1, 2, 5, 4]
@@ -216,22 +217,38 @@ class RVOS_Video_Or_Step_ForEachRefer_ClipForEachRefer_TrainMapper(RVOS_TrainMap
                                                  referent_objs=referent_objs, 
                                                  referent_text=referent_text,
                                                  all_obj_ids=all_obj_ids) # 各种frame_sampler需要的所有数据
-            # t' h w, int, obj_ids; has_ann t
-            frames_mask, has_ann = self.get_frames_mask_fn(video_id=video_id, frames=sampled_frames)
-            appear_objs = frames_mask.unique() # [0, 1, 2, 5, 4, 10]
-            assert set(appear_objs.tolist()).issubset(set([0] + all_obj_ids))
-            if self.legimate_clip == 'intersect_not_none':
-                re_sample = len(set(appear_objs.tolist()) & set(referent_objs)) == 0 # 出现了至少一个referent obj
-            elif self.legimate_clip == 'all_in':
-                re_sample = not (set(referent_objs).issubset(set(appear_objs.tolist()))) # # 比如必须 refer的多个物体必须同时出现
+            # t' h w, int, 0,1,2,3; has_ann t
+            return_format = self.get_frames_mask_fn(video_id=video_id, frames=sampled_frames, all_obj_ids=all_obj_ids)
+            if len(return_format) == 2:
+                frames_mask, has_ann = return_format
+                appear_objs = frames_mask.unique() # [0, 1, 2, 5, 4, 10]
+                assert set(appear_objs.tolist()).issubset(set([0] + all_obj_ids))
+                if self.legimate_clip == 'intersect_not_none':
+                    re_sample = len(set(appear_objs.tolist()) & set(referent_objs)) == 0 # 出现了至少一个referent obj
+                elif self.legimate_clip == 'all_in':
+                    re_sample = not (set(referent_objs).issubset(set(appear_objs.tolist()))) # # 比如必须 refer的多个物体必须同时出现
+                else:
+                    raise ValueError()
+                frames_mask = torch.stack([frames_mask == obj_id for obj_id in all_obj_ids], dim=0) # N t' h w, bool
+            elif len(return_format) == 3:
+                # N t' h w
+                obj_masks, has_ann, _ = return_format
+                ref_appear = torch.tensor([obj_masks[all_obj_ids.index(ref_obj_id)].any() for ref_obj_id in referent_objs])
+                if self.legimate_clip == 'intersect_not_none':
+                    re_sample = not (ref_appear.any())
+                elif self.legimate_clip == 'all_in':
+                    re_sample = not (ref_appear.all()) # # 比如必须 refer的多个物体必须同时出现
+                else:
+                    raise ValueError()
+                frames_mask = obj_masks
             else:
                 raise ValueError()
+                
             sampled_counts += 1
             if sampled_counts > 50:
                 logging.error('sampled two much times')
-                raise RuntimeError()
+                return None # another index
             
-        frames_mask = torch.stack([frames_mask == obj_id for obj_id in all_obj_ids], dim=0) # N t' h w, bool
         video_frames = self.get_frames_fn(video_id=video_id, frames=sampled_frames) # list[PIL.Image]
         width, height = video_frames[0].size
 
@@ -240,7 +257,7 @@ class RVOS_Video_Or_Step_ForEachRefer_ClipForEachRefer_TrainMapper(RVOS_TrainMap
             'referent_text': referent_text,
             'referent_objs': [all_obj_ids.index(ro) for ro in referent_objs], 
             'masks': frames_mask, # N t' h w, bool
-            'has_ann': has_ann, # t
+            'has_ann': has_ann, # t, 可以确定这个referent有没有出现在那个帧, 没有就是没有
             'classes': torch.tensor(class_labels), # N
         }
         RVOS_Aug_CallbackAPI

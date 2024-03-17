@@ -337,7 +337,8 @@ class Image_MaskedAttn_MultiscaleMaskDecoder(nn.Module):
         self.nheads = attn_configs['nheads']
         self.query_norm = nn.LayerNorm(d_model)
         self.pos_2d = build_position_encoding(position_embedding_name='2d')
-        self.loss_module = Image_SetMatchingLoss(loss_config=configs['loss'], num_classes=num_classes)
+        if 'loss' in configs:
+            self.loss_module = Image_SetMatchingLoss(loss_config=configs['loss'], num_classes=num_classes)
         
         self.head_outputs = configs['head_outputs']
         
@@ -458,6 +459,7 @@ class Video2D_Image_MaskedAttn_MultiscaleMaskDecoder(nn.Module):
             if 'class' in self.image_homo.head_outputs:
                 predictions[layer_idx]['pred_class'] = rearrange(predictions[layer_idx]['pred_class'],'(b t) nq c -> b t nq c',b=batch_size, t=nf)
             predictions[layer_idx]['pred_masks'] = rearrange(predictions[layer_idx]['pred_masks'], '(b t) nq h w -> b t nq h w',b=batch_size, t=nf)
+            predictions[layer_idx]['queries'] = rearrange(predictions[layer_idx]['queries'], '(b t) nq c -> b t nq c',b=batch_size, t=nf)
         return predictions      
     
     def compute_loss(self, predictions, targets, frame_targets):

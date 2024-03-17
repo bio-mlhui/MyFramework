@@ -17,7 +17,7 @@ import datetime
 import traceback
 import torch.distributed.rpc as dist_rpc
 import torch.distributed as dist
-from data_schedule import build_schedule
+
 from models import model_entrypoint
 from utils.misc import to_device
 
@@ -40,11 +40,13 @@ class Trainer:
         with torch.cuda.device(self.device):
             torch.cuda.manual_seed(seed)        
 
+
         # model and data
         create_model_schedule = model_entrypoint(configs['model']['name'])
         self.model, self.optimizer, self.scheduler, \
             self.train_samplers, self.train_loaders, self.log_lr_group_name_to_idx, \
         self.eval_function = create_model_schedule(configs, device=self.device,)
+
 
         # trainer
         self.eval_seed = configs['eval_seed']
@@ -77,7 +79,7 @@ class Trainer:
             metric_logger.add_meter('iteration_time', SmoothedValue(window_size=1,fmt='{value:2f}',handler='value') )
             logging.debug(f'模型的总参数数量:{sum(p.numel() for p in self.model.parameters())}')
             logging.debug(f'模型的可训练参数数量:{sum(p.numel() for p in self.model.parameters() if p.requires_grad)}')
-            for log_lr_group_name in log_lr_group_name_to_idx.keys():
+            for log_lr_group_name in self.log_lr_group_name_to_idx.keys():
                 metric_logger.add_meter(f'lr_group_{log_lr_group_name}', SmoothedValue(window_size=1,fmt='{value:.8f}', handler='value'))
             self.metric_logger = metric_logger
 

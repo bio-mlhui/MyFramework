@@ -55,6 +55,21 @@ class AMRData(object):
         text_pad_masks = repeat(text_pad_masks, 'b s -> (L b) s',L=repeats) if text_pad_masks is not None else None
 
         return AMRData(repeated_amrs, amr_seg_ids, amr_feats, text_feats, text_pad_masks)
+    
+    def unbind(self, repeats):
+        amr = self.amr # lb
+        LB = len(amr)
+        B = LB // repeats
+        amr_seg_ids = rearrange(self.amr_seg_ids, '(L b) s-> L b s', L=repeats).unbind(0)  # list[]
+        amr_feats = rearrange(self.amr_feats, '(L b) s c -> L b s c', L=repeats).unbind(0)  # list[]
+        text_feats = rearrange(self.text_feats, '(L b) s c -> L b s c', L=repeats).unbind(0) # list[]
+        text_pad_masks = rearrange(self.text_pad_masks, '(L b) s -> L b s', L=repeats).unbind(0) # list[]
+
+        unbinded_amr_data = []
+        for rep_idx in range(repeats):
+            batch_amrs = amr[rep_idx * B : (rep_idx + 1) * B]
+            unbinded_amr_data.append(AMRData(batch_amrs, amr_seg_ids[rep_idx], amr_feats[rep_idx], text_feats[rep_idx], text_pad_masks[rep_idx]))
+        return unbinded_amr_data
 
     def decompose(self):
         return self.amr, self.amr_seg_ids, self.amr_feats, self.text_feats, self.text_pad_masks

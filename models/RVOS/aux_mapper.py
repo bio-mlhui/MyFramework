@@ -205,13 +205,13 @@ class AUXMapper_v1: # ForEachRefer
         
         return ret
 
-    def collate_targets(self, targets, pad_H, pad_W, pad_T):
-        has_ann = [sample['has_ann'] for sample in targets] # list[t], bool
+    def collate_targets(self, old_targets, pad_H, pad_W, pad_T):
+        has_ann = [sample['has_ann'] for sample in old_targets] # list[t], bool
         has_ann = torch.stack([F.pad(ha.float(), pad=(0, pad_T - len(ha)), value=0.).bool() for ha in has_ann], dim=0) # b T
         
         # padding部分没有annotation
         # list[ni T' h w] -> list[ni T' H W]
-        masks = [sample['masks'] for sample in targets] 
+        masks = [sample['masks'] for sample in old_targets] 
         masks = [F.pad(m.float(), pad=(0, pad_W-m.shape[-1], 0, pad_H-m.shape[-2]), value=0.).bool() \
                  for m in masks] # list[ni T' H W]
 
@@ -223,16 +223,16 @@ class AUXMapper_v1: # ForEachRefer
         #     assert tgt_masks[btc_idx].size(2) * self.temporal_decoder_mask_out_stride == im_h
         #     assert tgt_masks[btc_idx].size(3) * self.temporal_decoder_mask_out_stride == im_w
 
-        boxes = [sample['boxes'] for sample in targets] # list[N t' 4], x1y1x2y2
-        boxes = [sample['boxes'] for sample in targets] # list[ni T' 4], x1y1x2y2
+        boxes = [sample['boxes'] for sample in old_targets] # list[N t' 4], x1y1x2y2
+        boxes = [sample['boxes'] for sample in old_targets] # list[ni T' 4], x1y1x2y2
         boxes = [box_xyxy_to_cxcywh(bx) for bx in boxes]
         boxes = [bx / torch.tensor([pad_W, pad_H, pad_W, pad_H], dtype=torch.float) for bx in boxes] # 0-1
 
         targets = {'masks': masks, # list[Ni T'_i h w]
                    'boxes': boxes, # list[Ni T'_i 4]
                    'has_ann': has_ann, # b T
-                   'referent_objs': [sample['referent_objs'] for sample in targets], # list[list[int], ]
-                   'classes': [sample['classes'] for sample in targets]
+                   'referent_objs': [sample['referent_objs'] for sample in old_targets], # list[list[int], ]
+                   'classes': [sample['classes'] for sample in old_targets]
         }
         return targets
 

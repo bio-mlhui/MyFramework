@@ -158,7 +158,7 @@ class Compose:
 class RVOS_Train_Default:
     def __init__(self, configs):
         self.hflip = RandomHFlip(0.5)
-        self.resize = RandomResize(sizes=[360], max_size=640)
+        self.resize = RandomResize(sizes=[[640, 360]])
         self.compute_box = ComputeBox()
         self.tensor_video = VideoToTensor()
 

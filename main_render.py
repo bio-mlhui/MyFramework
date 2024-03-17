@@ -4,93 +4,11 @@ import logging
 import wandb
 import importlib
 from trainers import task_to_trainer
-from detectron2.engine import launch
 import detectron2.utils.comm as comm # deepspeed也能用
-# import deepspeed
-from termcolor import colored
 import logging
 import yaml
 import torch
-from utils.misc import setup_for_distributed
-import torch.distributed as dist
-from detectron2.utils.logger import setup_logger
-
-def _highlight(code, filename):
-    try:
-        import pygments
-    except ImportError:
-        return code
-
-    from pygments.lexers import Python3Lexer, YamlLexer
-    from pygments.formatters import Terminal256Formatter
-
-    lexer = Python3Lexer() if filename.endswith(".py") else YamlLexer()
-    code = pygments.highlight(code, lexer, Terminal256Formatter(style="monokai"))
-    return code
-
-class _ColorfulFormatter(logging.Formatter):
-    def __init__(self, *args, **kwargs):
-        self._root_name = kwargs.pop("root_name") + "."
-        self._abbrev_name = kwargs.pop("abbrev_name", "")
-        if len(self._abbrev_name):
-            self._abbrev_name = self._abbrev_name + "."
-        super(_ColorfulFormatter, self).__init__(*args, **kwargs)
-        # CRITICAL: 'CRITICAL',
-        # ERROR: 'ERROR',
-        # WARNING: 'WARNING',
-        # INFO: 'INFO',
-        # DEBUG: 'DEBUG',
-        # NOTSET: 'NOTSET',
-    def formatMessage(self, record):
-        record.name = record.name.replace(self._root_name, self._abbrev_name)
-        message = record.message
-        # message, asctime, name, filename = record.message, record.asctime, record.name, record.filename
-        log = super(_ColorfulFormatter, self).formatMessage(record)
-        if (record.levelno == logging.WARNING) or (record.levelno == logging.ERROR) or (record.levelno == logging.CRITICAL):
-            colored_message = colored(message, "red", attrs=["blink", "underline"])
-        elif record.levelno == logging.DEBUG:
-            colored_message = colored(message, "yellow", attrs=["blink", "underline"])
-        else: # INFO/NOTSET
-            colored_message = colored(message, "white")  
-        return log + colored_message
-        # TODO: 实现多卡log, 现在只有主进程可以log
-        # 如果主题背景是白色的话 需要在 555 上加上一个特数split_symbol, 然后log.split(split_symbol)得到message之前的东西
-        # In Python print statements, the escape sequence \x1b[0m is used to reset the text formatting to the default settings. Specifically, it is used for resetting text attributes like color, style, and background color to their default values.
-    
-def set_logging_file(output_dir, file_name, mode='a'):
-    handler1 = logging.StreamHandler()
-    handler2 = logging.FileHandler(os.path.join(output_dir, file_name), mode=mode)
-    formatter = _ColorfulFormatter(
-        colored("[%(asctime)s %(name)s %(filename)s]: ", "green"), # 555
-        datefmt="%m/%d %H:%M:%S",
-        root_name=os.path.join(output_dir, file_name),
-        abbrev_name=str('grey'),
-    )
-    handler1.setFormatter(formatter)
-    handler2.setFormatter(formatter)
-    logger = logging.getLogger()
-    logger.addHandler(handler1)
-    logger.addHandler(handler2)
-    logger.setLevel(logging.DEBUG)
-
-
-def init_process_group_and_set_device(world_size, process_id, device_id):
-    """
-    This function needs to be called on each spawned process to initiate learning using DistributedDataParallel.
-    The function initiates the process' process group and assigns it a single GPU to use during training.
-    """
-    torch.cuda.set_device(device_id)
-    device = torch.device(f'cuda:{device_id}')
-    if world_size > 1:
-        torch.distributed.init_process_group(
-            torch.distributed.Backend.NCCL,
-            world_size=world_size,
-            rank=process_id
-        )
-        comm.create_local_process_group(world_size)
-        torch.distributed.barrier(device_ids=[device_id])
-        setup_for_distributed(process_id == 0)
-    return device
+from .main import init_process_group_and_set_device, _highlight, _ColorfulFormatter, set_logging_file
 
 def run(rank, configs, world_size):
     os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:512'
@@ -165,7 +83,12 @@ if __name__=="__main__":
     parser.add_argument('--disable_wandb', action='store_true')  # default: False
     parser.add_argument('--append_wandb_id',type=str, default='')
     parser.add_argument('--resume_wandb', action='store_true') # default: False
+
+    parser.add_argument('--gui_ip', type=str, default="127.0.0.1")
+    parser.add_argument('--gui_port', type=int, default=6009)
+
     args = parser.parse_args()
+
     task, group, config, config2 = args.config_file.split('/')[-4:]
     assert config == config2[:-3]
     config_file = '.'.join(['output', task, group, config, config])
@@ -173,6 +96,8 @@ if __name__=="__main__":
     configs['task'], configs['group'], configs['config'] = task, group, config
     configs['out_dir'] = os.path.join('./', 'output', task, group, config)
     configs['trainer_mode'] = args.trainer_mode
+    configs['gui_ip'] = args.gui_ip
+    configs['gui_port'] = args.gui_port
 
     wandb_id = f'{task}_{group}_{config}'
     if args.append_wandb_id != '':
@@ -208,7 +133,9 @@ if __name__=="__main__":
         #         if answer != 'y':
         #             exit()  
         pass
-     
+    
+    
+
     gpu_ids = list(os.environ['CUDA_VISIBLE_DEVICES'].split(','))
     assert len(set(gpu_ids)) == len(gpu_ids)
     gpu_ids = list(range(len(gpu_ids)))

@@ -10,6 +10,7 @@ import torchvision.transforms.functional as Trans_F
 from einops import repeat, reduce, rearrange
 from utils.misc import NestedTensor
 from copy import deepcopy as dcopy
+from data_schedule import build_schedule
 import logging
 from functools import partial
 from utils.misc import to_device
@@ -63,6 +64,10 @@ class WeakPolyP(nn.Module):
 
         self.fusion = Fusion(feature_dimensions)
         self.linear = nn.Conv2d(64, 1, kernel_size=1)
+
+
+    def dataset_specific_init_apply(self, dataset_specific_features):
+        assert dataset_specific_features is None
 
     @property
     def device(self):
@@ -245,6 +250,9 @@ def weak_polyp(configs, device):
     scheduler = build_scheduler(configs=configs, optimizer=optimizer)
     model_input_mapper = AUXMapper_v1(configs['model']['input_aux'])
 
-    return model, optimizer, scheduler, model_input_mapper.mapper,  partial(model_input_mapper.collate, max_stride=model.max_stride), \
-        log_lr_group_idx
+    train_samplers, train_loaders, eval_function, dataset_features = build_schedule(configs, 
+                                                                                    model_input_mapper.mapper, 
+                                                                                    partial(model_input_mapper.collate, max_stride=model.max_stride))
 
+    # dataset_specific initialization
+    return model, optimizer, scheduler,  train_samplers, train_loaders, log_lr_group_idx, eval_function

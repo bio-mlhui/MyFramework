@@ -21,28 +21,28 @@ from collections import defaultdict
 
 # 模型是初始化的, 先训练然后测试
 @EVALUATOR_REGISTRY.register()
-class Render_Evaluator_ViewFast: # 每个view测试
+class Render_Evaluator_ViewFast: # 每个view测试, 聚合每个view的metrics
     def __init__(self,
                  dataset_name,
                  data_loader,
                  configs) -> None:
-        self.dataset_name = dataset_name
-        self.loader = data_loader
-        # 渲染出来的图像 和 真实图像的 metrics
-        view_metrics = configs['data']['evaluate'][dataset_name]['evaluator']['view_metrics']
         dataset_meta = MetadataCatalog.get(dataset_name)
-        self.view_metric_fns = []
-        for metric_name, metric_config in view_metrics:
-            metric_fn = render_metric_entrypoint(metric_name)
-            metric_fn = partial(metric_fn, dataset_meta=dataset_meta, **metric_config)
-            self.view_metric_fns.append(metric_fn)
-
-        metrics_aggregator = configs['data']['evaluate'][dataset_name]['evaluator']['metrics_aggregator']
         self.eval_meta_keys = dataset_meta.get('eval_meta_keys')  # { scene_name: list[views] }
-        self.metrics_aggregator = partial(render_metric_entrypoint(metrics_aggregator[0]),
-                                                                    dataset_meta=dataset_meta,
-                                                                    eval_meta_keys=self.eval_meta_keys,
-                                                                    **metrics_aggregator[1])
+        self.dataset_name = dataset_name
+        self.loader = data_loader   # loader 的每一个 sample 就是一个 scene
+        
+        view_metrics = configs['data']['evaluate'][dataset_name]['evaluator']['view_metrics']
+        self.view_metric_fns = []  # 渲染出来的图像 和 真实图像的 metrics
+        for metric_name, metric_config in view_metrics:
+            self.view_metric_fns.append(partial(render_metric_entrypoint(metric_name), 
+                                                dataset_meta=dataset_meta, 
+                                                **metric_config))
+
+        agg_name, agg_config = configs['data']['evaluate'][dataset_name]['evaluator']['metrics_aggregator']
+        self.metrics_aggregator = partial(render_metric_entrypoint(agg_name),
+                                                                   dataset_meta=dataset_meta,
+                                                                   eval_meta_keys=self.eval_meta_keys,
+                                                                   **agg_config)
         self.scene = None
 
     def visualize_path(self, meta_idxs, visualize, evaluator_path):

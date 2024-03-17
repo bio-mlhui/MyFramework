@@ -174,6 +174,21 @@ class WeakPolyP_EvalAug:
         ret = self.tensor_video(ret)        
         return ret
 
+@VIS_EVAL_AUG_REGISTRY.register()
+class Visha_EvalAug:
+    def __init__(self, configs) -> None:
+        self.resize = RandomResize(
+            sizes=[[512, 512]],
+        )
+        self.tensor_video = VideoToTensor() # 先进行tensor
+
+    def __call__(self, ret):
+        VIS_Aug_CallbackAPI
+        ret = self.resize(ret)
+        ret = self.tensor_video(ret)        
+        return ret
+
+
 
 @VIS_EVAL_AUG_REGISTRY.register()
 class Fibroid_EvalAug:

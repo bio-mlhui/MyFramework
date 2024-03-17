@@ -97,6 +97,8 @@ def build_schedule(configs, model_input_mapper, model_input_collate_fn):
 def composition(data_dict, mappers):
     for mappper in mappers:
         data_dict = mappper(data_dict)
+        if data_dict is None:
+            return None
     return data_dict
 
 def evaluate_call(evaluators, model, output_dir):

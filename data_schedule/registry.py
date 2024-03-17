@@ -17,6 +17,8 @@ class Mapper:
     def __call__(self, data_dict):
         meta_idx = data_dict['meta_idx']
         ret = self._call(data_dict)
+        if ret is None:
+            return None
         ret['meta_idx'] = meta_idx + self.meta_idx_shift
         if meta_idx in self.visualized_meta_idxs:
             ret['visualize'] = True

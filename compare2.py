@@ -1,22 +1,56 @@
-        x_dbl = torch.einsum("b k d l, k c d -> b k c l", xs.view(B, K, -1, L), self.x_proj_weight)
-        # x_dbl = x_dbl + self.x_proj_bias.view(1, K, -1, 1)
-        dts, Bs, Cs = torch.split(x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=2)
-        dts = torch.einsum("b k r l, k d r -> b k d l", dts.view(B, K, -1, L), self.dt_projs_weight)
-        # dts = dts + self.dt_projs_bias.view(1, K, -1, 1)
+        weight_decay_norm = configs['optim']['weight_decay_norm']
+        weight_decay_embed = configs['optim']['weight_decay_embed']
 
-        xs = xs.float().view(B, -1, L) # (b, k * d, l)
-        dts = dts.contiguous().float().view(B, -1, L) # (b, k * d, l)
-        Bs = Bs.float().view(B, K, -1, L) # (b, k, d_state, l)
-        Cs = Cs.float().view(B, K, -1, L) # (b, k, d_state, l)
-        Ds = self.Ds.float().view(-1) # (k * d)
-        As = -torch.exp(self.A_logs.float()).view(-1, self.d_state)  # (k * d, d_state)
-        dt_projs_bias = self.dt_projs_bias.float().view(-1) # (k * d)
+        defaults = {}
+        defaults['lr'] = configs['optim']['base_lr']
+        defaults['weight_decay'] = configs['optim']['weight_decay']
 
-        out_y = self.selective_scan(
-            xs, dts, 
-            As, Bs, Cs, Ds, z=None,
-            delta_bias=dt_projs_bias,
-            delta_softplus=True,
-            return_last_state=False,
-        ).view(B, K, -1, L)
-        assert out_y.dtype == torch.float
+        norm_module_types = (
+            torch.nn.BatchNorm1d,
+            torch.nn.BatchNorm2d,
+            torch.nn.BatchNorm3d,
+            torch.nn.SyncBatchNorm,
+            # NaiveSyncBatchNorm inherits from BatchNorm2d
+            torch.nn.GroupNorm,
+            torch.nn.InstanceNorm1d,
+            torch.nn.InstanceNorm2d,
+            torch.nn.InstanceNorm3d,
+            torch.nn.LayerNorm,
+            torch.nn.LocalResponseNorm,
+        )    
+        params: List[Dict[str, Any]] = []
+        memo: Set[torch.nn.parameter.Parameter] = set()
+        log_lr_group_idx = {'backbone':None, 'base':None}
+
+        for module_name, module in model.named_modules():
+            for module_param_name, value in module.named_parameters(recurse=False):
+                if not value.requires_grad:
+                    continue
+                # Avoid duplicating parameters
+                if value in memo:
+                    continue
+                memo.add(value)
+                hyperparams = copy.copy(defaults)
+                if "video_backbone" in module_name:
+                    hyperparams["lr"] = hyperparams["lr"] * configs['optim']['backbone_lr_multiplier']    
+                    if log_lr_group_idx['backbone'] is None:
+                        log_lr_group_idx['backbone'] = len(params)
+
+                else:
+                    if log_lr_group_idx['base'] is None:
+                        log_lr_group_idx['base'] = len(params)
+                                     
+                # pos_embed, norm, embedding的weight decay特殊对待
+                if (
+                    "relative_position_bias_table" in module_param_name
+                    or "absolute_pos_embed" in module_param_name
+                ):
+                    logging.debug(f'setting weight decay of {module_name}.{module_param_name} to zero')
+                    hyperparams["weight_decay"] = 0.0
+                if isinstance(module, norm_module_types):
+                    hyperparams["weight_decay"] = weight_decay_norm
+                if isinstance(module, torch.nn.Embedding):
+                    hyperparams["weight_decay"] = weight_decay_embed
+                params.append({"params": [value], **hyperparams})
+   
+        return params, log_lr_group_idx

@@ -4,7 +4,7 @@ import logging
 from detectron2.projects.deeplab import build_lr_scheduler
 from detectron2.solver import build_lr_scheduler as build_d2_lr_scheduler
 from detectron2.projects.deeplab.lr_scheduler import WarmupPolyLR
-
+import numpy as np
 def polynomial_decay_lambda(step, initial_learning_rate : float=8e-5, end_learning_rate: float=1.5e-5, decay_steps=25, power=1.0):
     step = min(step, decay_steps)
     return (((initial_learning_rate - end_learning_rate) *
@@ -38,6 +38,42 @@ def inverse_sqrt_warmup_lambda(step, num_warmup_steps: int, num_training_steps: 
         return float(step) / float(max(1, num_warmup_steps))
     return max(0.0, (num_warmup_steps / step)**0.5)
 
+def get_expon_lr_func(
+    lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000
+):
+    """
+    Copied from Plenoxels
+
+    Continuous learning rate decay function. Adapted from JaxNeRF
+    The returned rate is lr_init when step=0 and lr_final when step=max_steps, and
+    is log-linearly interpolated elsewhere (equivalent to exponential decay).
+    If lr_delay_steps>0 then the learning rate will be scaled by some smooth
+    function of lr_delay_mult, such that the initial learning rate is
+    lr_init*lr_delay_mult at the beginning of optimization but will be eased back
+    to the normal learning rate when steps>lr_delay_steps.
+    :param conf: config subtree 'lr' or similar
+    :param max_steps: int, the number of steps during optimization.
+    :return HoF which takes step as input
+    """
+
+    def helper(step):
+        if step < 0 or (lr_init == 0.0 and lr_final == 0.0):
+            # Disable this parameter
+            return 0.0
+        if lr_delay_steps > 0:
+            # A kind of reverse cosine decay.
+            delay_rate = lr_delay_mult + (1 - lr_delay_mult) * np.sin(
+                0.5 * np.pi * np.clip(step / lr_delay_steps, 0, 1)
+            )
+        else:
+            delay_rate = 1.0
+        t = np.clip(step / max_steps, 0, 1)
+        log_lerp = np.exp(np.log(lr_init) * (1 - t) + np.log(lr_final) * t)
+        return delay_rate * log_lerp  / lr_init
+
+    return helper
+
+
 def build_scheduler(configs, optimizer):
     name = configs['optim']['scheduler']['name']
     scheduler_configs = configs['optim']['scheduler']
@@ -64,29 +100,35 @@ def build_scheduler(configs, optimizer):
                                                         verbose=scheduler_configs['verbose'],)
         return scheduler
             
-    elif name == "WarmupPolyLR":
-        return WarmupPolyLR(
-            optimizer,
-            cfg.SOLVER.MAX_ITER,
-            warmup_factor=cfg.SOLVER.WARMUP_FACTOR,
-            warmup_iters=cfg.SOLVER.WARMUP_ITERS,
-            warmup_method=cfg.SOLVER.WARMUP_METHOD,
-            power=cfg.SOLVER.POLY_LR_POWER,
-            constant_ending=cfg.SOLVER.POLY_LR_CONSTANT_ENDING,
-        ), unit
+    # elif name == "WarmupPolyLR":
+    #     return WarmupPolyLR(
+    #         optimizer,
+    #         cfg.SOLVER.MAX_ITER,
+    #         warmup_factor=cfg.SOLVER.WARMUP_FACTOR,
+    #         warmup_iters=cfg.SOLVER.WARMUP_ITERS,
+    #         warmup_method=cfg.SOLVER.WARMUP_METHOD,
+    #         power=cfg.SOLVER.POLY_LR_POWER,
+    #         constant_ending=cfg.SOLVER.POLY_LR_CONSTANT_ENDING,
+    #     ), unit
     
 
-    elif name == 'polynomial_split':
-        group_names = ['model', 'vbb', 'text']
-        poly_lambdas = []
-        for gname in group_names:
-            g_poly_conf = scheduler_configs[gname]
-            poly_lambdas.append(partial(polynomial_decay_lambda, initial_learning_rate=g_poly_conf['initial_learning_rate'],
-                                                                        end_learning_rate=g_poly_conf['end_learning_rate'],
-                                                                        decay_steps=g_poly_conf['decay_steps'],
-                                                                        power=g_poly_conf['power']))
+    elif name == 'static_gs_xyz':
+
+        lambas = []
+        param_groups = ['xyz', 'f_dc', 'f_rest', 'opacity', 'scaling', 'rotation']
+        xyz_lr_init = scheduler_configs['position_lr_init'] * scheduler_configs['spatial_lr_scale']
+        xyz_lr_final = scheduler_configs['position_lr_final'] * scheduler_configs['spatial_lr_scale']
+        xyz_lr_delay_mult = scheduler_configs['position_lr_delay_mult']
+        xyz_max_steps = scheduler_configs['position_lr_max_steps']
+        for gname in range(6): 
+            if gname == 0:
+                lambas.append(get_expon_lr_func(lr_init=xyz_lr_init, lr_final=xyz_lr_final, lr_delay_mult=xyz_lr_delay_mult,
+                                                max_steps=xyz_max_steps))
+            else:
+                lambas.append(lambda x : 1)
+
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
-                                                      lr_lambda=poly_lambdas,
+                                                      lr_lambda=lambas,
                                                       last_epoch=-1,)
         return scheduler
     

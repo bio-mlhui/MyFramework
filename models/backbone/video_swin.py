@@ -791,6 +791,24 @@ class VideoSwinTransformer(nn.Module):
 
         return ret
     
+    # def forward(self, video):
+    #     if video.shape[2] <= 30:
+    #         return self.forward_split(video)
+    #     else:
+    #         splits = []
+    #         start = 0
+    #         while start < video.shape[2]:
+    #             split_vid = video[:, :, start:(start+30)]
+    #             split_feats = self.forward_split(split_vid)
+    #             splits.append(split_feats)
+    #             start = start + 30
+
+    #         scales = ['res2', 'res3', 'res4', 'res5']
+    #         ret = {}
+    #         for scale in scales:
+    #             ret[scale] =  torch.cat([haosen[scale] for haosen in splits], dim=2) # b c t h w
+    #         return ret
+
 
     def num_parameters(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)

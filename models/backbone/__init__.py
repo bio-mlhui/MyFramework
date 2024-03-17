@@ -30,3 +30,7 @@ from .pvtv2 import (
     Video2D_PVT_V2, PVT_V2
 )
 
+
+from .segformer import (
+    Segformer, Video2D_Segformer
+)

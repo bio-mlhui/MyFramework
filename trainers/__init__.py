@@ -6,7 +6,8 @@ task_to_trainer = {
     'RIOS': Trainer,
     'RPCS': Trainer, # point cloud
     'VOS': Trainer, 
-    'VIS': Trainer
+    'VIS': Trainer,
+    'RENDER': Trainer,
 }
 
 # optimizer, schedule都交给model构建

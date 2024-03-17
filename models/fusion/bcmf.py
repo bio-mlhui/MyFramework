@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from models.layers.position_encoding import build_position_encoding
-from models.fusion import register_fusion
+from detectron2.modeling import META_ARCH_REGISTRY
 from einops import repeat, rearrange, reduce
 import torch.nn.functional as F
 from torch_geometric.data import Data
@@ -179,21 +179,24 @@ class VisionLanguageFusionModule(nn.Module):
         else:
             return tgt * tgt2, attn_weights
 
-class Visual_AMRText_SeqSeq(nn.Module):
+@META_ARCH_REGISTRY.register()
+class BCMF(nn.Module):
     def __init__(self, 
-                 d_model,
-                nheads=8, 
-                dropout=0.0,
-                amr_pos_type=['lap', 'depth'],
-                text_pos_type=['sin', 'learned'],
-                use_text=False,
-                text_trans='dot',
-                visual_trans='dot') -> None:
+                 configs,) -> None:
+        d_model=configs['d_model']
+        nheads=configs['nheads']
+        dropout=configs['dropout']
+        amr_pos_type=configs['amr_pos_type']
+        text_pos_type=configs['text_pos_type']
+        use_text=configs['use_text']
+        text_trans=configs['text_trans']
+        visual_trans=configs['visual_trans']
         super().__init__()
         self.d_model = d_model
         self.amr_pos_type = amr_pos_type
         self.text_pos_type = text_pos_type   # 但是transoform amr text控制是否把内部的text用起来
         self.use_text = use_text
+        self.transform_amr_text= True
         self.multiscale_text_module = CommonCrossAttentionWeights(d_model=d_model,
                                                                     nheads=nheads,
                                                                         dropout=dropout,
@@ -289,7 +292,7 @@ class Visual_AMRText_SeqSeq(nn.Module):
             # list[bt c h w]
             BT = multiscale_feats[0].shape[0]
             scale_sizes = [mf.shape[-2:] for mf in multiscale_feats]
-            scale_length = [sum(mf.shape[-2:]) for mf in multiscale_feats]
+            scale_length = [mf.shape[-2:][0] * mf.shape[-2:][1]  for mf in multiscale_feats]
             flattened_multiscale = torch.cat([mf.flatten(2) for mf in multiscale_feats], dim=-1) # bt c \sigmaHW
             flattened_poses = torch.cat([mf.flatten(2) for mf in multiscale_poses], dim=-1)
             flattened_multiscale = flattened_multiscale + flattened_poses
@@ -311,7 +314,7 @@ class Visual_AMRText_SeqSeq(nn.Module):
             memory_pad_masks = torch.cat([memory_pad_masks, 
                                           repeat(text_pad_masks, 'b s -> (b t) s',t=T)], dim=1)
             
-            memory_poses = torch.cat([memory_poses, repeat(text_poses, 'b s c -> (b t) s c', t=T)])
+            memory_poses = torch.cat([memory_poses, repeat(text_poses, 'b s c -> (b t) s c', t=T)], dim=1)
         
         if amr_text_add_pos:
             memory = memory + memory_poses # bt s c
@@ -329,16 +332,16 @@ class Visual_AMRText_SeqSeq(nn.Module):
             multiscale_feats = multiscale_feats.permute(1, 0, 2)
         
         if not multiscale_is_flattened:
-            multiscale_feats = multiscale_feats.split(scale_length, dim=-1) # list[bt c hw]
-            multiscale_feats = [rearrange(mf, 'bt c (h w) -> bt c h w', h=sz[0], w=sz[1]) for mf, sz in zip(multiscale_feats, scale_sizes)]
+            multiscale_feats = multiscale_feats.split(scale_length, dim=1) # list[bt hw c]
+            multiscale_feats = [rearrange(mf, 'bt  (h w) c -> bt c h w', h=sz[0], w=sz[1]) for mf, sz in zip(multiscale_feats, scale_sizes)]
 
         if not self.transform_amr_text:
             return multiscale_feats, amr_token_feats, text_feats
         else:
             amr_length = amr_token_feats.shape[1]
             if self.use_text:
-                amr_token_feats = rearrange(memory[:, :amr_length], '(b t) s c -> b t s c', b=B, T=T)
-                text_feats = rearrange(memory[:, amr_length:], '(b t) s c -> b t s c', b=B, T=T)
+                amr_token_feats = rearrange(memory[:, :amr_length], '(b t) s c -> b t s c', b=B, t=T)
+                text_feats = rearrange(memory[:, amr_length:], '(b t) s c -> b t s c', b=B, t=T)
                 amr_token_feats = amr_token_feats.mean(1)
                 text_feats = text_feats.mean(1)
             else:
@@ -450,7 +453,6 @@ class Visual_AMRText_SeqSeq(nn.Module):
         # bt -> b
         return multiscale_feats, amr_token_feats, text_feats
 
-
     def forward(self,
                 amrs=None, amr_token_feats=None, amr_token_seg_ids=None,
                 is_image_multiscale=None,
@@ -493,14 +495,3 @@ class Visual_AMRText_SeqSeq(nn.Module):
                                             amr_text_add_pos=amr_text_add_pos,
                                             text_pad_masks=text_pad_masks)
         pass
-
-@register_fusion
-def visual_amrtext_seqseq(configs):
-    return Visual_AMRText_SeqSeq(d_model=configs['d_model'],
-                                    nheads=configs['nheads'],
-                                    dropout=configs['dropout'],
-                                    amr_pos_type=configs['amr_pos_type'],
-                                    text_pos_type=configs['text_pos_type'],
-                                    use_text=configs['use_text'],
-                                    text_trans=configs['text_trans'],
-                                    visual_trans=configs['visual_trans'],)

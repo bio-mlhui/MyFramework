@@ -20,14 +20,15 @@ import torch.distributed as dist
 from data_schedule import build_schedule
 from models import model_entrypoint
 from utils.misc import to_device
+from utils.network_gui import init as gui_init
 
-__all__ = ['Trainer_Render']
-# 假设: 每个训练集里包含多个场景，对于每个场景, 有多个train_samples 
-# 对于static来说, train 是训练视角的多个图像, test是测试视角
-# 对于dynamic来说, train 是多个(a, t), 测试也是多个(a, t)
-# 针对每个场景进行 训练测试, for循环在main
-
-class Trainer_Render:
+__all__ = ['Trainer']
+# Assumption:
+# train loader(data_schedule, batch_size, world_size) 不同就不同
+# train loader决定了一个iteration有多少sample, 
+# train loader在train attmpt开始, train resume都不变
+# evaluat_function可以有多个eval数据集
+class Trainer:
     def __init__(self, configs):
         torch.autograd.set_detect_anomaly(False)
         torch.backends.cuda.matmul.allow_tf32 = True
@@ -38,17 +39,23 @@ class Trainer_Render:
         np.random.seed(seed)
         torch.random.manual_seed(seed)
         with torch.cuda.device(self.device):
-            torch.cuda.manual_seed(seed)        
+            torch.cuda.manual_seed(seed)
 
-        # model
+        gui_init(configs['gui_ip'], configs['gui_port'])
+
+        # gaussian
         create_model = model_entrypoint(configs['model']['name'])
-        self.model, self.optimizer, self.scheduler, model_aux_mapper, model_aux_collate_fn,\
-            log_lr_group_name_to_idx = create_model(configs, device=self.device) 
-        self.log_lr_group_name_to_idx = log_lr_group_name_to_idx
+        self.model = create_model(configs, device=self.device)
 
-        # schedule
-        self.train_samplers, self.train_loaders, self.eval_function \
-            = build_schedule(configs, model_aux_mapper, model_aux_collate_fn)
+        # dataset
+        self.train_samplers, self.train_loaders, self.eval_function, dataset_specific_feats = build_schedule(configs)
+        # scene
+        self.scene = Scene(dataset_specific_feats, self.model)
+
+        # training setup
+        self.optimizer, self.scheduler, model_aux_mapper, model_aux_collate_fn,\
+            log_lr_group_name_to_idx = self.model.apply_data_specific(configs, device=self.device) 
+        self.log_lr_group_name_to_idx = log_lr_group_name_to_idx
 
         # trainer
         self.eval_seed = configs['eval_seed']
@@ -57,17 +64,7 @@ class Trainer_Render:
         self.num_iterations = 0 
         self.num_samples = 0 # wandb的横坐标, 模型见过(forward-backward成功)的samples的数量
         assert self.train_samplers[0].start_idx == self.num_samples
-        if comm.get_world_size() > 1:
-            # broadcast_buffers = False
-            self.model = DDP(self.model, device_ids=[comm.get_local_rank()], find_unused_parameters=True, broadcast_buffers = False)
-        
-        random.seed(seed + comm.get_rank())
-        np.random.seed(seed + comm.get_rank())
-        torch.random.manual_seed(seed + comm.get_rank())
-        with torch.cuda.device(self.device):
-            torch.cuda.manual_seed(seed + comm.get_rank()) # 每个进程的seed不一样
-
-        # init_ckpt 和 train_resume 不同;  更改之前的起始点和不同的线
+    
         if configs['initckpt']['path'] != '':
             self.load_ckpt(configs['initckpt']['path'], 
                            load_random=configs['initckpt']['load_random'], # 随机状态
@@ -122,7 +119,6 @@ class Trainer_Render:
                           loss_weight=loss_weight,
                           sample_idxs=sample_idxs,
                           iteration_time=iteration_time)
-    
     def save_ckpt(self):
         rng_state_dict = {comm.get_rank(): {
             'cpu_rng_state': torch.get_rng_state(),

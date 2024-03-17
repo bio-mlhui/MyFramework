@@ -19,16 +19,18 @@ import numpy as np
 和rvos_aug一样, 和model-data api无关, 只关注重要的东西
 """
 RVOS_FRAMES_SAMPLER_REGISTRY = Registry('RVOS_FRAMES_SAMPLER')
-
+import torch
 # TODO: 让model的当前状态/model参数决定抽取哪些帧, 每个model的sampling方式不一样
 # RVOS训练集 -> model训练利用了多个text, model可以控制如何进行clip sampling
-
 @RVOS_FRAMES_SAMPLER_REGISTRY.register()
 class Naive_ReferenceFrame_FrameSampler:
     # naive: 纯纯的就是抽帧, 没有使用外部模型或者数据, # 没有考虑每一帧的情况, 只是按照下标进行抽样
     def __init__(self, sampler_configs, dataset_meta, **kwargs):
-        assert dataset_meta.get('name') in ['yrvos_test_step[1]_ForEachRefer', 
-                                            'yrvos_train_step[6]_ForEachRefer']
+        assert dataset_meta.get('name') in ['yrvos_test_step[1]_ForEachRefer',
+                                            'a2ds_test_step[1]_ForEachRefer',  
+                                            'yrvos_train_step[6]_ForEachRefer',
+                                            'yrvos_train_step[12]_ForEachRefer',
+                                            'a2ds_train_step[6]_ForEachRefer']
         self.reference_frame_step_size = dataset_meta.get('step_size')
 
         self.clip_sizes = list(sampler_configs['clip_sizes']) # list[int]
@@ -77,6 +79,18 @@ class Naive_ReferenceFrame_FrameSampler:
                         select_id = random.sample(range(video_len), global_n - video_len) + list(range(video_len))           
                         for s_id in select_id:                                                                   
                             sample_indx.append(all_inds[s_id])
+        elif (self.clip_position == 'center') and (self.clip_distribute == 'dense'):
+            half_size = (random_clip_size - 1) // 2
+            # 把负的换成0, 大于最大的换成最后一帧
+            sample_indx += list(range(frame_idx - half_size, frame_idx))
+            sample_indx += list(range(frame_idx+1, half_size + frame_idx + 1))
+
+            if len(sample_indx) < random_clip_size: # 向前补一个
+                sample_indx = [min(sample_indx)] + sample_indx
+            assert len(sample_indx) == random_clip_size
+            sample_indx = torch.tensor(sample_indx)
+            sample_indx = sample_indx.clamp_(min=0, max=video_len-1)
+            sample_indx = sample_indx.tolist()
         else:
             raise ValueError()
                         

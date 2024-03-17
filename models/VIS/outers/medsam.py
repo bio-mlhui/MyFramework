@@ -11,6 +11,7 @@ from models.optimization.utils import get_total_grad_norm
 from einops import repeat, rearrange, reduce
 from functools import partial
 from einops.layers.torch import Rearrange
+from data_schedule import build_schedule
 from torch import einsum
 import math
 from typing import List, Optional
@@ -144,7 +145,12 @@ def medsam(configs, device):
     model_input_mapper = AUXMapper_v1(configs['model']['input_aux'])
     optimizer = SGD(model.parameters(), lr=1e-3,)
     lr_scheduler = MultiStepLR(optimizer=optimizer,milestones=[3,10], gamma=0.1, verbose=False)
-    return model, optimizer, lr_scheduler, model_input_mapper.mapper,  partial(model_input_mapper.collate, max_stride=16), \
-        {'none': 0}
 
+
+    train_samplers, train_loaders, eval_function, dataset_features = build_schedule(configs, model_input_mapper.mapper, 
+                                                                                    partial(model_input_mapper.collate, max_stride=16))
+
+    # dataset_specific initialization
+
+    return model, optimizer, lr_scheduler,  train_samplers, train_loaders, {'none': 0}, eval_function
 

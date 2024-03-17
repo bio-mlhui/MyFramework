@@ -1,1 +1,1 @@
-from .registry import FUSION_REGISTRY
+from . import bcmf

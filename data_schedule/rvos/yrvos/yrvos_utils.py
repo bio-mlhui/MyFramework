@@ -68,10 +68,13 @@ def get_frames(frames_path, video_id, frames):
 # t' h w, 0是背景, 1-是obj_id
 # has_ann: t
 # (video_id, frames) -> t' h w, obj_id; has_ann: t
-def get_frames_mask(mask_path, video_id, frames):
+def get_frames_mask(mask_path, video_id, frames, **kwargs):
     # 给出video_id, list of 帧strs, 返回这几帧的 mask: tensor(t' h w, int,)
     # 返回这几帧里哪些帧是有annotation的
     return torch.stack([torch.from_numpy(np.array(Image.open(os.path.join(mask_path, video_id, f'{f}.png')))).int() for f in frames], dim=0), torch.ones(len(frames)).bool()
+
+def disconnect_vid_text(vid_Text:str):
+    return vid_Text.split("THISISAUNIQUECONNECT_EDSCDSGREOMI")[0], vid_Text.split("THISISAUNIQUECONNECT_EDSCDSGREOMI")[-1]
 
 
 def visualize_youtube_rvos(root):
@@ -181,7 +184,8 @@ def visualize_youtube_rvos(root):
                                                 x='x', y='y', color='c', barmode='group')),
     })
 
-
+def connect_vid_text(video_id, text_id):
+    return f'{video_id}{"THISISAUNIQUECONNECT_EDSCDSGREOMI"}{text_id}'
 
 YRVOS_CATEGORIES = {
     'truck': 0, 

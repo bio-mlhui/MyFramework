@@ -4,29 +4,32 @@
 # step_size
 class RVOS_Dataset:
     """
-    foreachrefer训练集
+    class_label从0开始, 第K+1个类代表background 
+    instance_id从1开始, 0代表所有没有被标注的区域, 
+    exp_id(str)
+    get_frame_mask_fn能够根据video_id, frames给出 n t' h w(bool)), list[instance_id] / t' h w(int) 的形式
+    
+    'all_frames': list[str],
+    'all_objs': {obj_id: {'class_label': 0,}}
+    'all_exps': {exp_id: {'expression': 'obj_ids': list[obj_id]}}
+    'frame_idx': index_int, 参考帧下标, 相对于all_frames, 传到frame_sampler抽取clip和request_ann/has_ann
+    
+    训练集foreachrefer
+        'video_id': str,
+        'exp_id': str
+        'referent_text': str
+        'referent_objs': list[obj_id, int]
+
+    训练集allexists
         'video_id': str,
         'all_frames' : list[str],
-        'referent_text': str
-        'referent_objs': list[obj_id(int)]
-        'all_objs': {obj_id(int): {'class_label': 0,}},
+        'all_objs': {obj_id: {'class_label': 0,}}
     
-    测试集(for each refer)
+    测试集for each refer
         'video_id': str,
         'exp_id': str,
         'referent_text': str
-        'all_frames': list[str]
-    
-    allexists训练集:
-        'video_id': str,
-        'all_frames' : list[str],
-        'all_objs': {obj_id: {'class_label': 0,}},
-        'all_exps': {exp_id: {'expression': 'obj_ids': list[obj_id]}}
-    
         
-    训练集/测试集
-    'frame_idx': 抽clip的时候的参考帧下标, 相对于all_frames, 具体怎么抽要传到frame_sampler里
-    如果没有的话, (train)就从整个video抽取clip, (eval)或者对整个video进行测试
     """
 
 class RVOS_Aug_CallbackAPI:
