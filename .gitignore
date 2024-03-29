@@ -14,3 +14,5 @@ hostfile
 **/olds/**
 **/old/**
 **/output/**
+
+*.png

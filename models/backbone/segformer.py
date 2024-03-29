@@ -12,11 +12,12 @@ class Segformer(nn.Module):
     def __init__(self, configs) -> None:
         pt_path = os.getenv('PT_PATH') # nvidia/segformer-b3-finetuned-ade-512-512
         super().__init__()
-        self.pretrained_model = SegformerForSemanticSegmentation.from_pretrained(os.path.join(pt_path, "segformer"), 
+        pretrained_model = SegformerForSemanticSegmentation.from_pretrained(os.path.join(pt_path, "segformer"), 
                                                                                  num_labels=1, ignore_mismatched_sizes=True)
-        self.config = self.pretrained_model.config
-        self.segformer = self.pretrained_model.segformer
-        self.decode_head = self.pretrained_model.decode_head
+        self.config = pretrained_model.config
+
+        self.segformer_backbone = pretrained_model.segformer
+        pretrained_model.decode_head
 
         freeze = configs['freeze']
         if freeze:
@@ -35,7 +36,7 @@ class Segformer(nn.Module):
         if not self.training:
             batch_feats = []
             for haosen in x:
-                feats =  self.pretrained_model(haosen.unsqueeze(0), # 1 c h w
+                feats =  self.segformer_backbone(haosen.unsqueeze(0), # 1 c h w
                                         output_attentions=True,
                                         output_hidden_states=True,  
                                         return_dict=False,)[1]
@@ -44,7 +45,7 @@ class Segformer(nn.Module):
             batch_feats = [torch.cat(haosen, dim=0) for haosen in batch_feats] # list[bt c h w]
             encoder_hidden_states = batch_feats
         else:
-            outputs = self.pretrained_model(x,
+            outputs = self.segformer_backbone(x,
                                             output_attentions=True,
                                             output_hidden_states=True,  # we need the intermediate hidden states
                                             return_dict=False,)
@@ -79,6 +80,7 @@ class Video2D_Segformer(nn.Module):
 
     
     def forward(self, x):
+        # b c t h w
         batch_size, _, T = x.shape[:3]
         x = rearrange(x, 'b c t h w -> (b t) c h w').contiguous()
         layer_outputs = self.image_homo(x)

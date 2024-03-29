@@ -200,7 +200,6 @@ class PositionEmbeddingSine2D(nn.Module):
         pos = torch.cat((pos_y, pos_x), dim=3).permute(0,3,1,2)
         return pos # b c h w
 
-
 class PositionEmbeddingLearned1D(nn.Module):
     """
     Absolute pos embedding, learned.

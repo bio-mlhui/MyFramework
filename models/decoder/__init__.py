@@ -20,3 +20,7 @@ from .mask2former_video2 import (
 from .mask2former_video3 import (
     Video_MaskedAttn_MultiscaleMaskDecoder_v3, Video_MaskedAttn_MultiscaleMaskDecoder_v4
 )
+
+from .segformer_decoder_head import (
+    Video_Image2D_SingleObjSegformer_MaskDecoder
+)

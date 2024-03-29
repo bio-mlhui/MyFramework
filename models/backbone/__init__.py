@@ -34,3 +34,6 @@ from .pvtv2 import (
 from .segformer import (
     Segformer, Video2D_Segformer
 )
+
+
+from . import vmamba_new

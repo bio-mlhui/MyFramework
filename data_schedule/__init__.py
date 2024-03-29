@@ -6,9 +6,12 @@ if os.getenv('CURRENT_TASK') == "RVOS":
     from . import rvos
 elif os.getenv('CURRENT_TASK') == 'VIS':
     from . import vis
+elif os.getenv('CURRENT_TASK') in 'Render':
+    from . import render
 else:
     raise ValueError()
 
+# 合并多个训练集成一个train set，每次eval对每个eval dataset进行测试
 def build_schedule(configs, model_input_mapper, model_input_collate_fn):
     import logging
     from functools import partial
@@ -179,4 +182,94 @@ def infinite_indices(seed,
         assert cnt == range_end
 
 
+# 每个scene是一个训练集，有它自己的eval训练集, 调用每个train/test
+# def build_render_schedule(configs, model_input_mapper, model_input_collate_fn):
+#     import logging
+#     from functools import partial
+#     from torch.utils.data import DataLoader, ConcatDataset
+#     from .registry import MAPPER_REGISTRY, EVALUATOR_REGISTRY
+#     from detectron2.data import DatasetCatalog, DatasetFromList, MapDataset, MetadataCatalog
+#     from data_schedule.utils.sampler import Evaluate_ExactSampler_Distributed, Train_InfiniteSampler_Distributed
+#     train_datasets = [] 
+#     # text3d/text4d: {'text':}; {'text':}
+#     # video4d/image3d: list[{},{},{},{}]
+#     eval_datasets = []
+#     # text3d/text4d: 
+#     # video4d/image3d: 
+#     for mode in ['train', 'evaluate']:
+#         for dataset_name in configs['data'][mode].keys():
+#             dataset_assume_mode = MetadataCatalog.get(dataset_name).get('mode')
+#             if dataset_assume_mode != mode:
+#                 logging.warning(f'{dataset_name} 的预设是用于 {dataset_assume_mode} 而非{mode}')
+#             dataset_dicts = DatasetFromList(DatasetCatalog.get(dataset_name), copy=True, serialize=True)
+#             mapper = MAPPER_REGISTRY.get(configs['data'][mode][dataset_name]['mapper']['name'])(mode=mode,
+#                                                                                                 dataset_name=dataset_name, 
+#                                                                                                 configs=configs,
+#                                                                                                 meta_idx_shift=0)
+#             dataset = MapDataset(dataset_dicts, partial(composition, mappers=[mapper, partial(model_input_mapper, mode=mode)]))
+#             if mode == 'train':
+#                 train_datasets.append(dataset)
+#             else:
+#                 eval_datasets.append(dataset)
+
+#     num_scenes = len(train_datasets)
+#     iters_by_scene = configs['optim']['iters_by_scene'] 
+#     if type(iters_by_scene) == int:
+#         iters_by_scene = [iters_by_scene] * num_scenes
     
+#     if ckpts_by_scene == 'last':
+#         ckpts_by_scene = [[haosen] for haosen in iters_by_scene]
+#     elif type(ckpts_by_scene) == int:
+#         assert ckpts_by_scene > 0
+#         ckpts_by_scene = [list(range(ckpts_by_scene, haosen, ckpts_by_scene))  for haosen in iters_by_scene]
+#     else:
+#         raise ValueError()
+
+#     ckpts_by_scene = configs['optim']['ckpts_by_scene']
+
+#     bch_by_scene = configs['optim']['batch_sizes']
+#     if type(bch_by_scene) == int:
+#         bch_by_scene = [bch_by_scene] * num_scenes
+#     for bch in bch_by_scene:
+#         assert bch == 1
+
+
+
+#     train_loaders = []
+#     for btch_size, ckpt_list, scene_iter in zip(bch_by_scene, ckpts_by_scene, iters_by_scene):
+#         each_process_batch_size = int(btch_size / comm.get_world_size())
+#         loader_sampler = Train_InfiniteSampler_Distributed(inf_stream_fn=inf_stream_fn,
+#                                                            start_idx=range_start,
+#                                                            end_idx=range_end,)
+#         train_samplers.append(loader_sampler)
+#         train_loaders.append(DataLoader(train_dataset,
+#                                         batch_size=each_process_batch_size,
+#                                         sampler=loader_sampler,
+#                                         collate_fn=partial(model_input_collate_fn, mode='train'), 
+#                                         num_workers=int(os.getenv('TORCH_NUM_WORKERS')),
+#                                         pin_memory=True,
+#                                         persistent_workers=True))
+
+#     evaluators = []
+#     for eval_dataset_name, eval_dataset in datasets['evaluate']:
+#         logging.debug(f'Number of evaluate meta in {eval_dataset_name}: {len(eval_dataset)}')
+#         loader = DataLoader(eval_dataset, 
+#                             batch_size=1, 
+#                             sampler=Evaluate_ExactSampler_Distributed(eval_dataset),
+#                             collate_fn=partial(model_input_collate_fn, mode='evaluate'),
+#                             num_workers=int(os.getenv('TORCH_NUM_WORKERS')),
+#                             pin_memory=True,
+#                             persistent_workers=True)
+        
+#         evaluator = EVALUATOR_REGISTRY.get(configs['data']['evaluate'][eval_dataset_name]['evaluator']['name'])(configs=configs,
+#                                                                                                                 dataset_name=eval_dataset_name,
+#                                                                                                                 data_loader=loader)
+#         evaluators.append((eval_dataset_name, evaluator))
+
+#     return train_samplers, train_loaders, partial(evaluate_call, evaluators=evaluators)
+
+# build_learning_render_schedule 
+        
+# 每个scene当成一个test sample, 然后只进行evaluate
+
+

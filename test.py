@@ -322,10 +322,10 @@
 # print(new_epoch_top10)
 
 
-from models.layers.gilbert.gilbert2d import gilbert2d_widthBigger, gilbert2d
+from models.layers.gilbert.gilbert2d import gilbert2d_widthBigger, generate2d
 import matplotlib.pyplot as plt
 
-def draw_lines(height, width, coordinates):
+def draw_lines(height, width, coordinates, prefix):
     # Create a figure and axis
     fig, ax = plt.subplots()
 
@@ -344,12 +344,85 @@ def draw_lines(height, width, coordinates):
         x1, y1 = coordinates[i]
         x2, y2 = coordinates[i + 1]
         ax.plot([x1, x2], [y1, y2],  color='black', linewidth=2, markersize=8)  # Adjust line appearance
-    plt.savefig('./test.png')
+    plt.savefig(f'./{prefix}.png')
 
+import torch
+# def generate_hilbert_curve2D(height, width, device):
+#     hilbert_curve = list(gilbert2d(width=width, height=height,))
+#     hilbert_curve = torch.tensor(hilbert_curve).long().to(device)
+#     sequence_indices = hilbert_curve[:, 1] * width + hilbert_curve[:, 0] # tensor
+    
+#     hilbert_curve2 = list(gilbert2d(width=height, height=width,)) # hw 的下标
+#     hilbert_curve2 = torch.tensor(hilbert_curve2).long().to(device)
+#     sequence_indices2 = hilbert_curve2[:, 0] * width + hilbert_curve2[:, 1] # tensor
 
-# Example usage:
-height =8
-width = 8
-coordinates = list(gilbert2d_widthBigger(width, height))
+#     return sequence_indices, sequence_indices2
 
-draw_lines(height, width, coordinates)
+# def gilbert2d(x, y, ax, ay, bx, by): # major = width
+#     """
+#     Generalized Hilbert ('gilbert') space-filling curve for arbitrary-sized
+#     2D rectangular grids. Generates discrete 2D coordinates to fill a rectangle
+#     of size (width x height).
+#     """
+
+#     # if width >= height:
+#     yield from generate2d(x, y, ax, ay, bx, by)
+
+W = 56
+H = 56
+curve_1 = torch.tensor(list(generate2d(0, 0, ax=W, ay=0, bx=0, by=H)))
+curve_2 = torch.tensor(list(generate2d(W-1, 0, ax=0, ay=H, bx=-W, by=0)))
+curve_3 = torch.tensor(list(generate2d(W-1, H-1, ax=-W, ay=0, bx=0, by=-H)))
+curve_4 = torch.tensor(list(generate2d(0, H-1, ax=0, ay=-H, bx=W, by=0, )))
+
+draw_lines(H, W, curve_1, '1')
+draw_lines(H, W, curve_2, '1_rev')
+draw_lines(H, W, curve_3, '2')
+draw_lines(H, W, curve_4, '2_rev')
+
+# def generate_hilbert_curve2D(height, width, device):
+#     # 从[0, 0,]横向切入, major=width
+#     hil1 = list(gilbert2d(width=width, height=height,)) # x, y 平着走, 
+#     # 从[W, H]横向切入
+#     hil1_rev = [[width - haosen[0] - 1, height-haosen[1] - 1] for haosen in hil1]
+
+#     # 从[0,0]纵向切入, major=height
+#     hil2_o = list(gilbert2d(width=height, height=width,)) # y, x 竖着走
+#     # 从(W, 0)纵向切入
+#     hil2 = [[haosen[0], width - haosen[1] - 1 ] for haosen in hil2_o]
+#     # 从(0, H)纵向切入
+#     hil2_rev = [[height - haosen[0] - 1, haosen[1]] for haosen in hil2_o]
+
+#     return hil1, hil1_rev, hil2, hil2_rev
+
+#     # hil1 = torch.tensor(hil1).long().to(device)
+#     # hil2 = torch.tenosr(hil2).long().to(device)
+
+#     # hil1_hw_ind = hil1[:, 1] * width
+
+#     # hilbert_curve = torch.tensor(hilbert_curve).long().to(device)
+#     # sequence_indices = hilbert_curve[:, 1] * width + hilbert_curve[:, 0] # tensor
+    
+#     # hilbert_curve2 = torch.tensor(hilbert_curve2).long().to(device)
+#     # sequence_indices2 = hilbert_curve2[:, 0] * width + hilbert_curve2[:, 1] # tensor
+
+#     # return sequence_indices, sequence_indices2
+
+# def gilbert2d(width, height): # major = width
+#     """
+#     Generalized Hilbert ('gilbert') space-filling curve for arbitrary-sized
+#     2D rectangular grids. Generates discrete 2D coordinates to fill a rectangle
+#     of size (width x height).
+#     """
+
+#     # if width >= height:
+#     yield from generate2d(0, 0, width, 0, 0, height)
+#     # else:
+#     #     yield from generate2d(0, 0, 0, height, width, 0)
+
+# hil1, hil1_rev, hil2, hil2_rev = generate_hilbert_curve2D(56, 56, device='cpu')
+
+# draw_lines(H, W, hil1, '1_2')
+# draw_lines(H, W, hil1_rev, '1_rev_2')
+# draw_lines(H, W, hil2, '2_2')
+# draw_lines(H, W, hil2_rev, '2_rev_2')

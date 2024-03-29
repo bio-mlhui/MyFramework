@@ -27,8 +27,6 @@ import torchvision.transforms.functional as Trans_F
 import copy
 from models.layers.mamba.vss_layer_3d import VSSLayer_3d
 from models.layers.matching import dice_loss, ce_mask_loss
-__all__ = ['video_u_mamba']
-
 from models.registry import register_model
 from models.optimization.optimizer import get_optimizer
 from models.optimization.scheduler import build_scheduler 

@@ -633,6 +633,68 @@ class Hilbert_2DSelectiveScan(nn.Module):
             sum_out = sum_out.view(B, -1, H, W).contiguous()
             return sum_out
 
+
+    # def forward_corev0(self, x: torch.Tensor, hilbert_curve):
+    #     # LongTensor[int] 按照hw进行flatten之后的hilbert排序
+    #     self.selective_scan = selective_scan_fn
+                
+    #     B, C, H, W, T = x.shape
+    #     L = H * W * T
+    #     K = 2
+
+    #     if self.scan_order == 'zigzag':
+    #         x_hw = x.view(B, -1, L).contiguous() # b c hwt
+    #         xs = torch.stack([x_hw, torch.flip(x_hw, dims=[-1])], dim=1) # (b, k, d, l)
+    #     elif self.scan_order == 'hilbert':
+    #         x_hw = x.flatten(2).contiguous() # b c hwt
+    #         x_hil = x_hw.index_select(dim=-1, index=hilbert_curve)
+    #         xs = torch.stack([x_hil, torch.flip(x_hil, dims=[-1])], dim=1) # (b, k, d, l)
+    #     else:
+    #         raise ValueError()
+
+    #     x_dbl = torch.einsum("b k d l, k c d -> b k c l", xs.view(B, K, -1, L), self.x_proj_weight)
+    #     # x_dbl = x_dbl + self.x_proj_bias.view(1, K, -1, 1)
+    #     dts, Bs, Cs = torch.split(x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=2)
+    #     dts = torch.einsum("b k r l, k d r -> b k d l", dts.view(B, K, -1, L), self.dt_projs_weight)
+    #     # dts = dts + self.dt_projs_bias.view(1, K, -1, 1)
+
+    #     xs = xs.float().view(B, -1, L) # (b, k * d, l)
+    #     dts = dts.contiguous().float().view(B, -1, L) # (b, k * d, l)
+    #     Bs = Bs.float().view(B, K, -1, L) # (b, k, d_state, l)
+    #     Cs = Cs.float().view(B, K, -1, L) # (b, k, d_state, l)
+    #     Ds = self.Ds.float().view(-1) # (k * d)
+    #     As = -torch.exp(self.A_logs.float()).view(-1, self.d_state)  # (k * d, d_state)
+    #     dt_projs_bias = self.dt_projs_bias.float().view(-1) # (k * d)
+
+    #     out_y = self.selective_scan(
+    #         xs, dts, 
+    #         As, Bs, Cs, Ds, z=None,
+    #         delta_bias=dt_projs_bias,
+    #         delta_softplus=True,
+    #         return_last_state=False,
+    #     ).view(B, K, -1, L)
+
+    #     assert out_y.dtype == torch.float
+
+    #     if self.scan_order == 'zigzag':
+    #         hw_order = out_y[:, 0].contiguous().view(B, -1, H, W).contiguous()
+    #         rhw_order = torch.flip(out_y[:, 1].contiguous(), dims=[-1]).contiguous()
+    #         rhw_order = rhw_order.view(B, -1, H, W,).contiguous()
+    #         return hw_order + rhw_order
+        
+    #     elif self.scan_order == 'hilbert':
+    #         hil_order = out_y[:, 0].contiguous() # b c hw
+    #         rhil_order = torch.flip(out_y[:, 1].contiguous(), dims=[-1]).contiguous() # b c hw
+
+    #         sum_out = torch.zeros_like(hil_order)
+    #         hilbert_curve = repeat(hilbert_curve, 'hwt -> b c hwt', b=hil_order.shape[0], c=hil_order.shape[1])
+    #         assert hil_order.shape == hilbert_curve.shape
+    #         sum_out.scatter_add_(dim=-1, index=hilbert_curve, src=hil_order)
+    #         sum_out.scatter_add_(dim=-1, index=hilbert_curve, src=rhil_order)
+    #         sum_out = sum_out.view(B, -1, H, W).contiguous()
+    #         return sum_out
+
+
     def forward(self, x: torch.Tensor, hilbert_curve, **kwargs):
 
         B, H, W, C = x.shape

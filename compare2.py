@@ -1,56 +1,105 @@
-        weight_decay_norm = configs['optim']['weight_decay_norm']
-        weight_decay_embed = configs['optim']['weight_decay_embed']
-
-        defaults = {}
-        defaults['lr'] = configs['optim']['base_lr']
-        defaults['weight_decay'] = configs['optim']['weight_decay']
-
-        norm_module_types = (
-            torch.nn.BatchNorm1d,
-            torch.nn.BatchNorm2d,
-            torch.nn.BatchNorm3d,
-            torch.nn.SyncBatchNorm,
-            # NaiveSyncBatchNorm inherits from BatchNorm2d
-            torch.nn.GroupNorm,
-            torch.nn.InstanceNorm1d,
-            torch.nn.InstanceNorm2d,
-            torch.nn.InstanceNorm3d,
-            torch.nn.LayerNorm,
-            torch.nn.LocalResponseNorm,
-        )    
-        params: List[Dict[str, Any]] = []
-        memo: Set[torch.nn.parameter.Parameter] = set()
-        log_lr_group_idx = {'backbone':None, 'base':None}
-
-        for module_name, module in model.named_modules():
-            for module_param_name, value in module.named_parameters(recurse=False):
-                if not value.requires_grad:
-                    continue
-                # Avoid duplicating parameters
-                if value in memo:
-                    continue
-                memo.add(value)
-                hyperparams = copy.copy(defaults)
-                if "video_backbone" in module_name:
-                    hyperparams["lr"] = hyperparams["lr"] * configs['optim']['backbone_lr_multiplier']    
-                    if log_lr_group_idx['backbone'] is None:
-                        log_lr_group_idx['backbone'] = len(params)
-
-                else:
-                    if log_lr_group_idx['base'] is None:
-                        log_lr_group_idx['base'] = len(params)
-                                     
-                # pos_embed, norm, embedding的weight decay特殊对待
-                if (
-                    "relative_position_bias_table" in module_param_name
-                    or "absolute_pos_embed" in module_param_name
-                ):
-                    logging.debug(f'setting weight decay of {module_name}.{module_param_name} to zero')
-                    hyperparams["weight_decay"] = 0.0
-                if isinstance(module, norm_module_types):
-                    hyperparams["weight_decay"] = weight_decay_norm
-                if isinstance(module, torch.nn.Embedding):
-                    hyperparams["weight_decay"] = weight_decay_embed
-                params.append({"params": [value], **hyperparams})
-   
-        return params, log_lr_group_idx
+AMP_OPT_LEVEL: ''
+AUG:
+  AUTO_AUGMENT: rand-m9-mstd0.5-inc1
+  COLOR_JITTER: 0.4
+  CUTMIX: 1.0
+  CUTMIX_MINMAX: null
+  MIXUP: 0.8
+  MIXUP_MODE: batch
+  MIXUP_PROB: 1.0
+  MIXUP_SWITCH_PROB: 0.5
+  RECOUNT: 1
+  REMODE: pixel
+  REPROB: 0.25
+BASE:
+- ''
+DATA:
+  BATCH_SIZE: 128
+  CACHE_MODE: part
+  DATASET: imagenet
+  DATA_PATH: /media/memfs/ImageNet_ILSVRC2012
+  IMG_SIZE: 224
+  INTERPOLATION: bicubic
+  MASK_PATCH_SIZE: 32
+  MASK_RATIO: 0.6
+  NUM_WORKERS: 8
+  PIN_MEMORY: true
+  ZIP_MODE: false
+ENABLE_AMP: false
+EVAL_MODE: false
+FUSED_LAYERNORM: false
+MODEL:
+  DROP_PATH_RATE: 0.2
+  DROP_RATE: 0.0
+  LABEL_SMOOTHING: 0.1
+  MMCKPT: false
+  NAME: vssm1_tiny_0230
+  NUM_CLASSES: 1000
+  PRETRAINED: ''
+  RESUME: ''
+  TYPE: vssm
+  VSSM:
+    DEPTHS:
+    - 2
+    - 2
+    - 5
+    - 2
+    DOWNSAMPLE: v3
+    EMBED_DIM: 96
+    IN_CHANS: 3
+    MLP_ACT_LAYER: gelu
+    MLP_DROP_RATE: 0.0
+    MLP_RATIO: 4.0
+    NORM_LAYER: ln
+    PATCHEMBED: v2
+    PATCH_NORM: true
+    PATCH_SIZE: 4
+    SSM_ACT_LAYER: silu
+    SSM_CONV: 3
+    SSM_CONV_BIAS: false
+    SSM_DROP_RATE: 0.0
+    SSM_DT_RANK: auto
+    SSM_D_STATE: 1
+    SSM_FORWARDTYPE: v3noz
+    SSM_INIT: v0
+    SSM_RANK_RATIO: 2.0
+    SSM_RATIO: 2.0
+OUTPUT: ../../out/vssm1_tiny_0230/20240227152057
+PRINT_FREQ: 10
+SAVE_FREQ: 1
+SEED: 0
+TAG: '20240227152057'
+TEST:
+  CROP: true
+  SEQUENTIAL: false
+  SHUFFLE: false
+THROUGHPUT_MODE: false
+TRAIN:
+  ACCUMULATION_STEPS: 1
+  AUTO_RESUME: true
+  BASE_LR: 0.001
+  CLIP_GRAD: 5.0
+  EPOCHS: 300
+  LAYER_DECAY: 1.0
+  LR_SCHEDULER:
+    DECAY_EPOCHS: 30
+    DECAY_RATE: 0.1
+    GAMMA: 0.1
+    MULTISTEPS: []
+    NAME: cosine
+    WARMUP_PREFIX: true
+  MIN_LR: 1.0e-05
+  MOE:
+    SAVE_MASTER: false
+  OPTIMIZER:
+    BETAS:
+    - 0.9
+    - 0.999
+    EPS: 1.0e-08
+    MOMENTUM: 0.9
+    NAME: adamw
+  START_EPOCH: 0
+  USE_CHECKPOINT: false
+  WARMUP_EPOCHS: 20
+  WARMUP_LR: 1.0e-06
+  WEIGHT_DECAY: 0.05

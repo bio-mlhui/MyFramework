@@ -122,7 +122,7 @@ def maybe_add_gradient_clipping(
 def get_optimizer(params, configs):
     optimizer_type = configs['optim']['name']
     base_lr = configs['optim']['base_lr']
-    weight_decay = configs['optim']['weight_decay']
+    weight_decay = configs['optim']['weight_decay'] if 'weight_decay' in configs['optim'] else configs['optim']['base_wd']
     if optimizer_type == "SGD":
         optimizer = maybe_add_full_model_gradient_clipping(torch.optim.SGD, configs)(
             params, base_lr, momentum=configs['optim']['momentum'], weight_decay=weight_decay, nesterov =configs['optim']['nesterov']

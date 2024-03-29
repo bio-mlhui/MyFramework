@@ -1,103 +1,80 @@
 
-class VIS_Dataset:
-    """
-    'video_id': str,
-    'all_frames' : list[str],
-    训练集:
-    'all_objs': {obj_id: {'class': 0,}},
-    obj可以是某个object(instance)或者某个semantic
+# learning-based: 在训练的时候
 
-    训练集/测试集
-    'frame_idx': 抽clip的时候的参考帧下标, 相对于all_frames, 具体怎么抽要传到frame_sampler里
-    如果没有的话, (train)就从整个video抽取clip, (eval)或者对整个video进行测试
+class Scene_Terminology:
     """
+    scene_id:
+    scene_text: 
+    scene_video_id: 
+    scene_video
 
-class VIS_Aug_CallbackAPI:
-    """
-    'video': list[pil Image, rgb], t
-    'masks': n t' h w, bool
-    'has_ann': t, bool
-    'classes': n,
-    'class_names': list[str], n
-    'boxes': n t' 4, x1y1x2y2绝对值, 如果是instance的话, semantic segmentation没有box
+    condense: 如果condense=False的话, 每个sample就是一个view; 如果condense=True的话, 每个sample就是(scene_text/scene_video, list[view, rendering])
+    view_camera: 带view的camera对象, 抽象的数据结构
+    view_cameras: 当前scene的所有cameras
+    condense=True -> view_cameras
+    condense=False-> view_camera
 
-    模型测试的输出api: 每一帧有多个mask/box预测, 每个预测都有类别的概率, 最后一个类别是背景类
-    'video': t 3 h w, 0-1
-    'pred_masks': list[no h w], t bool
-    'pred_boxes': list[no 4], t, x1y1x2y2绝对值
-    'pred_class': list[no c] t, 概率值
-    'callback_fns': list[fn]
+    rendering: video/image的渲染的图像
+    get_rendering_fn: 根据(scene_id, 
+                           view_camera,
+                           scene_text,
+                           scene_video,
+                           scene_video_id,
+                           ) 获得对应的rendering; 都可以是none, 只要满足一种方式就行
     """
 
-class VIS_Evaluator_OutAPI_EvalFn_API:
-    """每一帧的预测
-    'video_id': str,
-    'frame_name': str,
-    'masks': list[rle], no
-    'boxes': no 4, x1y1x2y2绝对值
-    'classes': no c, softmax之后, 最后一个类别是背景类
+class Scene_Dataset: 
     """
+    scene_id: str
+    scene_text: str/None
+    scene_video_id: str/None
+    
+    view_camera: 3DCamera/4DCamera  # 对于condense=False的
+    view_cameras: list[3DCamera/4D Camera]  # 对于condense=True的
+    """ 
 
-class VIS_TrainAPI_clipped_video:
-    """has_ann代表哪些帧有ann, 进入aux_mapper train collate的API
-        'video_dict': {
-            'video': t 3 h w, 0-1,
-        }
+
+class Scene_Mapper:
+    """
+    condense_mapper: 每个
+        # view_sampler
+
+    mapper: 输入输出一样
+        'view_dict': {'viewcamera': data_dict['view_camera'] },
         'targets': {
-            'has_ann': t, (bool)
-            'masks': N/n t' h w, bool 
-            'boxes': N/n t' 4, x1y1x2y2绝对值
-            'classes': N/n
-        }
-        'frame_targets':{
-            'masks': N/n h w, t'
-            'boxes': N/n 4, t' 
-            'classes': N/n             
+            'rendering': data_dict['rendering']
         }
 
-        # aux_mapper里添加 boxMask, 
+    contrastive mapper: 对于condense数据集
     """
 
-class VIS_EvalAPI_clipped_video_request_ann:
-    """request ann测试哪些帧, 进入aux_mapper eval collate的API
-        'video_dict': {
-            'video': t 3 h w, 0-1,
-        }
-        'meta': {
-            'video_id': str, 
-            'frames': list[str], t'
-            'request_ann': t, bool
-            'callback_fns': list[fn]   
-        }
+class Scene_Model:
+    """
+    这个就要看每个model了
+    如果是基于优化的方式, 那么expand_view应该是false
+    如果是基于学习的方式, 那么expand_view应该是true
+    forward:
+        text, view, rendering -> loss
+        video, view, rendering -> loss
+    sample:
+        返回优化的repre或者学到的repre
     """
 
-class VIS_FrameSampler_InputOutput_API:
+class Scene_Representation:
     """
-    训练时抽帧
-        all_frames: list[str]
-        frame_idx: 参考帧, 根据参考帧和sampler的策略
-
-        video_id
-        
-        output:
-            frames: list[str], t
-            has_ann: t, bool
-    
-    测试时抽帧:
-        all_frames: list[str]
-        frame_idx: 参考帧
-        video_id
-        output:
-            frames: list[str], t
-            request_ann: t, bool
-    
+    repre.render:
+        input: 
+            view, condition
+        ouput:
+            rendering
     """
 
-class GetFrames:
+class Representation_Metric:
     """
-    Input:
-        video_id
-        frames:
-    Output:
-        t' h w, int 每一个值是obj_id, 0是背景
+    4D -> renderings/psnr/ply file
+    """
+
+class Scene_Evaluator:
+    pass
+    """
     """

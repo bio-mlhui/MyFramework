@@ -14,19 +14,12 @@ from utils.misc import  SmoothedValue, MetricLogger
 from torch.nn.parallel import DistributedDataParallel as DDP
 import detectron2.utils.comm as comm
 import datetime
-import traceback
-import torch.distributed.rpc as dist_rpc
 import torch.distributed as dist
 from data_schedule import build_schedule
 from models import model_entrypoint
 from utils.misc import to_device
 
 __all__ = ['Trainer']
-# Assumption:
-# train loader(data_schedule, batch_size, world_size) 不同就不同
-# train loader决定了一个iteration有多少sample, 
-# train loader在train attmpt开始, train resume都不变
-# evaluat_function可以有多个eval数据集
 class Trainer:
     def __init__(self, configs):
         torch.autograd.set_detect_anomaly(False)
@@ -45,6 +38,9 @@ class Trainer:
         self.model, self.optimizer, self.scheduler, \
             self.train_samplers, self.train_loaders, self.log_lr_group_name_to_idx, \
         self.eval_function = create_model_schedule(configs, device=self.device,)
+        self.register_metric_logger([f'lr_group_{haosen}' for haosen in list(self.log_lr_group_name_to_idx.keys())])
+        logging.debug(f'模型的总参数数量:{sum(p.numel() for p in self.model.parameters())}')
+        logging.debug(f'模型的可训练参数数量:{sum(p.numel() for p in self.model.parameters() if p.requires_grad)}')
 
         # trainer
         self.eval_seed = configs['eval_seed']
@@ -63,24 +59,13 @@ class Trainer:
         with torch.cuda.device(self.device):
             torch.cuda.manual_seed(seed + comm.get_rank()) # 每个进程的seed不一样
 
-        # init_ckpt 和 train_resume 不同;  更改之前的起始点和不同的线
+        # init_ckpt 和 train_resume 不同, 更改之前的起始点和不同的线
         if configs['initckpt']['path'] != '':
             self.load_ckpt(configs['initckpt']['path'], 
                            load_random=configs['initckpt']['load_random'], # 随机状态
                            load_model=configs['initckpt']['load_model'], 
                            load_schedule=configs['initckpt']['load_schedule'], # 数据流idx
                            load_optimize=configs['initckpt']['load_optimizer'])
-
-        if comm.is_main_process():
-            # default smooth value: window_size=1, fmt='{value:.6f}', handler='value'
-            metric_logger = MetricLogger(delimiter='\t')
-            metric_logger.add_meter('iteration_time', SmoothedValue(window_size=1,fmt='{value:2f}',handler='value') )
-            logging.debug(f'模型的总参数数量:{sum(p.numel() for p in self.model.parameters())}')
-            logging.debug(f'模型的可训练参数数量:{sum(p.numel() for p in self.model.parameters() if p.requires_grad)}')
-            for log_lr_group_name in log_lr_group_name_to_idx.keys():
-                metric_logger.add_meter(f'lr_group_{log_lr_group_name}', SmoothedValue(window_size=1,fmt='{value:.8f}', handler='value'))
-            self.metric_logger = metric_logger
-
         self.save_ckpt() # 存储初始点
         if configs['initckpt']['eval_init_ckpt']:
             self.evaluate() # 测试的随机状态独立于训练的状态
@@ -323,3 +308,17 @@ class Trainer:
         # epc1_iter500_sap8099/eval_dataset1/metrci1/ config_web_epoch.zip, images
         # epc1_iter500_sap8099/eval_dataset1/metric2/
         return [os.path.join(self.iteration_dir, 'visualize_model', f'train_meta_{str(meta_idx)}') if vis else None for (meta_idx, vis) in zip(meta_idxs, visualize)]
+
+    def register_metric_logger(self, log_keys):
+        if comm.is_main_process():
+            if not hasattr(self, 'metric_logger'):
+                # default smooth value: window_size=1, fmt='{value:.6f}', handler='value'
+                self.metric_logger = MetricLogger(delimiter='\t')
+
+            for haosen in log_keys:
+                if 'lr_group' in haosen:
+                    self.metric_logger.add_meter(haosen, SmoothedValue(window_size=1,fmt='{value:.8f}', handler='value'))
+                elif haosen == 'iteration_time':
+                    self.metric_logger.add_meter(haosen, SmoothedValue(window_size=1,fmt='{value:2f}',handler='value'))
+                else:
+                    raise ValueError()

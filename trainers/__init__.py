@@ -1,13 +1,10 @@
 
 from .Trainer import Trainer  # RVOS, RIOS, Generation
-
+# from .Trainer_Render import Trainer_Render
 task_to_trainer = {
     'RVOS': Trainer,
-    'RIOS': Trainer,
-    'RPCS': Trainer, # point cloud
-    'VOS': Trainer, 
     'VIS': Trainer,
-    'RENDER': Trainer,
+    'Render': Trainer,
 }
 
 # optimizer, schedule都交给model构建

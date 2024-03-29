@@ -398,7 +398,7 @@ class SS1D_Temporal_Multiscale(nn.Module):
         super().__init__()
         d_model = configs['d_model']
         self.homo = SS1D(d_model=configs['d_model'],
-                        d_state=configs['d_state'] if 'd_state' in configs else 16,
+                        d_state=configs['d_state'] if 'd_state' in configs else 1,
                         d_conv=configs['d_conv'] if 'd_conv' in configs else 3,
                         expand=configs['expand'] if 'expand' in configs else 2,
                         dt_rank=configs['dt_rank'] if 'dt_rank' in configs else 'auto',
@@ -424,10 +424,15 @@ class SS1D_Temporal_Multiscale(nn.Module):
     def forward(self, 
                 query=None,  # bt hw_sigma c
                 video_aux_dict=None,
+                batch_size=None,
                 **kwargs
                 ):
-        nf = video_aux_dict['nf']
-        batch_size = query.shape[0] // video_aux_dict['nf']
+        if video_aux_dict is not None:
+            nf = video_aux_dict['nf']
+            batch_size = query.shape[0] // video_aux_dict['nf']
+        else:
+            assert batch_size is not None
+            nf = query.shape[0] // batch_size
         # query = self.input_proj(query) # b t hw_sigma c
         query = rearrange(query, '(b t) hw c -> (b hw) t c',t=nf, b=batch_size)
         poses = self.pos_1d(mask=torch.zeros_like(query[..., 0]).bool(), hidden_dim=query.shape[-1]).permute(0, 2, 1).contiguous()
