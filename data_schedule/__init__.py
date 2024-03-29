@@ -6,7 +6,7 @@ if os.getenv('CURRENT_TASK') == "RVOS":
     from . import rvos
 elif os.getenv('CURRENT_TASK') == 'VIS':
     from . import vis
-elif os.getenv('CURRENT_TASK') in 'Render':
+elif os.getenv('CURRENT_TASK') in ['Render']:
     from . import render
 else:
     raise ValueError()
