@@ -204,7 +204,7 @@ class ImageSegformer_SingleObjMaskDecoder(nn.Module):
         pred_masks = self.segformer_head(decoder_head_inputs) # bt 1 h w
         batch_size = pred_masks.shape[0]
         # b 
-        pred_classes = torch.tensor([1, 0])[None, None, :].repeat(batch_size, 1, 1)  # b 1 2
+        pred_classes = torch.tensor([1, 0])[None, None, :].repeat(batch_size, 1, 1).float()  # b 1 2
 
         if self.training:
             return {'pred_masks': pred_masks, 'pred_class': pred_classes}

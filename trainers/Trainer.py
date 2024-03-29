@@ -263,14 +263,14 @@ class Trainer:
             gc.collect()
             torch.cuda.empty_cache()
         if do_ckpt:
-            try: 
-                self.save_ckpt() # 先存储
-                self.evaluate() # 测试的随机状态独立于训练的状态
-                self.load_ckpt(os.path.join(self.iteration_dir, 'ckpt.pth.tar'),  # 训练的随机状态
-                            load_random=True, load_schedule=False, load_model=False, load_optimize=False,)
-            except:
-                if comm.is_main_process():
-                    logging.error(f'Iteration {self.num_iterations} evaluate错误')
+            # try: 
+            self.save_ckpt() # 先存储
+            self.evaluate() # 测试的随机状态独立于训练的状态
+            self.load_ckpt(os.path.join(self.iteration_dir, 'ckpt.pth.tar'),  # 训练的随机状态
+                        load_random=True, load_schedule=False, load_model=False, load_optimize=False,)
+            # except:
+            #     if comm.is_main_process():
+            #         logging.error(f'Iteration {self.num_iterations} evaluate错误')
         if is_dist_avail_and_initialized():
             dist.barrier()
 
