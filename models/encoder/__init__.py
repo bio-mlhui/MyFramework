@@ -30,6 +30,6 @@ from .msdeformattn_masked import (
 from .msdeformattn_localGlobal import (
     Video_Deform2D_DividedTemporal_MultiscaleEncoder_localGlobal
 )
-from .neighborhood_qk import (
-    NA_qk_Layer_v2
-)
+# from .neighborhood_qk import (
+#     NA_qk_Layer_v2
+# )
