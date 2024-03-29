@@ -14,5 +14,6 @@ hostfile
 **/olds/**
 **/old/**
 **/output/**
+*.pt
 
 *.png
