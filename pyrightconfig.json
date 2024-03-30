@@ -1,6 +1,7 @@
 {
     "exclude": [
         "output",
-        "wandb"
+        "wandb",
+        "miccai_generate_Dir"
     ]
 }

@@ -184,7 +184,9 @@ class ImageSegformer_SingleObjMaskDecoder(nn.Module):
                  multiscale_shapes) -> None:
         super().__init__()
         from transformers.models.segformer.modeling_segformer import SegformerMLP
-        pretrained_model = SegformerForSemanticSegmentation.from_pretrained(os.path.join(os.getenv('PT_PATH'), "segformer"),)
+        pretrained_model = SegformerForSemanticSegmentation.from_pretrained(os.path.join(os.getenv('PT_PATH'), "segformer"),
+                                                                            num_labels=1,
+                                                                            ignore_mismatched_sizes=True)
         self.segformer_head = pretrained_model.decode_head
         
         # change input mlp
@@ -220,6 +222,70 @@ class Video_Image2D_SingleObjSegformer_MaskDecoder(nn.Module):
                  ) -> None:
         super().__init__()
         self.image_homo = ImageSegformer_SingleObjMaskDecoder(configs,
+                                                              multiscale_shapes=multiscale_shapes)
+        self.loss_module = Video_SingleObjMaskLoss(loss_config=configs['loss'], )
+    
+    def forward(self, 
+                multiscales,
+                video_aux_dict):
+        batch_sisze, _, nf = multiscales[list(multiscales.keys())[0]].shape[:3]
+        # b c t h w -> bt c h w
+        multiscales = {key: value.permute(0, 2, 1, 3, 4).flatten(0, 1).contiguous() for key,value in multiscales.items()}
+        image2d_output = self.image_homo(multiscales) # logits
+        pred_masks = image2d_output['pred_masks'] # bt 1 h w
+        pred_classes = image2d_output['pred_class'] # bt 1 2
+
+        pred_masks = rearrange(pred_masks, '(b t) nq h w -> b t nq h w',b=batch_sisze, t=nf)
+        pred_classes = rearrange(pred_classes, '(b t) nq c -> b t nq c',b=batch_sisze, t=nf)
+
+        return [{'pred_masks': pred_masks, 'pred_class': pred_classes}]
+
+
+    def compute_loss(self, dec_output, targets, **kwargs):
+        return self.loss_module.compute_loss(
+            model_outs=dec_output,
+            targets=targets,
+            video_aux_dict=None
+        )
+
+
+@META_ARCH_REGISTRY.register()
+class ImageSegformer_SingleObjMaskDecoder_PT(nn.Module):
+    """
+    将最大的scale进行conv
+    """
+    def __init__(self, 
+                 configs,
+                 multiscale_shapes) -> None:
+        super().__init__()
+        from transformers.models.segformer.modeling_segformer import SegformerMLP
+        pretrained_model = SegformerForSemanticSegmentation.from_pretrained(os.path.join(os.getenv('PT_PATH'), "segformer"),
+                                                                            num_labels=1,
+                                                                            ignore_mismatched_sizes=True)
+        self.segformer_head = pretrained_model.decode_head
+        self.mask_spatial_stride = 4
+
+    def forward(self, multiscale):
+        decoder_head_inputs = [multiscale[haosen] for haosen in ['res2', 'res3', 'res4', 'res5']]
+        pred_masks = self.segformer_head(decoder_head_inputs) # bt 1 h w
+        batch_size = pred_masks.shape[0]
+        # b 
+        pred_classes = torch.tensor([1, 0])[None, None, :].repeat(batch_size, 1, 1).float()  # b 1 2
+
+        if self.training:
+            return {'pred_masks': pred_masks, 'pred_class': pred_classes}
+        else:
+            pred_masks = F.interpolate(pred_masks, scale_factor=self.mask_spatial_stride, mode='bilinear', align_corners=False)
+            return {'pred_masks': pred_masks, 'pred_class': pred_classes.softmax(-1)}
+
+
+@META_ARCH_REGISTRY.register()
+class Video_Image2D_SingleObjSegformer_MaskDecoder_PT(nn.Module):
+    def __init__(self, configs, 
+                 multiscale_shapes=None,
+                 ) -> None:
+        super().__init__()
+        self.image_homo = ImageSegformer_SingleObjMaskDecoder_PT(configs,
                                                               multiscale_shapes=multiscale_shapes)
         self.loss_module = Video_SingleObjMaskLoss(loss_config=configs['loss'], )
     

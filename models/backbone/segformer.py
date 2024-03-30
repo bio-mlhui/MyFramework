@@ -17,7 +17,6 @@ class Segformer(nn.Module):
         self.config = pretrained_model.config
 
         self.segformer_backbone = pretrained_model.segformer
-        pretrained_model.decode_head
 
         freeze = configs['freeze']
         if freeze:

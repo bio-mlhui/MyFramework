@@ -15,5 +15,6 @@ hostfile
 **/old/**
 **/output/**
 *.pt
-
+*.txt
 *.png
+miccai_generate_Dir
