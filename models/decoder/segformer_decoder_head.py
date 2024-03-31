@@ -186,6 +186,7 @@ class ImageSegformer_SingleObjMaskDecoder(nn.Module):
         from transformers.models.segformer.modeling_segformer import SegformerMLP
         pretrained_model = SegformerForSemanticSegmentation.from_pretrained(os.path.join(os.getenv('PT_PATH'), "segformer"),
                                                                             num_labels=1,
+                                                                            decoder_hidden_size=configs['decoder_hidden_size'],
                                                                             ignore_mismatched_sizes=True)
         self.segformer_head = pretrained_model.decode_head
         

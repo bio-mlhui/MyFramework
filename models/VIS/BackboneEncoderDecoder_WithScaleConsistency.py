@@ -410,7 +410,7 @@ def backbone_encoder_decoder(configs, device):
     return model, optimizer, scheduler,  train_samplers, train_loaders, log_lr_group_idx, eval_function
 
 
-class BackboneDecoder_SplitTime_Segformer(nn.Module):
+class Shadow_Splittime_SS(nn.Module):
     def __init__(
         self,
         configs,
@@ -527,7 +527,7 @@ class BackboneDecoder_SplitTime_Segformer(nn.Module):
                 memo.add(value)
                 
                 hyperparams = copy.copy(defaults)
-                if "temporal_block" in module_name or 'segformer_head.linear_c' in module_name or 'segformer_head.classifier' in module_name or 'temporal_norm' in module_name:
+                if "temporal_block" in module_name or 'segformer_head' in module_name or 'temporal_norm' in module_name or 'video_backbone.outnorm' in module_name:
                     hyperparams["lr"] = configs['optim']['base_lr']  
                     hyperparams["weight_decay"]  = configs['optim']['base_wd'] 
                     if log_lr_group_idx['base'] is None:
@@ -557,11 +557,11 @@ class BackboneDecoder_SplitTime_Segformer(nn.Module):
         return params, log_lr_group_idx
 
 @register_model
-def backbone_decoder_segformer(configs, device):
+def shadow_splittime_ss(configs, device):
     from .aux_mapper import AUXMapper_v1
-    model = BackboneDecoder_SplitTime_Segformer(configs)
+    model = Shadow_Splittime_SS(configs)
     model.to(device)
-    params_group, log_lr_group_idx = BackboneDecoder_SplitTime_Segformer.get_optim_params_group(model=model, configs=configs)
+    params_group, log_lr_group_idx = Shadow_Splittime_SS.get_optim_params_group(model=model, configs=configs)
     to_train_num_parameters = len([n for n, p in model.named_parameters() if p.requires_grad])
     assert len(params_group) == to_train_num_parameters, \
         f'parames_group设计出错, 有{len(to_train_num_parameters) - len(params_group)}个参数没有列在params_group里'
