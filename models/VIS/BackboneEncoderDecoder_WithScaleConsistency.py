@@ -614,7 +614,7 @@ class Shadow_CombineTime_SS(nn.Module):
             clip_outputs = [] # list[dict]
             for start_idx in range(0, nf, self.test_clip_size):
                 multiscales = self.video_backbone(x=videos[:, :, start_idx:(start_idx + self.test_clip_size)]) # b c t h w
-                clip_outputs.append(self.decoder(multiscales, video_aux_dict=video_aux_dict)[-1])  
+                clip_outputs.append(self.decoder(multiscales, video_aux_dict=video_aux_dict)[-1])  # b t nq h w
             return [{
                 'pred_masks': torch.cat([haosen['pred_masks'] for haosen in clip_outputs], dim=1), # b t n h w
                 'pred_class':  torch.cat([haosen['pred_class'] for haosen in clip_outputs], dim=1),
