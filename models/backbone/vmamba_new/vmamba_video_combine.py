@@ -1288,7 +1288,7 @@ class VSSM(nn.Module):
         return super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
 
 
-from models.backbone.utils import ImageMultiscale_Shape
+from models.backbone.utils import VideoMultiscale_Shape
 from detectron2.modeling import BACKBONE_REGISTRY
 
 @BACKBONE_REGISTRY.register()
@@ -1466,19 +1466,16 @@ class Combine3D_VideoMamba(nn.Module):
         self.layers = backbone.layers
         
         self.multiscale_shapes = {}
-        for name, spatial_stride, dim  in zip(['res2', 'res3', 'res4', 'res5'], 
-                                              [4, 8, 16, 32], 
-                                              ssm_configs['dims']):
-            self.multiscale_shapes[name] =  ImageMultiscale_Shape(spatial_stride=spatial_stride, dim=dim)
+        for name, time_stride, spatial_stride, dim  in zip(['res2', 'res3', 'res4', 'res5'], 
+                                                           [1,1,1,1],
+                                                            [4, 8, 16, 32], 
+                                                            ssm_configs['dims']):
+            self.multiscale_shapes[name] =  VideoMultiscale_Shape(temporal_stride=time_stride,
+                                                                  spatial_stride=spatial_stride, dim=dim)
         self.channel_first = backbone.channel_first
 
         self.max_stride = [1, 32]
         
-        freeze = configs['freeze']
-        if freeze:
-            for p in self.parameters():
-                p.requires_grad_(False)
-
         norm_layer = 'LN'
         self.channel_first = (norm_layer.lower() in ["bn", "ln2d"])
         _NORMLAYERS = dict(
@@ -1494,20 +1491,24 @@ class Combine3D_VideoMamba(nn.Module):
             layer = norm_layer(self.dims[i])
             layer_name = f'outnorm{i}'
             self.add_module(layer_name, layer)
+
+        freeze = configs['freeze']
+        if freeze:
+            for p in self.parameters():
+                p.requires_grad_(False)
         
     def forward(self, x: torch.Tensor):
         batch_size, _, nf, H, W = x.shape
         # b c t h w -> bt c h w
         x = x.permute(0, 2, 1, 3, 4).flatten(0, 1) 
+        # 2d patch embed
+        x = self.patch_embed(x) # bt h w c
+        x = rearrange(x, '(b t) h w c -> b t h w c',b=batch_size, t=nf)
         def layer_forward(l, x):
             x = l.blocks(x) # b t h w c
             y = l.downsample(x.flatten(0, 1))
             y = rearrange(y, '(b t) h w c -> b t h w c',b=batch_size, t=nf)
             return x, y
-
-        # 2d patch embed
-        x = self.patch_embed(x) # bt h w c
-        x = rearrange(x, '(b t) h w c -> b t h w c',b=batch_size, t=nf)
         outs = []
         for i, layer in enumerate(self.layers):
             o, x = layer_forward(layer, x) # (B, T, H, W, C)

@@ -410,6 +410,11 @@ def backbone_encoder_decoder(configs, device):
     return model, optimizer, scheduler,  train_samplers, train_loaders, log_lr_group_idx, eval_function
 
 
+
+
+
+
+
 class Shadow_Splittime_SS(nn.Module):
     def __init__(
         self,
@@ -580,9 +585,7 @@ def shadow_splittime_ss(configs, device):
     return model, optimizer, scheduler,  train_samplers, train_loaders, log_lr_group_idx, eval_function
 
 
-
-
-class BackboneDecoder_CombineTime_Segformer(nn.Module):
+class Shadow_CombineTime_SS(nn.Module):
     def __init__(
         self,
         configs,
@@ -599,14 +602,25 @@ class BackboneDecoder_CombineTime_Segformer(nn.Module):
          
         self.decoder = META_ARCH_REGISTRY.get(configs['model']['decoder']['name'])(configs['model']['decoder'],
                                                                                    multiscale_shapes=self.video_backbone.multiscale_shapes)
+        self.test_clip_size = configs['model']['test_clip_size']
         
     @property
     def device(self):
         return self.pixel_mean.device
     
-    def model_preds(self, videos, video_aux_dict,):
-        # b 3 t h w -> b 3 t h w
-        multiscales = self.video_backbone(x=videos) # b c t h w
+    def model_preds(self, videos, video_aux_dict=None):
+        if (not self.training) and (self.test_clip_size is not None):
+            nf = videos.shape[2]
+            clip_outputs = [] # list[dict]
+            for start_idx in range(0, nf, self.test_clip_size):
+                multiscales = self.video_backbone(x=videos[:, :, start_idx:(start_idx + self.test_clip_size)]) # b c t h w
+                clip_outputs.append(self.decoder(multiscales, video_aux_dict=video_aux_dict)[-1])  
+            return [{
+                'pred_masks': torch.cat([haosen['pred_masks'] for haosen in clip_outputs], dim=1), # b t n h w
+                'pred_class':  torch.cat([haosen['pred_class'] for haosen in clip_outputs], dim=1),
+            }]
+            
+        multiscales = self.video_backbone(x=videos) 
         return self.decoder(multiscales, video_aux_dict=video_aux_dict)
 
     # with scale consistency scan
@@ -666,11 +680,9 @@ class BackboneDecoder_CombineTime_Segformer(nn.Module):
     def get_optim_params_group(model, configs):
         weight_decay_norm = configs['optim']['weight_decay_norm']
         weight_decay_embed = configs['optim']['weight_decay_embed']
-
         defaults = {}
-        defaults['lr'] = configs['optim']['finetune_lr']
-        defaults['weight_decay'] = configs['optim']['finetune_wd']
-
+        defaults['lr'] = configs['optim']['base_lr']
+        defaults['weight_decay'] = configs['optim']['base_wd']
         norm_module_types = (
             torch.nn.BatchNorm1d,
             torch.nn.BatchNorm2d,
@@ -683,35 +695,22 @@ class BackboneDecoder_CombineTime_Segformer(nn.Module):
             torch.nn.LayerNorm,
             torch.nn.LocalResponseNorm,
         )
-        # 除了temporal block, segformer_head.linear_c, segformer_head.classifier
         params: List[Dict[str, Any]] = []
         memo: Set[torch.nn.parameter.Parameter] = set()
-        log_lr_group_idx = {'base':None, 'finetune':None}
-
+        log_lr_group_idx = {'base':None}
         base_param_names = []
-        finetune_param_names = []
         for module_name, module in model.named_modules():
             for module_param_name, value in module.named_parameters(recurse=False):
                 if not value.requires_grad:
                     continue
-                # Avoid duplicating parameters
                 if value in memo:
                     continue
                 memo.add(value)
-                
                 hyperparams = copy.copy(defaults)
-                if 'segformer_head' in module_name or 'video_backbone.outnorm' in module_name:
-                    hyperparams["lr"] = configs['optim']['base_lr']  
-                    hyperparams["weight_decay"]  = configs['optim']['base_wd'] 
-                    if log_lr_group_idx['base'] is None:
-                        log_lr_group_idx['base'] = len(params)
-                    base_param_names.append(f'{module_name}.{module_param_name}')                    
-                else:
-                    if log_lr_group_idx['finetune'] is None:
-                        log_lr_group_idx['finetune'] = len(params)
-                    finetune_param_names.append(f'{module_name}.{module_param_name}')
+                if log_lr_group_idx['base'] is None:
+                    log_lr_group_idx['base'] = len(params)
+                base_param_names.append(f'{module_name}.{module_param_name}')                    
                                      
-                # pos_embed, norm, embedding的weight decay特殊对待
                 if (
                     "relative_position_bias_table" in module_param_name
                     or "absolute_pos_embed" in module_param_name
@@ -725,16 +724,15 @@ class BackboneDecoder_CombineTime_Segformer(nn.Module):
                 params.append({"params": [value], **hyperparams})
     
         logging.debug(f'List of Base Parameters: \n {base_param_names}')
-        logging.debug(f'List of Finetune Parameters: \n {finetune_param_names}')
    
         return params, log_lr_group_idx
 
 @register_model
-def backbone_decoder_combinetime_segformer(configs, device):
+def shadow_combinetime_ss(configs, device):
     from .aux_mapper import AUXMapper_v1
-    model = BackboneDecoder_CombineTime_Segformer(configs)
+    model = Shadow_CombineTime_SS(configs)
     model.to(device)
-    params_group, log_lr_group_idx = BackboneDecoder_CombineTime_Segformer.get_optim_params_group(model=model, configs=configs)
+    params_group, log_lr_group_idx = Shadow_CombineTime_SS.get_optim_params_group(model=model, configs=configs)
     to_train_num_parameters = len([n for n, p in model.named_parameters() if p.requires_grad])
     assert len(params_group) == to_train_num_parameters, \
         f'parames_group设计出错, 有{len(to_train_num_parameters) - len(params_group)}个参数没有列在params_group里'
@@ -748,10 +746,7 @@ def backbone_decoder_combinetime_segformer(configs, device):
                                                                     model_input_mapper.mapper, 
                                                                     partial(model_input_mapper.collate, max_stride=model.max_stride))
 
-    # dataset_specific initialization
-
     return model, optimizer, scheduler,  train_samplers, train_loaders, log_lr_group_idx, eval_function
-
 
 
 class Shadow_SOTA(nn.Module):

@@ -41,7 +41,7 @@ class Trainer:
         self.register_metric_logger([f'lr_group_{haosen}' for haosen in list(self.log_lr_group_name_to_idx.keys())])
         logging.debug(f'模型的总参数数量:{sum(p.numel() for p in self.model.parameters())}')
         logging.debug(f'模型的可训练参数数量:{sum(p.numel() for p in self.model.parameters() if p.requires_grad)}')
-
+        logging.debug(configs)
         # trainer
         self.eval_seed = configs['eval_seed']
         self.out_dir = configs['out_dir']
@@ -52,7 +52,7 @@ class Trainer:
         if comm.get_world_size() > 1:
             # broadcast_buffers = False
             self.model = DDP(self.model, device_ids=[comm.get_local_rank()], find_unused_parameters=True, broadcast_buffers = False)
-        
+    
         random.seed(seed + comm.get_rank())
         np.random.seed(seed + comm.get_rank())
         torch.random.manual_seed(seed + comm.get_rank())
@@ -149,8 +149,7 @@ class Trainer:
         eval_model = self.model.module if isinstance(self.model, DDP) else self.model
         ckpt_file = os.path.join(self.iteration_dir, 'ckpt.pth.tar')
         assert os.path.exists(ckpt_file), 'evaluate之前必须保存ckpt'
-        evaluate_metrics = self.eval_function(model = eval_model, 
-                                              output_dir = self.iteration_dir)
+        evaluate_metrics = self.eval_function(model = eval_model,  output_dir = self.iteration_dir)
         if is_dist_avail_and_initialized():
             dist.barrier()
         if comm.is_main_process():

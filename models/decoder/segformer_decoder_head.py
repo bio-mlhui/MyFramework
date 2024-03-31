@@ -158,8 +158,8 @@ class Video_SingleObjMaskLoss(nn.Module):
             align_corners=False,
         ).squeeze(1) # nt' s
 
-        point_logits = rearrange(point_logits, '(n t) s -> n (t s)',t=nf)
-        point_labels = rearrange(point_labels, '(n t) s -> n (t s)',t=nf)
+        # point_logits = rearrange(point_logits, '(n t) s -> n (t s)',t=nf)
+        # point_labels = rearrange(point_labels, '(n t) s -> n (t s)',t=nf)
 
         losses = {
             "mask_dice": ce_mask_loss(point_logits, point_labels, num_boxes=point_labels.shape[0]),
