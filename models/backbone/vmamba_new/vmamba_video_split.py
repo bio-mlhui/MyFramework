@@ -2237,7 +2237,7 @@ class SplitTemporal_VMamba(nn.Module):
                 downsample_version="v3",
                 patchembed_version="v2",
             ),
-            'small_hilbert': dict(
+            'small_hilbert2D': dict(
                 patch_size=4,
                 in_chans=3,
                 num_classes=1000,
@@ -2292,7 +2292,7 @@ class SplitTemporal_VMamba(nn.Module):
         ckpt_configs = {
             'tiny':'vmamba/vssm_tiny_0230_ckpt_epoch_262.pth',
             'small':  'vmamba/vssm_small_0229_ckpt_epoch_222.pth',
-            'small_hilbert':  'vmamba/vssm_small_0229_ckpt_epoch_222.pth',
+            'small_hilbert2D': 'vmamba/vssm_small_0229_ckpt_epoch_222.pth',
             'base': 'vmamba/vssm_base_0229_ckpt_epoch_237.pth', 
         }
         
