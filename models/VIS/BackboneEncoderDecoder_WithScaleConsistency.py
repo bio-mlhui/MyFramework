@@ -62,12 +62,24 @@ class BackboneEncoderDecoder_WithScaleConsistency(nn.Module):
                                                                                    multiscale_shapes=same_dim_multiscale_shapes)
         if configs['model']['fusion']['name'] == 'Video_Deform2D_DividedTemporal_MultiscaleEncoder_v2':
             self.fusion_encoder.hack_ref(query_norm=self.decoder.temporal_query_norm, mask_mlp=self.decoder.query_mask)
-
+        
+        self.test_clip_size = configs['model']['test_clip_size']
     @property
     def device(self):
         return self.pixel_mean.device
     
     def model_preds(self, videos, video_aux_dict,):
+        if (not self.training) and (self.test_clip_size is not None):
+            nf = videos.shape[2]
+            clip_outputs = [] # list[dict]
+            for start_idx in range(0, nf, self.test_clip_size):
+                multiscales = self.video_backbone(x=videos[:, :, start_idx:(start_idx + self.test_clip_size)]) # b c t h w
+                multiscales = self.fusion_encoder(multiscales, video_aux_dict=video_aux_dict) 
+                clip_outputs.append(self.decoder(multiscales, video_aux_dict=video_aux_dict)[-1])  # b t nq h w
+            return [{
+                'pred_masks': torch.cat([haosen['pred_masks'] for haosen in clip_outputs], dim=1), # b t n h w
+                'pred_class':  torch.cat([haosen['pred_class'] for haosen in clip_outputs], dim=1),
+            }]
         # b 3 t h w -> b 3 t h w
         multiscales = self.video_backbone(x=videos) # b c t h w
         multiscales = self.fusion_encoder(multiscales, video_aux_dict=video_aux_dict) 
@@ -265,7 +277,8 @@ class BackboneEncoderDecoder(nn.Module):
         if configs['model']['fusion']['name'] == 'Video_Deform2D_DividedTemporal_MultiscaleEncoder_v2':
             self.fusion_encoder.hack_ref(query_norm=self.decoder.temporal_query_norm, mask_mlp=self.decoder.query_mask)
 
-        self.test_clip_size = configs['model']['test_clip_size']
+        self.test_clip_size = configs['model']['test_clip_size'] if 'test_clip_size' in configs['model'] else None
+        
     @property
     def device(self):
         return self.pixel_mean.device

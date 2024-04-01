@@ -1,5 +1,5 @@
 # 注册fibrois数据集
-# from . import polyp_dataset
+from . import polyp_dataset
 
 # 注册fibroid评估标准
 from . import evals

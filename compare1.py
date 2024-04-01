@@ -1,455 +1,286 @@
-class SS2D(nn.Module):
+# Modify for sample points visualization
+# ------------------------------------------------------------------------------------------------
+# Deformable DETR
+# Copyright (c) 2020 SenseTime. All Rights Reserved.
+# Licensed under the Apache License, Version 2.0 [see LICENSE for details]
+# ------------------------------------------------------------------------------------------------
+# Modified from https://github.com/chengdazhi/Deformable-Convolution-V2-PyTorch/tree/pytorch_1.0.0
+# ------------------------------------------------------------------------------------------------
+
+from __future__ import absolute_import
+from __future__ import print_function
+from __future__ import division
+
+import warnings
+import math
+
+import torch
+from torch import nn
+import torch.nn.functional as F
+from torch.nn.init import xavier_uniform_, constant_
+
+from ..functions import MSDeformAttnFunction
+
+from mamba_ssm import Mamba
+from einops import rearrange, reduce, repeat
+
+def _is_power_of_2(n):
+    if (not isinstance(n, int)) or (n < 0):
+        raise ValueError("invalid input for _is_power_of_2: {} (type: {})".format(n, type(n)))
+    return (n & (n-1) == 0) and n != 0
+
+from detectron2.projects.point_rend.point_features import (
+    get_uncertain_point_coords_with_randomness,
+    point_sample,
+)
+from detectron2.modeling import META_ARCH_REGISTRY
+
+class MSDeformAttn(nn.Module):
+    def __init__(self, d_model=256, n_levels=4, n_heads=8, n_points=4):
+        """
+        Multi-Scale Deformable Attention Module
+        :param d_model      hidden dimension
+        :param n_levels     number of feature levels
+        :param n_heads      number of attention heads
+        :param n_points     number of sampling points per attention head per feature level
+        """
+        super().__init__()
+        if d_model % n_heads != 0:
+            raise ValueError('d_model must be divisible by n_heads, but got {} and {}'.format(d_model, n_heads))
+        _d_per_head = d_model // n_heads
+        # you'd better set _d_per_head to a power of 2 which is more efficient in our CUDA implementation
+        if not _is_power_of_2(_d_per_head):
+            warnings.warn("You'd better set d_model in MSDeformAttn to make the dimension of each attention head a power of 2 "
+                          "which is more efficient in our CUDA implementation.")
+
+        self.im2col_step = 64
+
+        self.d_model = d_model
+        self.n_levels = n_levels
+        self.n_heads = n_heads
+        self.n_points = n_points
+
+        self.sampling_offsets = nn.Linear(d_model, n_heads * n_levels * n_points * 2)
+        self.attention_weights = nn.Linear(d_model, n_heads * n_levels * n_points)
+        self.value_proj = nn.Linear(d_model, d_model)
+        self.output_proj = nn.Linear(d_model, d_model)
+
+        self._reset_parameters()
+
+    def _reset_parameters(self):
+        constant_(self.sampling_offsets.weight.data, 0.)
+        thetas = torch.arange(self.n_heads, dtype=torch.float32) * (2.0 * math.pi / self.n_heads)
+        grid_init = torch.stack([thetas.cos(), thetas.sin()], -1)
+        grid_init = (grid_init / grid_init.abs().max(-1, keepdim=True)[0]).view(self.n_heads, 1, 1, 2).repeat(1, self.n_levels, self.n_points, 1)
+        for i in range(self.n_points):
+            grid_init[:, :, i, :] *= i + 1
+        with torch.no_grad():
+            self.sampling_offsets.bias = nn.Parameter(grid_init.view(-1))
+        constant_(self.attention_weights.weight.data, 0.)
+        constant_(self.attention_weights.bias.data, 0.)
+        xavier_uniform_(self.value_proj.weight.data)
+        constant_(self.value_proj.bias.data, 0.)
+        xavier_uniform_(self.output_proj.weight.data)
+        constant_(self.output_proj.bias.data, 0.)
+
+    def forward(self, query, reference_points, input_flatten, input_spatial_shapes, input_level_start_index, input_padding_mask=None):
+        """
+        :param query                       (N, Length_{query}, C)
+        :param reference_points            (N, Length_{query}, n_levels, 2), range in [0, 1], top-left (0,0), bottom-right (1, 1), including padding area
+                                        or (N, Length_{query}, n_levels, 4), add additional (w, h) to form reference boxes
+        :param input_flatten               (N, \sum_{l=0}^{L-1} H_l \cdot W_l, C)
+        :param input_spatial_shapes        (n_levels, 2), [(H_0, W_0), (H_1, W_1), ..., (H_{L-1}, W_{L-1})]
+        :param input_level_start_index     (n_levels, ), [0, H_0*W_0, H_0*W_0+H_1*W_1, H_0*W_0+H_1*W_1+H_2*W_2, ..., H_0*W_0+H_1*W_1+...+H_{L-1}*W_{L-1}]
+        :param input_padding_mask          (N, \sum_{l=0}^{L-1} H_l \cdot W_l), True for padding elements, False for non-padding elements
+
+        :return output                     (N, Length_{query}, C)
+        """
+        N, Len_q, _ = query.shape
+        N, Len_in, _ = input_flatten.shape
+        assert (input_spatial_shapes[:, 0] * input_spatial_shapes[:, 1]).sum() == Len_in
+
+        value = self.value_proj(input_flatten)
+        if input_padding_mask is not None:
+            value = value.masked_fill(input_padding_mask[..., None], float(0))
+        value = value.view(N, Len_in, self.n_heads, self.d_model // self.n_heads)
+        sampling_offsets = self.sampling_offsets(query).view(N, Len_q, self.n_heads, self.n_levels, self.n_points, 2)
+        attention_weights = self.attention_weights(query).view(N, Len_q, self.n_heads, self.n_levels * self.n_points)
+        attention_weights = F.softmax(attention_weights, -1).view(N, Len_q, self.n_heads, self.n_levels, self.n_points)
+        # N, Len_q, n_heads, n_levels, n_points, 2
+        if reference_points.shape[-1] == 2:
+            offset_normalizer = torch.stack([input_spatial_shapes[..., 1], input_spatial_shapes[..., 0]], -1)
+            sampling_locations = reference_points[:, :, None, :, None, :] \
+                                 + sampling_offsets / offset_normalizer[None, None, None, :, None, :]
+        elif reference_points.shape[-1] == 4:
+            sampling_locations = reference_points[:, :, None, :, None, :2] \
+                                 + sampling_offsets / self.n_points * reference_points[:, :, None, :, None, 2:] * 0.5
+        else:
+            raise ValueError(
+                'Last dim of reference_points must be 2 or 4, but get {} instead.'.format(reference_points.shape[-1]))
+        output = MSDeformAttnFunction.apply(
+            value, input_spatial_shapes, input_level_start_index, sampling_locations, attention_weights, self.im2col_step)
+        output = self.output_proj(output)
+
+        return output, sampling_locations, attention_weights
+
+
+@META_ARCH_REGISTRY.register()
+class TemporalColor_SSM_Multiscale(nn.Module):
+    def __init__(self, 
+                 configs,):
+        super().__init__()
+        d_model = configs['d_model']
+
+        self.self_attention = Mamba(d_model=configs['d_model'],
+                                    d_state=configs['d_state'] if 'd_state' in configs else 16,
+                                    d_conv=configs['d_conv'] if 'd_conv' in configs else 4,
+                                    expand=configs['expand'] if 'expand' in configs else 2,
+                                    dt_rank=configs['dt_rank'] if 'dt_rank' in configs else 'auto',
+                                    dt_min=configs['dt_min'] if 'dt_min' in configs else 0.001,
+                                    dt_max=configs['dt_max'] if 'dt_max' in configs else 0.1,
+                                    dt_init=configs['dt_init'] if 'dt_init' in configs else 'random',
+                                    dt_scale=configs['dt_scale'] if 'dt_scale' in configs else 1.0,
+                                    dt_init_floor=configs['dt_init_floor'] if 'dt_init_floor' in configs else 1e-4,
+                                    conv_bias=configs['conv_bias'] if 'conv_bias' in configs else True,
+                                    bias=configs['bias'] if 'bias' in configs else False,
+                                    use_fast_path=configs['use_fast_path'] if 'use_fast_path' in configs else True,
+                                    layer_idx=configs['layer_idx'] if 'layer_idx' in configs else None,
+                                    )
+        
+        self.sampling_offsets = nn.Linear(d_model, n_heads * n_levels * n_points * 2) # 每个点的deformable points (0, 1)
+        self.attention_weights = nn.Linear(d_model, n_heads * n_levels * n_points)    # 每个deformable points的attention weights
+        self.value_proj = nn.Linear(d_model, d_model)
+        self.output_proj = nn.Linear(d_model, d_model)
+
+    def forward(self, 
+                query=None,  # bt hw_sigma c
+                reference_points=None, 
+                input_spatial_shapes=None,  # 3 2
+                input_level_start_index=None, # 3
+                video_aux_dict=None,
+                **kwargs
+                ):
+        assert (input_spatial_shapes[:, 0] * input_spatial_shapes[:, 1]).sum() == query.shape[1]
+        # 每个scale都用相同的 offsets, weights
+        temporal_points = video_aux_dict['temporal_points'] # b t h w 3 5 2, 每个位置 (t, t-1, t+1 的 5个点的坐标, 0-1, xy)
+        temporal_points_weights = video_aux_dict['temporal_points_weights'] # b t h w 2 5 1, 每个位置 (t, t-1, t+1 的 5个点的similarity)
+
+        batch_size, nf, H, W, *_ = temporal_points.shape
+        strides =  [H//haosen[0] for haosen in input_spatial_shapes] # 8, 16, 32
+        query = rearrange(query, '(b t) hw_sigma c -> b t hw_sigma c',b=batch_size, t=nf)
+        query = self.value_proj(query) # b t hw_sigma c
+
+        # list[b t h w c]
+        query_multiscale = query.split(input_spatial_shapes.prod(dim=-1), dim=2) # list[b t hw c]
+        query_multiscale = [rearrange(feat, 'b t (h w) c -> (b t) c h w', h=scale_shape[0], w=scale_shape[1])\
+                             for feat, scale_shape in zip(query_multiscale, input_spatial_shapes)]
+        
+        strided_temporal_points = [] 
+        for haosen, feat in zip(strides, query_multiscale):
+            start = int(haosen // 2)
+            strided_temporal_points = temporal_points[:, :, start::haosen, start::haosen] # b t h/4 w/4 3 5 2
+            strided_feats = point_sample( 
+                feat.flatten(0, 1), # bt c h w 
+                point_coords=strided_temporal_points  # (bt, hw, 2)
+            )
+
+
+
+        # b t h w 16 c
+        # bthw 16 c
+        # bthw
+        # b t h w 2 5 2 -> b t h w
+
+
+        
+        sampling_offsets = self.sampling_offsets(query).view(N, Len_q, self.n_heads, self.n_levels, self.n_points, 2) # bt hw_sigma 3(scale) 5 2
+        attention_weights = self.attention_weights(query).view(N, Len_q, self.n_heads, self.n_levels * self.n_points)
+        attention_weights = F.softmax(attention_weights, -1).view(N, Len_q, self.n_heads, self.n_levels, self.n_points)
+        # N, Len_q, n_heads, n_levels, n_points, 2
+        if reference_points.shape[-1] == 2:
+            offset_normalizer = torch.stack([input_spatial_shapes[..., 1], input_spatial_shapes[..., 0]], -1) # 3 2
+            sampling_locations = reference_points[:, :, None, :, None, :] \
+                                 + sampling_offsets / offset_normalizer[None, None, None, :, None, :] # 0-1
+        elif reference_points.shape[-1] == 4:
+            sampling_locations = reference_points[:, :, None, :, None, :2] \
+                                 + sampling_offsets / self.n_points * reference_points[:, :, None, :, None, 2:] * 0.5
+        else:
+            raise ValueError(
+                'Last dim of reference_points must be 2 or 4, but get {} instead.'.format(reference_points.shape[-1]))
+        output = self.output_proj(output)
+
+        return output
+
+
+from mamba_ssm.ops.selective_scan_interface import selective_scan_fn, selective_scan_ref
+from models.layers.position_encoding import build_position_encoding
+class SS1D(nn.Module):
     def __init__(
         self,
-        # basic dims ===========
-        d_model=96,
+        d_model,
         d_state=16,
-        ssm_ratio=2.0,
+        # d_state="auto", # 20240109
+        d_conv=3,
+        expand=2,
         dt_rank="auto",
-        act_layer=nn.SiLU,
-        # dwconv ===============
-        d_conv=3, # < 2 means no conv 
-        conv_bias=True,
-        # ======================
-        dropout=0.0,
-        bias=False,
-        # dt init ==============
         dt_min=0.001,
         dt_max=0.1,
         dt_init="random",
         dt_scale=1.0,
         dt_init_floor=1e-4,
-        initialize="v0",
-        # ======================
-        forward_type="v2",
-        channel_first=False,
-        # ======================
+        dropout=0.,
+        conv_bias=True,
+        bias=False,
+        device=None,
+        dtype=None,
         **kwargs,
     ):
-        kwargs.update(
-            d_model=d_model, d_state=d_state, ssm_ratio=ssm_ratio, dt_rank=dt_rank,
-            act_layer=act_layer, d_conv=d_conv, conv_bias=conv_bias, dropout=dropout, bias=bias,
-            dt_min=dt_min, dt_max=dt_max, dt_init=dt_init, dt_scale=dt_scale, dt_init_floor=dt_init_floor,
-            initialize=initialize, forward_type=forward_type, channel_first=channel_first,
-        )
-        # only used to run previous version
-        if forward_type in ["v0", "v0seq"]:
-            self.__initv0__(seq=("seq" in forward_type), **kwargs)
-            return
-        elif forward_type.startswith("xv"):
-            self.__initxv__(**kwargs)
-            return
-        else:
-            self.__initv2__(**kwargs)
-            return
-
-    # only used to run previous version
-    def __initv0__(
-        self,
-        # basic dims ===========
-        d_model=96,
-        d_state=16,
-        ssm_ratio=2.0,
-        dt_rank="auto",
-        # ======================
-        dropout=0.0,
-        # ======================
-        seq=False,
-        force_fp32=True,
-        **kwargs,
-    ):
-        if "channel_first" in kwargs:
-            assert not kwargs["channel_first"]
-        act_layer = nn.SiLU
-        dt_min = 0.001
-        dt_max = 0.1
-        dt_init = "random"
-        dt_scale = 1.0
-        dt_init_floor = 1e-4
-        bias = False
-        conv_bias = True
-        d_conv = 3
-        k_group = 4
-        factory_kwargs = {"device": None, "dtype": None}
+        factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
-        d_inner = int(ssm_ratio * d_model)
-        dt_rank = math.ceil(d_model / 16) if dt_rank == "auto" else dt_rank
+        self.d_model = d_model
+        self.d_state = d_state
+        # self.d_state = math.ceil(self.d_model / 6) if d_state == "auto" else d_model # 20240109
+        self.d_conv = d_conv
+        self.expand = expand
+        self.d_inner = int(self.expand * self.d_model)
+        self.dt_rank = math.ceil(self.d_model / 16) if dt_rank == "auto" else dt_rank
 
-        self.forward = self.forwardv0 
-        if seq:
-            self.forward = partial(self.forwardv0, seq=True)
-        if not force_fp32:
-            self.forward = partial(self.forwardv0, force_fp32=False)
-
-        # in proj ============================
-        self.in_proj = nn.Linear(d_model, d_inner * 2, bias=bias, **factory_kwargs)
-        self.act: nn.Module = act_layer()
-        self.conv2d = nn.Conv2d(
-            in_channels=d_inner,
-            out_channels=d_inner,
-            groups=d_inner,
+        self.in_proj = nn.Linear(self.d_model, self.d_inner * 2, bias=bias, **factory_kwargs)
+        self.conv1d = nn.Conv1d(
+            in_channels=self.d_inner,
+            out_channels=self.d_inner,
+            groups=self.d_inner,
             bias=conv_bias,
             kernel_size=d_conv,
             padding=(d_conv - 1) // 2,
             **factory_kwargs,
         )
+        self.act = nn.SiLU()
 
-        # x proj ============================
-        self.x_proj = [
-            nn.Linear(d_inner, (dt_rank + d_state * 2), bias=False, **factory_kwargs)
-            for _ in range(k_group)
-        ]
-        self.x_proj_weight = nn.Parameter(torch.stack([t.weight for t in self.x_proj], dim=0)) # (K, N, inner)
-        del self.x_proj
-
-        # dt proj ============================
-        self.dt_projs = [
-            self.dt_init(dt_rank, d_inner, dt_scale, dt_init, dt_min, dt_max, dt_init_floor, **factory_kwargs)
-            for _ in range(k_group)
-        ]
-        self.dt_projs_weight = nn.Parameter(torch.stack([t.weight for t in self.dt_projs], dim=0)) # (K, inner, rank)
-        self.dt_projs_bias = nn.Parameter(torch.stack([t.bias for t in self.dt_projs], dim=0)) # (K, inner)
-        del self.dt_projs
-            
-        # A, D =======================================
-        self.A_logs = self.A_log_init(d_state, d_inner, copies=k_group, merge=True) # (K * D, N)
-        self.Ds = self.D_init(d_inner, copies=k_group, merge=True) # (K * D)     
-
-        # out proj =======================================
-        self.out_norm = nn.LayerNorm(d_inner)
-        self.out_proj = nn.Linear(d_inner, d_model, bias=bias, **factory_kwargs)
-        self.dropout = nn.Dropout(dropout) if dropout > 0. else nn.Identity()
-
-    def __initv2__(
-        self,
-        # basic dims ===========
-        d_model=96,
-        d_state=16,
-        ssm_ratio=2.0,
-        dt_rank="auto",
-        act_layer=nn.SiLU,
-        # dwconv ===============
-        d_conv=3, # < 2 means no conv 
-        conv_bias=True,
-        # ======================
-        dropout=0.0,
-        bias=False,
-        # dt init ==============
-        dt_min=0.001,
-        dt_max=0.1,
-        dt_init="random",
-        dt_scale=1.0,
-        dt_init_floor=1e-4,
-        initialize="v0",
-        # ======================
-        forward_type="v2",
-        channel_first=False,
-        # ======================
-        **kwargs,    
-    ):
-        factory_kwargs = {"device": None, "dtype": None}
-        super().__init__()
-        d_inner = int(ssm_ratio * d_model)
-        dt_rank = math.ceil(d_model / 16) if dt_rank == "auto" else dt_rank
-        self.d_conv = d_conv
-        self.channel_first = channel_first
-        Linear = Linear2d if channel_first else nn.Linear
-        self.forward = self.forwardv2
-
-        # tags for forward_type ==============================
-        def checkpostfix(tag, value):
-            ret = value[-len(tag):] == tag
-            if ret:
-                value = value[:-len(tag)]
-            return ret, value
-
-        self.disable_force32, forward_type = checkpostfix("no32", forward_type)
-        self.oact, forward_type = checkpostfix("oact", forward_type)
-        self.disable_z, forward_type = checkpostfix("noz", forward_type)
-        self.disable_z_act, forward_type = checkpostfix("nozact", forward_type)
-
-        # softmax | sigmoid | dwconv | norm ===========================
-        self.out_norm_shape = "v1"
-        if forward_type[-len("none"):] == "none":
-            forward_type = forward_type[:-len("none")]
-            self.out_norm = nn.Identity()
-        elif forward_type[-len("dwconv3"):] == "dwconv3":
-            forward_type = forward_type[:-len("dwconv3")]
-            self.out_norm = nn.Conv2d(d_inner, d_inner, kernel_size=3, padding=1, groups=d_inner, bias=False)
-        elif forward_type[-len("softmax"):] == "softmax":
-            forward_type = forward_type[:-len("softmax")]
-            class SoftmaxSpatial(nn.Softmax):
-                def forward(self, x: torch.Tensor):
-                    B, C, H, W = x.shape
-                    return super().forward(x.view(B, C, -1)).view(B, C, H, W)
-            self.out_norm = SoftmaxSpatial(dim=-1)
-        elif forward_type[-len("sigmoid"):] == "sigmoid":
-            forward_type = forward_type[:-len("sigmoid")]
-            self.out_norm = nn.Sigmoid()
-        elif channel_first:
-            self.out_norm = LayerNorm2d(d_inner)
-        else:
-            self.out_norm_shape = "v0"
-            self.out_norm = nn.LayerNorm(d_inner)
-
-        # forward_type debug =======================================
-        FORWARD_TYPES = dict(
-            v01=partial(self.forward_corev2, force_fp32=(not self.disable_force32), SelectiveScan=SelectiveScanMamba),
-            v02=partial(self.forward_corev2, force_fp32=(not self.disable_force32), SelectiveScan=SelectiveScanMamba, CrossScan=CrossScanTriton, CrossMerge=CrossMergeTriton),
-            v03=partial(self.forward_corev2, force_fp32=(not self.disable_force32), SelectiveScan=SelectiveScanOflex, CrossScan=CrossScanTriton, CrossMerge=CrossMergeTriton),
-            v04=partial(self.forward_corev2, force_fp32=False, SelectiveScan=SelectiveScanOflex, CrossScan=CrossScanTriton, CrossMerge=CrossMergeTriton),
-            v05=partial(self.forward_corev2, force_fp32=False, SelectiveScan=SelectiveScanOflex, no_einsum=True, CrossScan=CrossScanTriton, CrossMerge=CrossMergeTriton),
-            # ===============================
-            v31d=partial(self.forward_corev2, force_fp32=False, SelectiveScan=SelectiveScanOflex, CrossScan=CrossScan_Ab_1direction, CrossMerge=CrossMerge_Ab_1direction,
-            ),
-            v32d=partial(self.forward_corev2, force_fp32=False, SelectiveScan=SelectiveScanOflex, CrossScan=CrossScan_Ab_2direction, CrossMerge=CrossMerge_Ab_2direction,
-            ),
-            # ===============================
-            v1=partial(self.forward_corev2, force_fp32=True, SelectiveScan=SelectiveScanOflex),
-            v2=partial(self.forward_corev2, force_fp32=(not self.disable_force32), SelectiveScan=SelectiveScanCore),
-            v3=partial(self.forward_corev2, force_fp32=False, SelectiveScan=SelectiveScanOflex),
-            v4=partial(self.forward_corev2, force_fp32=False, SelectiveScan=SelectiveScanOflex, no_einsum=True, CrossScan=CrossScanTriton, CrossMerge=CrossMergeTriton),
+        self.x_proj = (
+            nn.Linear(self.d_inner, (self.dt_rank + self.d_state * 2), bias=False, **factory_kwargs), 
+            nn.Linear(self.d_inner, (self.dt_rank + self.d_state * 2), bias=False, **factory_kwargs), 
         )
-        self.forward_core = FORWARD_TYPES.get(forward_type, None)
-        k_group = 4
-
-        # in proj =======================================
-        d_proj = d_inner if self.disable_z else (d_inner * 2)
-        self.in_proj = Linear(d_model, d_proj, bias=bias, **factory_kwargs)
-        self.act: nn.Module = act_layer()
-        
-        # conv =======================================
-        if d_conv > 1:
-            self.conv2d = nn.Conv2d(
-                in_channels=d_inner,
-                out_channels=d_inner,
-                groups=d_inner,
-                bias=conv_bias,
-                kernel_size=d_conv,
-                padding=(d_conv - 1) // 2,
-                **factory_kwargs,
-            )
-
-        # x proj ============================
-        self.x_proj = [
-            nn.Linear(d_inner, (dt_rank + d_state * 2), bias=False, **factory_kwargs)
-            for _ in range(k_group)
-        ]
-        self.x_proj_weight = nn.Parameter(torch.stack([t.weight for t in self.x_proj], dim=0)) # (K, N, inner)
+        self.x_proj_weight = nn.Parameter(torch.stack([t.weight for t in self.x_proj], dim=0)) # (K=2, N, inner)
         del self.x_proj
+
+        self.dt_projs = (
+            self.dt_init(self.dt_rank, self.d_inner, dt_scale, dt_init, dt_min, dt_max, dt_init_floor, **factory_kwargs),
+            self.dt_init(self.dt_rank, self.d_inner, dt_scale, dt_init, dt_min, dt_max, dt_init_floor, **factory_kwargs),
+        )
+        self.dt_projs_weight = nn.Parameter(torch.stack([t.weight for t in self.dt_projs], dim=0)) # (K=2, inner, rank)
+        self.dt_projs_bias = nn.Parameter(torch.stack([t.bias for t in self.dt_projs], dim=0)) # (K=2, inner)
+        del self.dt_projs
         
-        # out proj =======================================
-        self.out_act = nn.GELU() if self.oact else nn.Identity()
-        self.out_proj = Linear(d_inner, d_model, bias=bias, **factory_kwargs)
-        self.dropout = nn.Dropout(dropout) if dropout > 0. else nn.Identity()
+        self.A_logs = self.A_log_init(self.d_state, self.d_inner, copies=2, merge=True) # (K=2, D, N)
+        self.Ds = self.D_init(self.d_inner, copies=2, merge=True) # (K=2, D, N)
 
-        if initialize in ["v0"]:
-            # dt proj ============================
-            self.dt_projs = [
-                self.dt_init(dt_rank, d_inner, dt_scale, dt_init, dt_min, dt_max, dt_init_floor, **factory_kwargs)
-                for _ in range(k_group)
-            ]
-            self.dt_projs_weight = nn.Parameter(torch.stack([t.weight for t in self.dt_projs], dim=0)) # (K, inner, rank)
-            self.dt_projs_bias = nn.Parameter(torch.stack([t.bias for t in self.dt_projs], dim=0)) # (K, inner)
-            del self.dt_projs
-            
-            # A, D =======================================
-            self.A_logs = self.A_log_init(d_state, d_inner, copies=k_group, merge=True) # (K * D, N)
-            self.Ds = self.D_init(d_inner, copies=k_group, merge=True) # (K * D)
-        elif initialize in ["v1"]:
-            # simple init dt_projs, A_logs, Ds
-            self.Ds = nn.Parameter(torch.ones((k_group * d_inner)))
-            self.A_logs = nn.Parameter(torch.randn((k_group * d_inner, d_state))) # A == -A_logs.exp() < 0; # 0 < exp(A * dt) < 1
-            self.dt_projs_weight = nn.Parameter(torch.randn((k_group, d_inner, dt_rank)))
-            self.dt_projs_bias = nn.Parameter(torch.randn((k_group, d_inner))) 
-        elif initialize in ["v2"]:
-            # simple init dt_projs, A_logs, Ds
-            self.Ds = nn.Parameter(torch.ones((k_group * d_inner)))
-            self.A_logs = nn.Parameter(torch.zeros((k_group * d_inner, d_state))) # A == -A_logs.exp() < 0; # 0 < exp(A * dt) < 1
-            self.dt_projs_weight = nn.Parameter(0.1 * torch.rand((k_group, d_inner, dt_rank)))
-            self.dt_projs_bias = nn.Parameter(0.1 * torch.rand((k_group, d_inner)))
+        # self.selective_scan = selective_scan_fn
+        self.forward_core = self.forward_corev0
 
-    def __initxv__(
-        self,
-        # basic dims ===========
-        d_model=96,
-        d_state=16,
-        ssm_ratio=2.0,
-        dt_rank="auto",
-        act_layer=nn.SiLU,
-        # dwconv ===============
-        d_conv=3, # < 2 means no conv 
-        conv_bias=True,
-        # ======================
-        dropout=0.0,
-        bias=False,
-        # dt init ==============
-        dt_min=0.001,
-        dt_max=0.1,
-        dt_init="random",
-        dt_scale=1.0,
-        dt_init_floor=1e-4,
-        initialize="v0",
-        # ======================
-        forward_type="v2",
-        channel_first=False,
-        # ======================
-        **kwargs,
-    ):
-        factory_kwargs = {"device": None, "dtype": None}
-        super().__init__()
-        d_inner = int(ssm_ratio * d_model)
-        dt_rank = math.ceil(d_model / 16) if dt_rank == "auto" else dt_rank
-        self.d_conv = d_conv
-        self.channel_first = channel_first
-        self.d_state = d_state
-        self.dt_rank = dt_rank
-        self.d_inner = d_inner
-        Linear = Linear2d if channel_first else nn.Linear
-        self.forward = self.forwardxv
-
-        # tags for forward_type ==============================
-        def checkpostfix(tag, value):
-            ret = value[-len(tag):] == tag
-            if ret:
-                value = value[:-len(tag)]
-            return ret, value
-
-        self.disable_force32, forward_type = checkpostfix("no32", forward_type)
-
-        # softmax | sigmoid | dwconv | norm ===========================
-        self.out_norm_shape = "v1"
-        if forward_type[-len("none"):] == "none":
-            forward_type = forward_type[:-len("none")]
-            self.out_norm = nn.Identity()
-        elif forward_type[-len("dwconv3"):] == "dwconv3":
-            forward_type = forward_type[:-len("dwconv3")]
-            self.out_norm = nn.Conv2d(d_inner, d_inner, kernel_size=3, padding=1, groups=d_inner, bias=False)
-        elif forward_type[-len("softmax"):] == "softmax":
-            forward_type = forward_type[:-len("softmax")]
-            class SoftmaxSpatial(nn.Softmax):
-                def forward(self, x: torch.Tensor):
-                    B, C, H, W = x.shape
-                    return super().forward(x.view(B, C, -1)).view(B, C, H, W)
-            self.out_norm = SoftmaxSpatial(dim=-1)
-        elif forward_type[-len("sigmoid"):] == "sigmoid":
-            forward_type = forward_type[:-len("sigmoid")]
-            self.out_norm = nn.Sigmoid()
-        elif channel_first:
-            self.out_norm = LayerNorm2d(d_inner)
-        else:
-            self.out_norm_shape = "v0"
-            self.out_norm = nn.LayerNorm(d_inner)
-
-        k_group = 4
-        # in proj =======================================
-        self.out_act: nn.Module = nn.Identity()
-        # 0309 -> 0319 needs to be rerun...
-        if False:
-            # change Conv2d to Linear2d Next
-            if forward_type.startswith("xv1"):
-                self.in_proj = nn.Conv2d(d_model, d_inner + dt_rank + 8 * d_state, 1, bias=bias, **factory_kwargs)
-
-            if forward_type.startswith("xv2"):
-                self.in_proj = nn.Conv2d(d_model, d_inner + d_inner + 8 * d_state, 1, bias=bias, **factory_kwargs)
-                self.forward = partial(self.forwardxv, mode="xv2")
-                del self.dt_projs_weight
-
-            if forward_type.startswith("xv3"):
-                self.forward = partial(self.forwardxv, mode="xv3")
-                self.in_proj = nn.Conv2d(d_model, d_inner + 4 * dt_rank + 8 * d_state, 1, bias=bias, **factory_kwargs)
-
-            if forward_type.startswith("xv4"):
-                self.forward = partial(self.forwardxv, mode="xv3")
-                self.in_proj = nn.Conv2d(d_model, d_inner + 4 * dt_rank + 8 * d_state, 1, bias=bias, **factory_kwargs)
-                self.out_act = nn.GELU()
-
-            if forward_type.startswith("xv5"):
-                self.in_proj = nn.Conv2d(d_model, d_inner + d_inner + 8 * d_state, 1, bias=bias, **factory_kwargs)
-                self.forward = partial(self.forwardxv, mode="xv2")
-                del self.dt_projs_weight
-                self.out_act = nn.GELU()
-
-            if forward_type.startswith("xv6"):
-                self.forward = partial(self.forwardxv, mode="xv1")
-                self.in_proj = nn.Conv2d(d_model, d_inner + dt_rank + 8 * d_state, 1, bias=bias, **factory_kwargs)
-                self.out_act = nn.GELU()
-
-            # to see if Linear2d and nn.Conv2d differ, as they will be inited differ
-            if forward_type.startswith("xv61"):
-                self.forward = partial(self.forwardxv, mode="xv1")
-                self.in_proj = Linear2d(d_model, d_inner + dt_rank + 8 * d_state, bias=bias, **factory_kwargs)
-                self.out_act = nn.GELU()
-            
-            if forward_type.startswith("xv7"):
-                self.forward = partial(self.forwardxv, mode="xv1", omul=True)
-                self.in_proj = Linear2d(d_model, d_inner + dt_rank + 8 * d_state, bias=bias, **factory_kwargs)
-                self.out_act = nn.GELU()
-            
-        if True:
-            omul, forward_type = checkpostfix("mul", forward_type)
-            if omul:
-                self.omul = nn.Identity()
-            oact, forward_type = checkpostfix("act", forward_type)
-            self.out_act = nn.GELU() if oact else nn.Identity()
-
-            if forward_type.startswith("xv1a"):
-                self.forward = partial(self.forwardxv, mode="xv1a", omul=omul)
-                self.in_proj = Linear2d(d_model, d_inner + dt_rank + 8 * d_state, bias=bias, **factory_kwargs)
-
-            if forward_type.startswith("xv2a"):
-                self.forward = partial(self.forwardxv, mode="xv2a", omul=omul)
-                self.in_proj = Linear2d(d_model, d_inner + d_inner + 8 * d_state,bias=bias, **factory_kwargs)
-
-            if forward_type.startswith("xv3a"):
-                self.forward = partial(self.forwardxv, mode="xv3a", omul=omul)
-                self.in_proj = Linear2d(d_model, d_inner + 4 * dt_rank + 8 * d_state,bias=bias, **factory_kwargs)
-
-        # conv =======================================
-        if d_conv > 1:
-            self.conv2d = nn.Conv2d(
-                in_channels=d_model,
-                out_channels=d_model,
-                groups=d_model,
-                bias=conv_bias,
-                kernel_size=d_conv,
-                padding=(d_conv - 1) // 2,
-                **factory_kwargs,
-            )
-            self.act: nn.Module = act_layer()
-
-        # out proj =======================================
-        self.out_proj = Linear(d_inner, d_model, bias=bias, **factory_kwargs)
-        self.dropout = nn.Dropout(dropout) if dropout > 0. else nn.Identity()
-
-        if initialize in ["v0"]:
-            # dt proj ============================
-            self.dt_projs = [
-                self.dt_init(dt_rank, d_inner, dt_scale, dt_init, dt_min, dt_max, dt_init_floor, **factory_kwargs)
-                for _ in range(k_group)
-            ]
-            self.dt_projs_weight = nn.Parameter(torch.stack([t.weight for t in self.dt_projs], dim=0)) # (K, inner, rank)
-            self.dt_projs_bias = nn.Parameter(torch.stack([t.bias for t in self.dt_projs], dim=0)) # (K, inner)
-            del self.dt_projs
-            
-            # A, D =======================================
-            self.A_logs = self.A_log_init(d_state, d_inner, copies=k_group, merge=True) # (K * D, N)
-            self.Ds = self.D_init(d_inner, copies=k_group, merge=True) # (K * D)
-        elif initialize in ["v1"]:
-            # simple init dt_projs, A_logs, Ds
-            self.Ds = nn.Parameter(torch.ones((k_group * d_inner)))
-            self.A_logs = nn.Parameter(torch.randn((k_group * d_inner, d_state))) # A == -A_logs.exp() < 0; # 0 < exp(A * dt) < 1
-            self.dt_projs_weight = nn.Parameter(torch.randn((k_group, d_inner, dt_rank)))
-            self.dt_projs_bias = nn.Parameter(torch.randn((k_group, d_inner))) 
-        elif initialize in ["v2"]:
-            # simple init dt_projs, A_logs, Ds
-            self.Ds = nn.Parameter(torch.ones((k_group * d_inner)))
-            self.A_logs = nn.Parameter(torch.zeros((k_group * d_inner, d_state))) # A == -A_logs.exp() < 0; # 0 < exp(A * dt) < 1
-            self.dt_projs_weight = nn.Parameter(0.1 * torch.rand((k_group, d_inner, dt_rank)))
-            self.dt_projs_bias = nn.Parameter(0.1 * torch.rand((k_group, d_inner)))
-
-        if forward_type.startswith("xv2"):
-            del self.dt_projs_weight
+        self.out_norm = nn.LayerNorm(self.d_inner)
+        self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=bias, **factory_kwargs)
+        self.dropout = nn.Dropout(dropout) if dropout > 0. else None
 
     @staticmethod
     def dt_init(dt_rank, d_inner, dt_scale=1.0, dt_init="random", dt_min=0.001, dt_max=0.1, dt_init_floor=1e-4, **factory_kwargs):
@@ -474,12 +305,12 @@ class SS2D(nn.Module):
         with torch.no_grad():
             dt_proj.bias.copy_(inv_dt)
         # Our initialization would set all Linear.bias to zero, need to mark this one as _no_reinit
-        # dt_proj.bias._no_reinit = True
+        dt_proj.bias._no_reinit = True
         
         return dt_proj
 
     @staticmethod
-    def A_log_init(d_state, d_inner, copies=-1, device=None, merge=True):
+    def A_log_init(d_state, d_inner, copies=1, device=None, merge=True):
         # S4D real initialization
         A = repeat(
             torch.arange(1, d_state + 1, dtype=torch.float32, device=device),
@@ -487,7 +318,7 @@ class SS2D(nn.Module):
             d=d_inner,
         ).contiguous()
         A_log = torch.log(A)  # Keep A_log in fp32
-        if copies > 0:
+        if copies > 1:
             A_log = repeat(A_log, "d n -> r d n", r=copies)
             if merge:
                 A_log = A_log.flatten(0, 1)
@@ -496,360 +327,366 @@ class SS2D(nn.Module):
         return A_log
 
     @staticmethod
-    def D_init(d_inner, copies=-1, device=None, merge=True):
+    def D_init(d_inner, copies=1, device=None, merge=True):
         # D "skip" parameter
         D = torch.ones(d_inner, device=device)
-        if copies > 0:
+        if copies > 1:
             D = repeat(D, "n1 -> r n1", r=copies)
             if merge:
                 D = D.flatten(0, 1)
         D = nn.Parameter(D)  # Keep in fp32
         D._no_weight_decay = True
         return D
-    
-    # only used to run previous version
-    def forwardv0(self, x: torch.Tensor, SelectiveScan = SelectiveScanMamba, seq=False, force_fp32=True, **kwargs):
-        x = self.in_proj(x)
-        x, z = x.chunk(2, dim=-1) # (b, h, w, d)
-        z = self.act(z)
-        x = x.permute(0, 3, 1, 2).contiguous()
-        x = self.conv2d(x) # (b, d, h, w)
-        x = self.act(x)
+
+    def forward_corev0(self, x: torch.Tensor):
+        self.selective_scan = selective_scan_fn
         
-        def selective_scan(u, delta, A, B, C, D=None, delta_bias=None, delta_softplus=True, nrows=1):
-            return SelectiveScan.apply(u, delta, A, B, C, D, delta_bias, delta_softplus, nrows, False)
+        B, C, T = x.shape
+        L = T
+        K = 2
 
-        B, D, H, W = x.shape
-        D, N = self.A_logs.shape
-        K, D, R = self.dt_projs_weight.shape
-        L = H * W
+        # b c T -> b c T, b c T' -> b 2 c T
+        xs = torch.stack([x, torch.flip(x, dims=[-1])], dim=1) # b 2 c T
 
-        x_hwwh = torch.stack([x.view(B, -1, L), torch.transpose(x, dim0=2, dim1=3).contiguous().view(B, -1, L)], dim=1).view(B, 2, -1, L)
-        xs = torch.cat([x_hwwh, torch.flip(x_hwwh, dims=[-1])], dim=1) # (b, k, d, l)
-
-        x_dbl = torch.einsum("b k d l, k c d -> b k c l", xs, self.x_proj_weight)
+        x_dbl = torch.einsum("b k d l, k c d -> b k c l", xs.view(B, K, -1, L), self.x_proj_weight)
         # x_dbl = x_dbl + self.x_proj_bias.view(1, K, -1, 1)
-        dts, Bs, Cs = torch.split(x_dbl, [R, N, N], dim=2)
-        dts = torch.einsum("b k r l, k d r -> b k d l", dts, self.dt_projs_weight)
+        dts, Bs, Cs = torch.split(x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=2)
+        dts = torch.einsum("b k r l, k d r -> b k d l", dts.view(B, K, -1, L), self.dt_projs_weight)
+        # dts = dts + self.dt_projs_bias.view(1, K, -1, 1)
 
-        xs = xs.view(B, -1, L) # (b, k * d, l)
-        dts = dts.contiguous().view(B, -1, L) # (b, k * d, l)
-        Bs = Bs.contiguous() # (b, k, d_state, l)
-        Cs = Cs.contiguous() # (b, k, d_state, l)
-        
-        As = -torch.exp(self.A_logs.float()) # (k * d, d_state)
-        Ds = self.Ds.float() # (k * d)
+        xs = xs.float().view(B, -1, L) # (b, k * d, l)
+        dts = dts.contiguous().float().view(B, -1, L) # (b, k * d, l)
+        Bs = Bs.float().view(B, K, -1, L) # (b, k, d_state, l)
+        Cs = Cs.float().view(B, K, -1, L) # (b, k, d_state, l)
+        Ds = self.Ds.float().view(-1) # (k * d)
+        As = -torch.exp(self.A_logs.float()).view(-1, self.d_state)  # (k * d, d_state)
         dt_projs_bias = self.dt_projs_bias.float().view(-1) # (k * d)
 
-        # assert len(xs.shape) == 3 and len(dts.shape) == 3 and len(Bs.shape) == 4 and len(Cs.shape) == 4
-        # assert len(As.shape) == 2 and len(Ds.shape) == 1 and len(dt_projs_bias.shape) == 1
-        to_fp32 = lambda *args: (_a.to(torch.float32) for _a in args)
-        
-        if force_fp32:
-            xs, dts, Bs, Cs = to_fp32(xs, dts, Bs, Cs)
-
-        if seq:
-            out_y = []
-            for i in range(4):
-                yi = selective_scan(
-                    xs.view(B, K, -1, L)[:, i], dts.view(B, K, -1, L)[:, i], 
-                    As.view(K, -1, N)[i], Bs[:, i].unsqueeze(1), Cs[:, i].unsqueeze(1), Ds.view(K, -1)[i],
-                    delta_bias=dt_projs_bias.view(K, -1)[i],
-                    delta_softplus=True,
-                ).view(B, -1, L)
-                out_y.append(yi)
-            out_y = torch.stack(out_y, dim=1)
-        else:
-            out_y = selective_scan(
-                xs, dts, 
-                As, Bs, Cs, Ds,
-                delta_bias=dt_projs_bias,
-                delta_softplus=True,
-            ).view(B, K, -1, L)
+        out_y = self.selective_scan(
+            xs, dts, 
+            As, Bs, Cs, Ds, z=None,
+            delta_bias=dt_projs_bias,
+            delta_softplus=True,
+            return_last_state=False,
+        ).view(B, K, -1, L)
         assert out_y.dtype == torch.float
 
-        inv_y = torch.flip(out_y[:, 2:4], dims=[-1]).view(B, 2, -1, L)
-        wh_y = torch.transpose(out_y[:, 1].view(B, -1, W, H), dim0=2, dim1=3).contiguous().view(B, -1, L)
-        invwh_y = torch.transpose(inv_y[:, 1].view(B, -1, W, H), dim0=2, dim1=3).contiguous().view(B, -1, L)
-        y = out_y[:, 0] + inv_y[:, 0] + wh_y + invwh_y
-        
-        y = y.transpose(dim0=1, dim1=2).contiguous() # (B, L, C)
-        y = self.out_norm(y).view(B, H, W, -1)
+        return out_y[:, 0].contiguous(), torch.flip(out_y[:, 1], dims=[-1]).contiguous() # b d t
 
-        y = y * z
-        out = self.dropout(self.out_proj(y))
+
+    def forward(self, x: torch.Tensor, **kwargs): # bhw t c
+        B, T, C = x.shape
+        xz = self.in_proj(x)
+        x, z = xz.chunk(2, dim=-1) # b t d
+
+        x = x.permute(0, 2, 1).contiguous() # b d t
+        x = self.act(self.conv1d(x)) # b d t
+        y1, y2 = self.forward_core(x) # B d t
+        assert y1.dtype == torch.float32
+        y = y1 + y2
+        y = y.permute(0, 2, 1).contiguous() # b t d
+        y = self.out_norm(y)
+        y = y * F.silu(z)
+        out = self.out_proj(y)
+        if self.dropout is not None:
+            out = self.dropout(out)
         return out
 
-    # Note: we did not use csm_triton in and before vssm1_0230, we used pytorch version !
-    # Note: we did not use no_einsum in and before vssm1_0230, we used einsum version !    
-    def forward_corev2(
-        self,
-        x: torch.Tensor=None, 
-        x_proj_weight: torch.Tensor=None,
-        x_proj_bias: torch.Tensor=None,
-        dt_projs_weight: torch.Tensor=None,
-        dt_projs_bias: torch.Tensor=None,
-        A_logs: torch.Tensor=None,
-        Ds: torch.Tensor=None,
-        delta_softplus = True,
-        out_norm: torch.nn.Module=None,
-        out_norm_shape="v0",
-        channel_first=False,
-        # ==============================
-        to_dtype=True, # True: final out to dtype
-        force_fp32=False, # True: input fp32
-        # ==============================
-        nrows = -1, # for SelectiveScanNRow; 0: auto; -1: disable;
-        backnrows = -1, # for SelectiveScanNRow; 0: auto; -1: disable;
-        ssoflex=True, # True: out fp32 in SSOflex; else, SSOflex is the same as SSCore
-        # ==============================
-        SelectiveScan=None,
-        CrossScan=CrossScan,
-        CrossMerge=CrossMerge,
-        no_einsum=False, # replace einsum with linear or conv1d to raise throughput
-        **kwargs,
-    ):
-        x_proj_weight = self.x_proj_weight
-        dt_projs_weight = self.dt_projs_weight
-        dt_projs_bias = self.dt_projs_bias
-        A_logs = self.A_logs
-        Ds = self.Ds
-        out_norm = getattr(self, "out_norm", None)
-        out_norm_shape = getattr(self, "out_norm_shape", "v0")
-        channel_first = self.channel_first
-
-        # out_norm: whatever fits (B, L, C); LayerNorm; Sigmoid; Softmax(dim=1);...
-
-        B, D, H, W = x.shape
-        D, N = A_logs.shape
-        K, D, R = dt_projs_weight.shape
-        L = H * W
-
-        if nrows == 0:
-            if D % 4 == 0:
-                nrows = 4
-            elif D % 3 == 0:
-                nrows = 3
-            elif D % 2 == 0:
-                nrows = 2
-            else:
-                nrows = 1
-            
-        if backnrows == 0:
-            if D % 4 == 0:
-                backnrows = 4
-            elif D % 3 == 0:
-                backnrows = 3
-            elif D % 2 == 0:
-                backnrows = 2
-            else:
-                backnrows = 1
-
-        def selective_scan(u, delta, A, B, C, D=None, delta_bias=None, delta_softplus=True):
-            return SelectiveScan.apply(u, delta, A, B, C, D, delta_bias, delta_softplus, nrows, backnrows, ssoflex)
+@META_ARCH_REGISTRY.register()
+class SS1D_Temporal_Multiscale(nn.Module):
+    def __init__(self, configs) -> None:
+        super().__init__()
+        d_model = configs['d_model']
+        self.homo = SS1D(d_model=configs['d_model'],
+                        d_state=configs['d_state'] if 'd_state' in configs else 1,
+                        d_conv=configs['d_conv'] if 'd_conv' in configs else 3,
+                        expand=configs['expand'] if 'expand' in configs else 2,
+                        dt_rank=configs['dt_rank'] if 'dt_rank' in configs else 'auto',
+                        dt_min=configs['dt_min'] if 'dt_min' in configs else 0.001,
+                        dt_max=configs['dt_max'] if 'dt_max' in configs else 0.1,
+                        dt_init=configs['dt_init'] if 'dt_init' in configs else 'random',
+                        dt_scale=configs['dt_scale'] if 'dt_scale' in configs else 1.0,
+                        dt_init_floor=configs['dt_init_floor'] if 'dt_init_floor' in configs else 1e-4,
+                        dropout=configs['dropout'] if 'dropout' in configs else 0,
+                        conv_bias=configs['conv_bias'] if 'conv_bias' in configs else True,
+                        bias=configs['bias'] if 'bias' in configs else False,
+                        )
         
-        if no_einsum:
-            xs = CrossScan.apply(x)
-            x_dbl = F.conv1d(xs.view(B, -1, L), x_proj_weight.view(-1, D, 1), bias=(x_proj_bias.view(-1) if x_proj_bias is not None else None), groups=K)
-            dts, Bs, Cs = torch.split(x_dbl.view(B, K, -1, L), [R, N, N], dim=2)
-            dts = F.conv1d(dts.contiguous().view(B, -1, L), dt_projs_weight.view(K * D, -1, 1), groups=K)
+        # self.input_proj = nn.Linear(d_model, d_model)
+        # self.output_proj = nn.Linear(d_model, d_model)
+        self.pos_1d = build_position_encoding(position_embedding_name='1d')
+
+        # xavier_uniform_(self.input_proj.weight.data)
+        # constant_(self.input_proj.bias.data, 0.)
+        # xavier_uniform_(self.output_proj.weight.data)
+        # constant_(self.output_proj.bias.data, 0.)
+
+    def forward(self, 
+                query=None,  # bt hw_sigma c
+                video_aux_dict=None,
+                batch_size=None,
+                **kwargs
+                ):
+        if video_aux_dict is not None:
+            nf = video_aux_dict['nf']
+            batch_size = query.shape[0] // video_aux_dict['nf']
         else:
-            xs = CrossScan.apply(x)
-            x_dbl = torch.einsum("b k d l, k c d -> b k c l", xs, x_proj_weight)
-            if x_proj_bias is not None:
-                x_dbl = x_dbl + x_proj_bias.view(1, K, -1, 1)
-            dts, Bs, Cs = torch.split(x_dbl, [R, N, N], dim=2)
-            dts = torch.einsum("b k r l, k d r -> b k d l", dts, dt_projs_weight)
+            assert batch_size is not None
+            nf = query.shape[0] // batch_size
+        # query = self.input_proj(query) # b t hw_sigma c
+        query = rearrange(query, '(b t) hw c -> (b hw) t c',t=nf, b=batch_size)
+        poses = self.pos_1d(mask=torch.zeros_like(query[..., 0]).bool(), hidden_dim=query.shape[-1]).permute(0, 2, 1).contiguous()
+        query = query + poses
+        query = self.homo(query) # b t c
+        query = rearrange(query, '(b hw) t c -> (b t) hw c',b=batch_size)
+        return query, None, None
 
-        xs = xs.view(B, -1, L)
-        dts = dts.contiguous().view(B, -1, L)
-        As = -torch.exp(A_logs.to(torch.float)) # (k * c, d_state)
-        Bs = Bs.contiguous().view(B, K, N, L)
-        Cs = Cs.contiguous().view(B, K, N, L)
-        Ds = Ds.to(torch.float) # (K * c)
-        delta_bias = dt_projs_bias.view(-1).to(torch.float)
 
-        if force_fp32:
-            xs = xs.to(torch.float)
-            dts = dts.to(torch.float)
-            Bs = Bs.to(torch.float)
-            Cs = Cs.to(torch.float)
-
-        ys: torch.Tensor = selective_scan(
-            xs, dts, As, Bs, Cs, Ds, delta_bias, delta_softplus
-        ).view(B, K, -1, H, W)
+@META_ARCH_REGISTRY.register()
+class SelfAttn_Temporal_Multiscale(nn.Module):
+    def __init__(self, configs) -> None:
+        super().__init__()
+        d_model = configs['d_model']
+        self.homo = nn.MultiheadAttention(embed_dim=d_model,
+                                          num_heads=8,
+                                          dropout=0.)
         
-        y: torch.Tensor = CrossMerge.apply(ys)
+        # self.input_proj = nn.Linear(d_model, d_model)
+        # self.output_proj = nn.Linear(d_model, d_model)
+        self.pos_1d = build_position_encoding(position_embedding_name='1d')
 
-        if getattr(self, "__DEBUG__", False):
-            setattr(self, "__data__", dict(
-                A_logs=A_logs, Bs=Bs, Cs=Cs, Ds=Ds,
-                us=xs, dts=dts, delta_bias=delta_bias,
-                ys=ys, y=y,
-            ))
+        # xavier_uniform_(self.input_proj.weight.data)
+        # constant_(self.input_proj.bias.data, 0.)
+        # xavier_uniform_(self.output_proj.weight.data)
+        # constant_(self.output_proj.bias.data, 0.)
 
-        if channel_first:
-            y = y.view(B, -1, H, W)
-            if out_norm_shape in ["v1"]:
-                y = out_norm(y)
-            else:
-                y = out_norm(y.permute(0, 2, 3, 1))
-                y = y.permute(0, 3, 1, 2)
-            return (y.to(x.dtype) if to_dtype else y)
+    def forward(self, 
+                query=None,  # bt hw_sigma c
+                video_aux_dict=None,
+                **kwargs
+                ):
+        nf = video_aux_dict['nf']
+        batch_size = query.shape[0] // video_aux_dict['nf']
+        # query = self.input_proj(query) # b t hw_sigma c
+        query = rearrange(query, '(b t) hw c -> (b hw) t c',t=nf, b=batch_size)
+        poses = self.pos_1d(mask=torch.zeros_like(query[..., 0]).bool(), hidden_dim=query.shape[-1]).permute(0, 2, 1).contiguous()
+        query = query + poses
+        query = self.homo(query) # b t c
+        query = rearrange(query, '(b hw) t c -> (b t) hw c',b=batch_size)
+        return query, None, None
 
-        if out_norm_shape in ["v1"]: # (B, C, H, W)
-            y = out_norm(y.view(B, -1, H, W)).permute(0, 2, 3, 1) # (B, H, W, C)
-        else: # (B, L, C)
-            y = y.transpose(dim0=1, dim1=2).contiguous() # (B, L, C)
-            y = out_norm(y).view(B, H, W, -1)
 
-        return (y.to(x.dtype) if to_dtype else y)
+# masked mamba
 
-    def forwardv2(self, x: torch.Tensor, **kwargs):
-        with_dconv = (self.d_conv > 1)
-        x = self.in_proj(x)
-        if not self.disable_z:
-            x, z = x.chunk(2, dim=(1 if self.channel_first else -1)) # (b, h, w, d)
-            if not self.disable_z_act:
-                z = self.act(z)
+@META_ARCH_REGISTRY.register()
+class SS1D_Temporal_MaskedObjSequence(nn.Module):
+    def __init__(self, configs) -> None:
+        super().__init__()
+        d_model = configs['d_model']
+        self.homo = SS1D(d_model=configs['d_model'],
+                        d_state=configs['d_state'] if 'd_state' in configs else 16,
+                        d_conv=configs['d_conv'] if 'd_conv' in configs else 3,
+                        expand=configs['expand'] if 'expand' in configs else 2,
+                        dt_rank=configs['dt_rank'] if 'dt_rank' in configs else 'auto',
+                        dt_min=configs['dt_min'] if 'dt_min' in configs else 0.001,
+                        dt_max=configs['dt_max'] if 'dt_max' in configs else 0.1,
+                        dt_init=configs['dt_init'] if 'dt_init' in configs else 'random',
+                        dt_scale=configs['dt_scale'] if 'dt_scale' in configs else 1.0,
+                        dt_init_floor=configs['dt_init_floor'] if 'dt_init_floor' in configs else 1e-4,
+                        dropout=configs['dropout'] if 'dropout' in configs else 0,
+                        conv_bias=configs['conv_bias'] if 'conv_bias' in configs else True,
+                        bias=configs['bias'] if 'bias' in configs else False,
+                        )
         
-        if not self.channel_first:
-            x = x.permute(0, 3, 1, 2).contiguous()
-        if with_dconv:
-            x = self.conv2d(x) # (b, d, h, w)
-        x = self.act(x)
-        
-        y = self.forward_core(x)
-        y = self.out_act(y)
-        if not self.disable_z:
-            y = y * z
-        out = self.dropout(self.out_proj(y))
-        return out
+        self.pos_1d = build_position_encoding(position_embedding_name='1d')
 
-    def forwardxv(self, x: torch.Tensor, mode="xv1a", omul=False, **kwargs):
-        B, C, H, W = x.shape
-        if not self.channel_first:
-            B, H, W, C = x.shape
-        L = H * W
-        K = 4
-        dt_projs_weight = getattr(self, "dt_projs_weight", None)
-        A_logs = self.A_logs
-        dt_projs_bias = self.dt_projs_bias
-        force_fp32 = False
-        delta_softplus = True
-        out_norm_shape = getattr(self, "out_norm_shape", "v0")
-        out_norm = self.out_norm
-        to_dtype = True
-        Ds = self.Ds
+        self.version = configs['version']
+        self.k_points = configs['k_points']
 
-        to_fp32 = lambda *args: (_a.to(torch.float32) for _a in args)
-
-        def selective_scan(u, delta, A, B, C, D, delta_bias, delta_softplus):
-            return SelectiveScanOflex.apply(u, delta, A, B, C, D, delta_bias, delta_softplus, 1, 1, True)
-
-        if not self.channel_first:
-            x = x.permute(0, 3, 1, 2).contiguous()
-
-        if self.d_conv > 1:
-            x = self.conv2d(x) # (b, d, h, w)
-            x = self.act(x)
-        x = self.in_proj(x)
-
-        if mode in ["xv1", "xv2", "xv3", "xv7"]:
-            print(f"ERROR: MODE {mode} will be deleted in the future, use {mode}a instead.")
-
-        if mode in ["xv1"]:
-            _us, dts, Bs, Cs = x.split([self.d_inner, self.dt_rank, 4 * self.d_state, 4 * self.d_state], dim=1)
-            us = CrossScanTriton.apply(_us.contiguous()).view(B, -1, L)
-            dts = CrossScanTriton.apply(dts.contiguous()).view(B, -1, L)
-            dts = F.conv1d(dts, dt_projs_weight.view(K * self.d_inner, self.dt_rank, 1), None, groups=K).contiguous().view(B, -1, L)
-        elif mode in ["xv2"]:
-            _us, dts, Bs, Cs = x.split([self.d_inner, self.d_inner, 4 * self.d_state, 4 * self.d_state], dim=1)
-            us = CrossScanTriton.apply(_us.contiguous()).view(B, -1, L)
-            dts = CrossScanTriton.apply(dts).contiguous().view(B, -1, L)
-        elif mode in ["xv3"]:
-            _us, dts, Bs, Cs = x.split([self.d_inner, 4 * self.dt_rank, 4 * self.d_state, 4 * self.d_state], dim=1)
-            us = CrossScanTriton.apply(_us.contiguous()).view(B, -1, L)
-            dts = CrossScanTriton1b1.apply(dts.contiguous().view(B, K, -1, H, W))
-            dts = F.conv1d(dts.view(B, -1, L), dt_projs_weight.view(K * self.d_inner, self.dt_rank, 1), None, groups=K).contiguous().view(B, -1, L)
-        else:
-            ...
-
-        if mode in ["xv1a"]:
-            us, dts, Bs, Cs = x.split([self.d_inner, self.dt_rank, 4 * self.d_state, 4 * self.d_state], dim=1)
-            _us = us
-            us = CrossScanTriton.apply(us.contiguous()).view(B, 4, -1, L)
-            dts = CrossScanTriton.apply(dts.contiguous()).view(B, 4, -1, L)
-            Bs = CrossScanTriton1b1.apply(Bs.view(B, 4, -1, H, W).contiguous()).view(B, 4, -1, L)
-            Cs = CrossScanTriton1b1.apply(Cs.view(B, 4, -1, H, W).contiguous()).view(B, 4, -1, L)
-            dts = F.conv1d(dts.contiguous().view(B, -1, L), dt_projs_weight.view(K * self.d_inner, self.dt_rank, 1), None, groups=K)
-            us, dts = us.contiguous().view(B, -1, L), dts
-            _us = us.view(B, K, -1, H, W)[:, 0, :, :, :]
-        elif mode in ["xv2a"]:
-            us, dts, Bs, Cs = x.split([self.d_inner, self.d_inner, 4 * self.d_state, 4 * self.d_state], dim=1)
-            _us = us
-            us = CrossScanTriton.apply(us.contiguous()).view(B, 4, -1, L)
-            dts = CrossScanTriton.apply(dts.contiguous()).view(B, 4, -1, L)
-            Bs = CrossScanTriton1b1.apply(Bs.view(B, 4, -1, H, W).contiguous()).view(B, 4, -1, L)
-            Cs = CrossScanTriton1b1.apply(Cs.view(B, 4, -1, H, W).contiguous()).view(B, 4, -1, L)
-            us, dts = us.contiguous().view(B, -1, L), dts.contiguous().view(B, -1, L)
-        elif mode in ["xv3a"]:
-            # us, dtBCs = x.split([self.d_inner, 4 * self.dt_rank + 4 * self.d_state + 4 * self.d_state], dim=1)
-            # _us = us
-            # us = CrossScanTriton.apply(us.contiguous()).view(B, 4, -1, L)
-            # dtBCs = CrossScanTriton1b1.apply(dtBCs.view(B, 4, -1, H, W).contiguous()).view(B, 4, -1, L)
-            # dts, Bs, Cs = dtBCs.split([self.dt_rank, self.d_state, self.d_state], dim=2)
-            # dts = F.conv1d(dts.contiguous().view(B, -1, L), dt_projs_weight.view(K * self.d_inner, self.dt_rank, 1), None, groups=K)
-            # us, dts = us.contiguous().view(B, -1, L), dts
+    @torch.no_grad()
+    def get_temporal_mask(self, 
+                          mask_features=None,  # b c t h w
+                          temporal_query_feats=None,  # b nq c
+                          spatial_shapes=None,
+                          level_start_idx=None,
+                          query_norm=None,
+                          mask_mlp=None ): 
+        # b c t h w, b nq c
+        temporal_query_feats = query_norm[0](temporal_query_feats) # b nq c
+        mask_embeds = mask_mlp[0](temporal_query_feats)  # b n c
+        mask_logits = torch.einsum("bqc,bcthw->bqthw", mask_embeds, mask_features) 
+        batch_size, nq, nf, H, W = mask_logits.shape
             
-            us, dts, Bs, Cs = x.split([self.d_inner, 4 * self.dt_rank, 4 * self.d_state, 4 * self.d_state], dim=1)
-            _us = us
-            us = CrossScanTriton.apply(us.contiguous()).view(B, 4, -1, L)
-            dts = CrossScanTriton1b1.apply(dts.view(B, 4, -1, H, W).contiguous()).view(B, 4, -1, L)
-            Bs = CrossScanTriton1b1.apply(Bs.view(B, 4, -1, H, W).contiguous()).view(B, 4, -1, L)
-            Cs = CrossScanTriton1b1.apply(Cs.view(B, 4, -1, H, W).contiguous()).view(B, 4, -1, L)
-            dts = F.conv1d(dts.contiguous().view(B, -1, L), dt_projs_weight.view(K * self.d_inner, self.dt_rank, 1), None, groups=K)
-            us, dts = us.contiguous().view(B, -1, L), dts
-        else: 
-            ...
+        if self.version == 1:
+            # b n t h w
+            mask_logits = mask_logits.flatten(3) # b n t hw
+            temporal_mask = torch.zeros_like(mask_logits)
+            topk, indices = torch.topk(mask_logits, self.k_points, dim =-1) # value, idx; b n t k
+            y_coords = indices // W # b n t k
+            x_coords = indices % W # b n t k
+            abs_coords = torch.stack([y_coords, x_coords], dim=4) # b n t k 2
+            rel_coords = abs_coords.float() / torch.tensor([H, W], device=mask_logits.device).float() # b n t k 2
+            # neural tangent kernel
+            scale_seq_coordinates = []
+            for haosen in spatial_shapes:
+                haosen_h, haosen_w = haosen
+                scale_abs_coords = (rel_coords *haosen).long() # b n t k 2
+                scale_abs_coords_seq = scale_abs_coords[..., 0] * haosen_w + scale_abs_coords[..., 1] # b n t k
+                scale_seq_coordinates.append(scale_abs_coords_seq)
+            return scale_seq_coordinates    
 
-        Bs, Cs = Bs.view(B, K, -1, L).contiguous(), Cs.view(B, K, -1, L).contiguous()
-    
-        As = -torch.exp(A_logs.to(torch.float)) # (k * c, d_state)
-        Ds = Ds.to(torch.float) # (K * c)
-        delta_bias = dt_projs_bias.view(-1).to(torch.float) # (K * c)
+        elif self.version == 2:
+            # b n t h w
+            mask_logits = mask_logits.flatten(3) # b n t hw
+            topk, indices = torch.topk(mask_logits, self.k_points, dim =-1) # value, idx; b n t k
+            y_coords = indices // W # b n t k
+            x_coords = indices % W # b n t k
+            abs_coords = torch.stack([y_coords, x_coords], dim=4) # b n t k 2
+            rel_coords = abs_coords.float() / torch.tensor([H, W], device=mask_logits.device).float() # b n t k 2
+            # neural tangent kernel
+            scale_seq_coordinates = []
+            for haosen, start_idx in zip(spatial_shapes, level_start_idx):
+                haosen_h, haosen_w = haosen
+                scale_abs_coords = (rel_coords *haosen).long() # b n t k 2
+                scale_abs_coords_seq = scale_abs_coords[..., 0] * haosen_w + scale_abs_coords[..., 1] # b n t k
+                scale_seq_coordinates.append(scale_abs_coords_seq + start_idx)
+            scale_seq_coordinates = torch.stack(scale_seq_coordinates, dim=3).flatten(3) # b n t L k -> b n t Lk
+            return scale_seq_coordinates 
 
-        if force_fp32:
-            us, dts, Bs, Cs = to_fp32(us, dts, Bs, Cs)
-
-        ys: torch.Tensor = selective_scan(
-            us, dts, As, Bs, Cs, Ds, delta_bias, delta_softplus
-        ).view(B, K, -1, H, W)
-            
-        y: torch.Tensor = CrossMergeTriton.apply(ys)
-        y = y.view(B, -1, H, W)
-
-        if getattr(self, "__DEBUG__", False):
-            setattr(self, "__data__", dict(
-                A_logs=A_logs, Bs=Bs, Cs=Cs, Ds=Ds,
-                us=us, dts=dts, delta_bias=delta_bias,
-                ys=ys, y=y,
-            ))
-
-        # originally:
-        # y = y.transpose(dim0=1, dim1=2).contiguous() # (B, L, C)
-        # y = out_norm(y).view(B, H, W, -1)
-
-        if (not self.channel_first) or (out_norm_shape in ["v0"]):
-            y = out_norm(y.permute(0, 2, 3, 1))
-            if self.channel_first:
-                y = y.permute(0, 3, 1, 2)
         else:
-            y = out_norm(y)
+            raise ValueError() 
+        # if self.version == 0:
+        #     mask_logits = mask_logits.sigmoid() > 0.5 
+        #     mask_logits = mask_logits.flatten(0, 1) # bn t h w
 
-        y = (y.to(x.dtype) if to_dtype else y)
-        y = self.out_act(y)
-        if omul:
-            y = y * (_us.permute(0, 2, 3, 1) if not self.channel_first else _us)
-        out = self.dropout(self.out_proj(y))
-        return out
+        #     temporal_mask = []
+        #     for haosen in spatial_shapes:
+        #         mask_logits = F.interpolate(mask_logits, size=haosen, mode='nearest').flatten(2) #bn t hw
+        #         temporal_mask.append(mask_logits)
+        #     temporal_mask = torch.cat(temporal_mask, dim=-1) # bn t hw_sigma
+        
+        #     temporal_mask = rearrange(temporal_mask, '(b n) t s -> b n t s',b=batch_size, n=nq)
+
+        #     temporal_mask[torch.where(temporal_mask.sum(-1) == temporal_mask.shape[-1])] = False 
+        #     return temporal_mask
+
+        # elif self.version == 2:
+        #     k=4
+        #     # b n t h w
+        #     mask_logits = mask_logits.flatten(3) # b n t hw
+        #     temporal_mask = torch.zeros_like(mask_logits)
+        #     topk, indices = torch.topk(temporal_mask, k, dim =-1) # value, idx; b n t k
+        #     y_coords = indices // W # b n t k
+        #     x_coords = indices % W # b n t k
+
+        #     abs_coords = torch.stack([y_coords, x_coords], dim=3) # b n t k 2
+        #     rel_coords = abs_coords.float() / torch.tensor([H, W], device=mask_logits.device).float() # b n t k 2
+        #     return rel_coords 
+
+    def forward(self, 
+                query=None,  # bt hw_sigma c
+                spatial_shapes=None,
+                level_start_index=None,
+                mask_features=None, # b c t h w
+                temporal_query_feats=None, # b nq c
+                query_norm = None,
+                mask_mlp = None,
+                **kwargs):
+        
+        hw_sigma = query.shape[1]
+        batch_size, _, nf, *_ = mask_features.shape
+        nq = temporal_query_feats.shape[1]
+        query = rearrange(query, '(b t) hw c -> (b hw) t c',t=nf, b=batch_size).contiguous()
+        poses = self.pos_1d(mask=torch.zeros_like(query[..., 0]).bool(), hidden_dim=query.shape[-1]).permute(0, 2, 1).contiguous()
+        query = query + poses # (b hw) t c
+
+        temporal_mask = self.get_temporal_mask(mask_features=mask_features, 
+                                               temporal_query_feats=temporal_query_feats,
+                                               spatial_shapes=spatial_shapes,
+                                               query_norm=query_norm,
+                                               mask_mlp=mask_mlp,
+                                               level_start_idx=level_start_index)  
+
+        if self.version == 1:
+            # list[b n t k], 32, 16, 8, hw的index
+            inputs = []
+            query = rearrange(query, '(b hw) t c -> b t hw c',b=batch_size, hw=hw_sigma)
+            for idx_mask, haosen, start_idx in zip(temporal_mask, spatial_shapes, level_start_index):
+                cardib = query[:, :, start_idx:(start_idx + haosen[0] * haosen[1])].contiguous() # b t hw c
+                cardib = repeat(cardib, 'b t hw c -> b n t hw c', n=nq).contiguous()
+                idx_mask = repeat(idx_mask, 'b n t k -> b n t k c', c=cardib.shape[-1])
+                sampled_points = torch.gather(cardib, dim=3, index=idx_mask).contiguous() # b n t k c
+                inputs.append(sampled_points)
+            
+            inputs = torch.stack(inputs, dim=0) # L b n t k c
+            L, _, nq, _, kk, _ = inputs.shape
+            inputs = inputs.flatten(0, 2).flatten(1, 2).contiguous() #  Lbn tk c
+            inputs = self.homo(inputs)
+            inputs = rearrange(inputs, '(L b n) (t k) c -> b n t (L k) c',L=L,b=batch_size,n=nq,t=nf,k=kk)
+            # list[b n t k] -> b n t (L k), hw_sigma的index
+            temporal_mask = [tm + start_idx for tm, start_idx in zip(temporal_mask, level_start_index)]
+            temporal_mask = torch.stack(temporal_mask, 3).flatten(3).unsqueeze(-1).repeat(1,1,1,1,inputs.shape[-1]) # b n t Lk c
+
+            residual = torch.zeros_like(query)[:, None].repeat(1, nq, 1, 1, 1) # b n t hw_sigma c
+            # The backward pass is implemented only for src.shape == index.shape
+            assert inputs.shape == temporal_mask.shape
+            residual.scatter_add_(dim=3, index=temporal_mask, src=inputs)
+            residual = residual.sum(1) # b t hw_sigma c
+            query = query + residual
+            query = query.flatten(0, 1).contiguous()
+            return query, None, None
+        
+        elif self.version == 2:
+            # b n t LK
+            inputs = []
+            query = rearrange(query, '(b hw) t c -> b t hw c',b=batch_size, hw=hw_sigma)
+            repeat_query = repeat(query, 'b t hw c -> b n t hw c',n=nq).contiguous()
+            temporal_mask = temporal_mask.unsqueeze(-1).repeat(1,1,1,1,query.shape[-1]) # b n t Lk c
+            sampled_points = torch.gather(repeat_query, dim=3, index=temporal_mask).contiguous() # b n t k c
+            L = len(spatial_shapes)
+            kk = sampled_points.shape[3] // L
+            sampled_points = rearrange(sampled_points, 'b n t (L K) c -> (L b n) (t K) c',L=len(spatial_shapes)).contiguous()
+            sampled_points = self.homo(sampled_points)
+            sampled_points = rearrange(sampled_points, '(L b n) (t k) c -> b n t (L k) c',L=L,b=batch_size,n=nq,t=nf,k=kk)
+
+            residual = torch.zeros_like(repeat_query) # b n t hw_sigma c
+            # The backward pass is implemented only for src.shape == index.shape
+            assert sampled_points.shape == temporal_mask.shape
+            residual.scatter_add_(dim=3, index=temporal_mask, src=sampled_points)
+            residual = residual.sum(1) # b t hw_sigma c
+            query = query + residual
+            query = query.flatten(0, 1).contiguous() # bt hw_siamga c
+            return query, None, None
+        else:
+            raise ValueError()
+        
+        # scatter, where, gather, index_fill
+
+        # elif self.version == 0:  
+ 
+        #     query = repeat(query, '(b hw) t c -> (b nf) (t hw) c', nf=nf).contiguous()
+        #     temporal_mask = temporal_mask.flatten(0, 1).flatten(1) # bn thw
+
+        #     max_len = max([haosen.int().sum() for haosen in temporal_mask])
+        #     # list[s c], bn
+        #     inputs = [F.pad(query[idx, haosen], pad=[0, 0, 0, max_len-len(haosen)], value=0.) for idx, haosen in enumerate(temporal_mask)]
+        #     query = self.homo(query) # b t c
+        #     query = rearrange(query, '(b hw) t c -> (b t) hw c',b=batch_size)
+        #     return query, None, None
+
+
+
+
+        # elif version == 2:
+        #     temporal_mask = rearrange(temporal_mask, 'b n t k 2 -> (b n t) k 2')
+        #     inputs = []
+        #     query = rearrange(query, '(b hw) t c -> b t hw c',b=batch_size, hw=hw_sigma)
+        #     for haosen, haosen_2 in zip(spatial_shapes, level_start_index):
+        #         cardib = query[:, :, haosen_2:(haosen_2 + haosen[0] * haosen[1])].contiguous() # b t hw c
+        #         cardib = repeat(cardib, 'b t (h w) c -> (b n t) c h w',h=haosen[0], w=haosen[1], n=nf).contiguous()
+
+        #         # n c h w, n p 2 -> n c p
+        #         sampled_points = point_sample(cardib, point_coords=temporal_mask).contiguous() # bnt c k
+        #         inputs.append(sampled_points)
+        #     for shape in spatial_shapes:
+

@@ -187,13 +187,34 @@ class PVT_V2(nn.Module):
         self.max_stride = 32
 
     def forward(self, x):
-        layer_outputs = self.pvt_v2(x)
-        ret = {}
-        names = ['res2', 'res3', 'res4', 'res5']
-        for name, feat in zip(names, layer_outputs):
-            ret[name] = feat
-        return ret
-        
+        # layer_outputs = self.pvt_v2(x)
+        # ret = {}
+        # names = ['res2', 'res3', 'res4', 'res5']
+        # for name, feat in zip(names, layer_outputs):
+        #     ret[name] = feat
+        # return ret
+
+        if not self.training:
+            batch_feats = []
+            for haosen in x:
+                feats =  self.pvt_v2(haosen.unsqueeze(0))
+                batch_feats.append(feats)
+            batch_feats = list(zip(*batch_feats)) # 4
+            batch_feats = [torch.cat(haosen, dim=0) for haosen in batch_feats] # list[bt c h w]
+            ret = {}
+            names = ['res2', 'res3', 'res4', 'res5']
+            for name, feat in zip(names, batch_feats):
+                ret[name] = feat
+            return ret            
+        else:
+            layer_outputs = self.pvt_v2(x)
+            ret = {}
+            names = ['res2', 'res3', 'res4', 'res5']
+            for name, feat in zip(names, layer_outputs):
+                ret[name] = feat
+            return ret
+
+
     def num_parameters(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 

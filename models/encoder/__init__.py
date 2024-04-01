@@ -2,7 +2,7 @@
 from .msdeformattn import (
     VideoMultiscale_Text_Deform2d,
 )
-from .msdeformattn_temporalPatchSim import (
+from .msdeformattn_temporal import (
     Video_Deform2D_DividedTemporal_MultiscaleEncoder
 )
 from .swinattn import (
@@ -24,12 +24,19 @@ from .multiscale_encoder import (
     Video2D_InterpolateTimes_MultiscaleEncoder,
 )
 
-from .msdeformattn_masked import (
-    Video_Deform2D_DividedTemporal_MultiscaleEncoder_v2
-)
-from .msdeformattn_localGlobal import (
-    Video_Deform2D_DividedTemporal_MultiscaleEncoder_localGlobal
-)
+# from .msdeformattn_masked import (
+#     Video_Deform2D_DividedTemporal_MultiscaleEncoder_v2
+# )
+# miccai 24
+# from .msdeformattn_localGlobal import (
+#     Video_Deform2D_DividedTemporal_MultiscaleEncoder_localGlobal
+# )
 # from .neighborhood_qk import (
 #     NA_qk_Layer_v2
 # )
+
+
+# shadow
+from .msdeformattn_temporal_deformss import (
+    Video_DeformSS2D_TemporalSS1D_MultiscaleEncoder
+)

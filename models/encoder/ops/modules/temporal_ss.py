@@ -124,94 +124,6 @@ class MSDeformAttn(nn.Module):
         return output, sampling_locations, attention_weights
 
 
-@META_ARCH_REGISTRY.register()
-class TemporalColor_SSM_Multiscale(nn.Module):
-    def __init__(self, 
-                 configs,):
-        super().__init__()
-        d_model = configs['d_model']
-
-        self.self_attention = Mamba(d_model=configs['d_model'],
-                                    d_state=configs['d_state'] if 'd_state' in configs else 16,
-                                    d_conv=configs['d_conv'] if 'd_conv' in configs else 4,
-                                    expand=configs['expand'] if 'expand' in configs else 2,
-                                    dt_rank=configs['dt_rank'] if 'dt_rank' in configs else 'auto',
-                                    dt_min=configs['dt_min'] if 'dt_min' in configs else 0.001,
-                                    dt_max=configs['dt_max'] if 'dt_max' in configs else 0.1,
-                                    dt_init=configs['dt_init'] if 'dt_init' in configs else 'random',
-                                    dt_scale=configs['dt_scale'] if 'dt_scale' in configs else 1.0,
-                                    dt_init_floor=configs['dt_init_floor'] if 'dt_init_floor' in configs else 1e-4,
-                                    conv_bias=configs['conv_bias'] if 'conv_bias' in configs else True,
-                                    bias=configs['bias'] if 'bias' in configs else False,
-                                    use_fast_path=configs['use_fast_path'] if 'use_fast_path' in configs else True,
-                                    layer_idx=configs['layer_idx'] if 'layer_idx' in configs else None,
-                                    )
-        
-        self.sampling_offsets = nn.Linear(d_model, n_heads * n_levels * n_points * 2) # 每个点的deformable points (0, 1)
-        self.attention_weights = nn.Linear(d_model, n_heads * n_levels * n_points)    # 每个deformable points的attention weights
-        self.value_proj = nn.Linear(d_model, d_model)
-        self.output_proj = nn.Linear(d_model, d_model)
-
-    def forward(self, 
-                query=None,  # bt hw_sigma c
-                reference_points=None, 
-                input_spatial_shapes=None,  # 3 2
-                input_level_start_index=None, # 3
-                video_aux_dict=None,
-                **kwargs
-                ):
-        assert (input_spatial_shapes[:, 0] * input_spatial_shapes[:, 1]).sum() == query.shape[1]
-        # 每个scale都用相同的 offsets, weights
-        temporal_points = video_aux_dict['temporal_points'] # b t h w 3 5 2, 每个位置 (t, t-1, t+1 的 5个点的坐标, 0-1, xy)
-        temporal_points_weights = video_aux_dict['temporal_points_weights'] # b t h w 2 5 1, 每个位置 (t, t-1, t+1 的 5个点的similarity)
-
-        batch_size, nf, H, W, *_ = temporal_points.shape
-        strides =  [H//haosen[0] for haosen in input_spatial_shapes] # 8, 16, 32
-        query = rearrange(query, '(b t) hw_sigma c -> b t hw_sigma c',b=batch_size, t=nf)
-        query = self.value_proj(query) # b t hw_sigma c
-
-        # list[b t h w c]
-        query_multiscale = query.split(input_spatial_shapes.prod(dim=-1), dim=2) # list[b t hw c]
-        query_multiscale = [rearrange(feat, 'b t (h w) c -> (b t) c h w', h=scale_shape[0], w=scale_shape[1])\
-                             for feat, scale_shape in zip(query_multiscale, input_spatial_shapes)]
-        
-        strided_temporal_points = [] 
-        for haosen, feat in zip(strides, query_multiscale):
-            start = int(haosen // 2)
-            strided_temporal_points = temporal_points[:, :, start::haosen, start::haosen] # b t h/4 w/4 3 5 2
-            strided_feats = point_sample( 
-                feat.flatten(0, 1), # bt c h w 
-                point_coords=strided_temporal_points  # (bt, hw, 2)
-            )
-
-
-
-        # b t h w 16 c
-        # bthw 16 c
-        # bthw
-        # b t h w 2 5 2 -> b t h w
-
-
-        
-        sampling_offsets = self.sampling_offsets(query).view(N, Len_q, self.n_heads, self.n_levels, self.n_points, 2) # bt hw_sigma 3(scale) 5 2
-        attention_weights = self.attention_weights(query).view(N, Len_q, self.n_heads, self.n_levels * self.n_points)
-        attention_weights = F.softmax(attention_weights, -1).view(N, Len_q, self.n_heads, self.n_levels, self.n_points)
-        # N, Len_q, n_heads, n_levels, n_points, 2
-        if reference_points.shape[-1] == 2:
-            offset_normalizer = torch.stack([input_spatial_shapes[..., 1], input_spatial_shapes[..., 0]], -1) # 3 2
-            sampling_locations = reference_points[:, :, None, :, None, :] \
-                                 + sampling_offsets / offset_normalizer[None, None, None, :, None, :] # 0-1
-        elif reference_points.shape[-1] == 4:
-            sampling_locations = reference_points[:, :, None, :, None, :2] \
-                                 + sampling_offsets / self.n_points * reference_points[:, :, None, :, None, 2:] * 0.5
-        else:
-            raise ValueError(
-                'Last dim of reference_points must be 2 or 4, but get {} instead.'.format(reference_points.shape[-1]))
-        output = self.output_proj(output)
-
-        return output
-
-
 from mamba_ssm.ops.selective_scan_interface import selective_scan_fn, selective_scan_ref
 from models.layers.position_encoding import build_position_encoding
 class SS1D(nn.Module):
@@ -398,7 +310,7 @@ class SS1D_Temporal_Multiscale(nn.Module):
         super().__init__()
         d_model = configs['d_model']
         self.homo = SS1D(d_model=configs['d_model'],
-                        d_state=configs['d_state'] if 'd_state' in configs else 16,
+                        d_state=configs['d_state'] if 'd_state' in configs else 1,
                         d_conv=configs['d_conv'] if 'd_conv' in configs else 3,
                         expand=configs['expand'] if 'expand' in configs else 2,
                         dt_rank=configs['dt_rank'] if 'dt_rank' in configs else 'auto',
@@ -424,10 +336,15 @@ class SS1D_Temporal_Multiscale(nn.Module):
     def forward(self, 
                 query=None,  # bt hw_sigma c
                 video_aux_dict=None,
+                batch_size=None,
                 **kwargs
                 ):
-        nf = video_aux_dict['nf']
-        batch_size = query.shape[0] // video_aux_dict['nf']
+        if video_aux_dict is not None:
+            nf = video_aux_dict['nf']
+            batch_size = query.shape[0] // video_aux_dict['nf']
+        else:
+            assert batch_size is not None
+            nf = query.shape[0] // batch_size
         # query = self.input_proj(query) # b t hw_sigma c
         query = rearrange(query, '(b t) hw c -> (b hw) t c',t=nf, b=batch_size)
         poses = self.pos_1d(mask=torch.zeros_like(query[..., 0]).bool(), hidden_dim=query.shape[-1]).permute(0, 2, 1).contiguous()
@@ -472,7 +389,6 @@ class SelfAttn_Temporal_Multiscale(nn.Module):
 
 
 # masked mamba
-
 @META_ARCH_REGISTRY.register()
 class SS1D_Temporal_MaskedObjSequence(nn.Module):
     def __init__(self, configs) -> None:
