@@ -15,39 +15,38 @@ from detectron2.layers import Conv2d, ShapeSpec, get_norm
 from detectron2.modeling import META_ARCH_REGISTRY
 from models.layers.position_encoding import PositionEmbeddingSine
 from models.layers.utils import _get_clones, _get_activation_fn
-from .ops.modules import MSDeformSS
 
 # MSDeformAttn Transformer encoder in deformable detr
 class MSDeformAttnTransformerEncoderOnly(nn.Module):
-    def __init__(self, d_model=256, n_scan_dircs=8,
+    def __init__(self, d_model=256, 
                  num_encoder_layers=6, dim_feedforward=1024, dropout=0.1,
                  activation="relu",
-                 num_feature_levels=4, enc_n_points=4,
+                 num_feature_levels=4,
                  temporal_attn=None,
-                 spatial_attn=None,
+                 scan_configs=None,
         ):
         super().__init__()
 
         self.d_model = d_model
-        self.n_scan_dircs = n_scan_dircs
 
         encoder_layer = MSDeformAttnTransformerEncoderLayer(d_model, dim_feedforward,
                                                             dropout, activation,
-                                                            num_feature_levels, n_scan_dircs, enc_n_points,
+                                                            num_feature_levels,
                                                             temporal_attn=temporal_attn,
-                                                            spatial_attn=spatial_attn)
+                                                            scan_configs=scan_configs)
         self.encoder = MSDeformAttnTransformerEncoder(encoder_layer, num_encoder_layers)
 
         self.level_embed = nn.Parameter(torch.Tensor(num_feature_levels, d_model))
 
-        self._reset_parameters()
+        self._reset_parameters(META_ARCH_REGISTRY.get(scan_configs['ms_deform_version']))
 
-    def _reset_parameters(self):
+    def _reset_parameters(self, attn_cls):
         for p in self.parameters():
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
+ 
         for m in self.modules():
-            if isinstance(m, MSDeformSS):
+            if isinstance(m, attn_cls):
                 m._reset_parameters()
         normal_(self.level_embed)
 
@@ -105,8 +104,8 @@ class MSDeformAttnTransformerEncoderLayer(nn.Module):
     def __init__(self,
                  d_model, d_ffn,
                  dropout, activation,
-                 n_levels, n_scan_dircs, n_points,
-                 spatial_attn=None,
+                 n_levels,
+                 scan_configs=None,
                  temporal_attn=None):
         super().__init__()
         self.add_temporal = temporal_attn['name'] is not None
@@ -118,8 +117,8 @@ class MSDeformAttnTransformerEncoderLayer(nn.Module):
 
 
         # self attention
-        self.self_attn = MSDeformSS(d_model=d_model, n_levels=n_levels,n_points=n_points,  n_scan_dircs=n_scan_dircs,
-                                    scan_configs=spatial_attn)
+        assert n_levels == scan_configs['n_levels']
+        self.self_attn = META_ARCH_REGISTRY.get(scan_configs['ms_deform_version'])(scan_configs)
         self.dropout1 = nn.Dropout(dropout)
         self.norm1 = nn.LayerNorm(d_model)
         # ffn
@@ -242,14 +241,12 @@ class Video_DeformSS2D_TemporalSS1D_MultiscaleEncoder(nn.Module):
         self.transformer = MSDeformAttnTransformerEncoderOnly(
             d_model=d_model,
             dropout=deform_attn['dropout'],
-            n_scan_dircs=deform_attn['n_scan_dircs'],
             dim_feedforward=deform_attn['dim_feedforward'],
             activation=deform_attn['activation'],
             num_encoder_layers=nlayers,
             num_feature_levels=len(self.encoded_scales),
-            enc_n_points=deform_attn['enc_n_points'],
             temporal_attn=configs['temporal_attn'],
-            spatial_attn=deform_attn['scan_configs'],
+            scan_configs=deform_attn['scan_configs'],
         )
 
         min_encode_stride = self.multiscale_shapes[self.encoded_scales[0]].spatial_stride # 8
@@ -318,3 +315,43 @@ class Video_DeformSS2D_TemporalSS1D_MultiscaleEncoder(nn.Module):
             ret[key] = rearrange(out_feat, '(b t) c h w -> b c t h w', b=batch_size, t=nf)
         return ret
 
+
+@META_ARCH_REGISTRY.register()
+class MultiscaleEncoder_None(nn.Module):
+    def __init__(
+        self,
+        configs,
+        multiscale_shapes, # {'res2': .temporal_stride, .spatial_stride, .dim}
+    ):
+        super().__init__()
+    
+    def forward(self, 
+                multiscales=None, # b c t h w
+                video_aux_dict=None, # dict{}
+                **kwargs):
+        return multiscales
+
+class MaskPredictor(nn.Module):
+    def __init__(self, in_dim, h_dim):
+        super().__init__()
+        self.h_dim = h_dim
+        self.layer1 = nn.Sequential(
+            nn.LayerNorm(in_dim),
+            nn.Linear(in_dim, h_dim),
+            nn.GELU()
+        )
+        self.layer2 = nn.Sequential(
+            nn.Linear(h_dim, h_dim // 2),
+            nn.GELU(),
+            nn.Linear(h_dim // 2, h_dim // 4),
+            nn.GELU(),
+            nn.Linear(h_dim // 4, 1)
+        )
+    
+    def forward(self, x):
+        z = self.layer1(x)
+        z_local, z_global = torch.split(z, self.h_dim // 2, dim=-1)
+        z_global = z_global.mean(dim=1, keepdim=True).expand(-1, z_local.shape[1], -1)
+        z = torch.cat([z_local, z_global], dim=-1)
+        out = self.layer2(z)
+        return out

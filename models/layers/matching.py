@@ -21,6 +21,14 @@ def dice_loss(inputs, targets, num_boxes):
     loss = 1 - (numerator + 1) / (denominator + 1)
     return loss.sum() / num_boxes
 
+def ber_loss(inputs, targets, num_boxes):
+    inputs = inputs.sigmoid()
+    inputs = inputs.flatten(1)
+    numerator = (inputs * targets).sum(1) # tp
+    denominator = targets.sum(-1)
+    loss = 1 - (numerator + 1) / (denominator + 1)
+    return loss.sum() / num_boxes
+
 def ce_mask_loss(inputs, targets, num_boxes,
                  weight=None):
     """

@@ -314,3 +314,43 @@ class Video_Deform2D_DividedTemporal_MultiscaleEncoder(nn.Module):
             ret[key] = rearrange(out_feat, '(b t) c h w -> b c t h w', b=batch_size, t=nf)
         return ret
 
+
+class Shadow_Contrastive_Loss:
+    def __init__(self, configs):
+        # 小于0.2的都是黑色区域
+        self.dark_threshold = configs['dark_threshold']
+    
+    def compute_loss(self, 
+                     multiscales=None, 
+                     targets=None, 
+                     video_aux_dict=None):
+        
+        pass
+
+class Video_Deform2D_DividedTemporal_MultiscaleEncoder_ShadowContrastiveLoss(nn.Module):
+    def __init__(
+        self,
+        configs,
+        multiscale_shapes, # {'res2': .temporal_stride, .spatial_stride, .dim}
+    ):
+        super().__init__()
+        self.encoder = Video_Deform2D_DividedTemporal_MultiscaleEncoder(configs, multiscale_shapes)
+        self.loss_module = Shadow_Contrastive_Loss(configs)
+        
+    def forward(self, 
+                multiscales=None, # b c t h w
+                video_aux_dict=None, # dict{
+                **kwargs):
+        return self.encoder(multiscales=multiscales,
+                            video_aux_dict=video_aux_dict)
+        
+    def compute_loss(self, 
+                     multiscales=None, 
+                     targets=None,
+                     video_aux_dict=None):
+        return self.loss_module(multiscales=multiscales, 
+                                targets=targets,
+                                video_aux_dict=video_aux_dict)
+            
+        
+        

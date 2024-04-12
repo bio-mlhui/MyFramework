@@ -95,9 +95,6 @@ class Video_SetMatchingLoss(nn.Module):
 
             'mask_dice_smobj':0., 'mask_ce_smobj':0.,
             'boxMask_dice':0., 'boxMask_ce':0.,
-            'color_similarity': 0.,
-            'color_intra': 0.,
-            'color_inter': 0.,
         }
         
         if ('mask_ce_dice' in self.matching_metrics) or ('mask_ce_dice' in self.losses):
@@ -117,20 +114,12 @@ class Video_SetMatchingLoss(nn.Module):
                     if loss == 'mask_dice_ce' :
                         loss_dict = self.loss_mask_dice_ce(layer_out, targets, matching_indices, num_objs,
                                                            loss_extra_param=loss_extra_param)
-                    elif loss == 'boxMask_dice_ce':
-                        pass
-                    elif loss == 'box_l1_giou':
-                        loss_dict = self.loss_box_l1_giou(layer_out, targets, matching_indices, num_objs,
-                                                          loss_extra_param=loss_extra_param)
                     elif loss == 'class_ce':
                         loss_dict = self.loss_class_ce(layer_out, targets, matching_indices, num_objs,
                                                        loss_extra_param=loss_extra_param)
                     elif loss == 'point_mask_dice_ce':
                         loss_dict = self.loss_point_mask_dice_ce(layer_out, targets, matching_indices, num_objs,
                                                                  loss_extra_param=loss_extra_param)
-                    elif loss == 'color_similairty':
-                        loss_dict = self.loss_color_similarity(layer_out, targets, matching_indices, num_objs,
-                                                                 loss_extra_param=loss_extra_param, video_aux_dict=video_aux_dict)
                     else:
                         raise ValueError()
                     
@@ -161,21 +150,6 @@ class Video_SetMatchingLoss(nn.Module):
                 C += self.matching_metrics['mask_dice_ce']['ce'] * cost_mask + \
                      self.matching_metrics['mask_dice_ce']['dice'] * cost_dice
 
-            if 'box_l1_giou' in self.matching_metrics:
-                raise ValueError()
-                out_box = layer_out['pred_boxes'][i][has_ann[i]].sigmoid() # nq t' 4
-                tgt_bbox = targets['boxes'][i] # ni t' 4 
-                cost_l1 = 0.
-                cost_giou = 0.
-                for haosen in range(tgt_bbox.shape[1]):
-                    haosen_out_box = out_box[:, haosen]
-                    haosen_tgt_box = tgt_bbox[:, haosen]
-                    cost_l1 += torch.cdist(haosen_out_box, haosen_tgt_box, p=1) 
-                    cost_giou += 1 - box_ops.generalized_box_iou(box_ops.box_cxcywh_to_xyxy(haosen_out_box),
-                                                                box_ops.box_cxcywh_to_xyxy(haosen_tgt_box))
-                
-                C += self.matching_metrics['box_l1_giou']['l1'] * cost_l1 + \
-                      self.matching_metrics['box_l1_giou']['giou'] + cost_giou
  
             if 'point_mask_dice_ce' in self.matching_metrics:
                 out_mask = layer_out['pred_masks'][i][has_ann[i]].permute(1, 0, 2, 3).contiguous() # nq t' h w
@@ -217,73 +191,17 @@ class Video_SetMatchingLoss(nn.Module):
             for i, j in indices
         ]
 
-    # unsupervised, no has_ann
-    def loss_color_similarity(self, layer_out, targets, matching_indices, num_objs,
-                        loss_extra_param, video_aux_dict):
-        self._iter += 1
-        assert targets['has_ann'].all()
-        src_idx = self._get_src_permutation_idx(matching_indices) # list[batch_idx], n_sigma
-        # n t h w 8 每个pixel和它周围8个Pixel的相似度
-        images_lab_sim = torch.stack([video_aux_dict['images_lab_sim'][ind] for ind in src_idx[0].tolist()], dim=0)  
-        # n t h w 9, 每个pixel和它前后 patch 的相似度
-        post_similarity = torch.stack([video_aux_dict['post_similarity'][ind] for ind in src_idx[0].tolist()], dim=0)
-        color_shape = images_lab_sim.shape[2:4]
-        src_masks = layer_out['pred_masks'].permute(0, 2, 1, 3, 4).contiguous() # b nq t h w
-        tgt_masks = targets['masks']
-        # n t h w
-        src_masks = torch.cat([t[J] for t, (J, _) in zip(src_masks, matching_indices)], dim=0) 
-        tgt_masks = torch.cat([t[J] for t, (_, J) in zip(tgt_masks, matching_indices)], dim=0)
-        tgt_masks = tgt_masks.to(src_masks)
-        src_masks = F.interpolate(src_masks, size=color_shape, mode='bilinear', align_corners=False)
-        tgt_masks = F.interpolate(tgt_masks, size=color_shape, mode='bilinear', align_corners=False)
-        tgt_masks_pixel_appear = (tgt_masks.sum(1) > 1).float()[..., None] # n h w 1, 每个对象在该像素上是否出现过
-
-        # past_src_masks = torch.roll(src_masks, shifts=1, dims=1).flatten(0, 1).unsqueeze(1) # nt 1 h w
-        post_src_masks = torch.roll(src_masks, shifts=-1,dims=1).flatten(0, 1).unsqueeze(1) # nt 1 h w
-        current_src_masks = src_masks.flatten(0, 1).unsqueeze(1) # nt 1 h w
-
-        # intra-frame loss
-        current_pairwise_loss = compute_pairwise_term(current_src_masks, 3, 2).permute(0, 2, 3, 1) # nt h w 8
-        # nt h w 8 * nt h w 1
-        weights = (images_lab_sim.flatten(0, 1) >= 0.3).float() * (tgt_masks.flatten(0, 1)[..., None].float()) # 有mask的区域 weights不变， 没mask的区域舍弃掉
-        # nt h w 8
-        loss_pairwise = (current_pairwise_loss * weights).sum() / (weights.sum().clamp(min=1.0))
-
-        # nt 9 h w
-        # 每一帧每一个对象 每个Pixel 和 前后patch的similarity
-        # past_pairwise_losses_neighbor = compute_pairwise_term_neighbor(past_src_masks, current_src_masks, pairwise_size=video_aux_dict['patch_kernel_size'],
-        #                                                              pairwise_dilation=video_aux_dict['patch_dilation']) 
-        post_haosen = compute_pairwise_term_neighbor(post_src_masks, current_src_masks, pairwise_size=video_aux_dict['patch_kernel_size'],
-                                                                  pairwise_dilation=video_aux_dict['patch_dilation'])
-        post_haosen = rearrange(post_haosen, '(n t) c h w -> n t h w c', n=src_masks.shape[0])
-        
-        # n t h w 9 * n 1 h w 1
-        weight_neighbor = (post_similarity >= 0.05).float() * tgt_masks_pixel_appear[:, None, :, :, :] # ori is 0.5, 0.01, 0.001, 0.005, 0.0001, 0.02, 0.05, 0.075, 0.1 , dy 0.5
-
-        warmup_factor = min(self._iter.item() / float(self._warmup_iters), 1.0) #1.0
-        post_haosen = post_haosen.permute(1, 0, 2, 3, 4).flatten(1) # t nhw9
-        weight_neighbor = weight_neighbor.permute(1, 0, 2, 3, 4).flatten(1) # t nhw9
-        loss_pairwise_neighbor = (post_haosen * weight_neighbor).sum(-1) / weight_neighbor.sum(-1).clamp(min=1.0) * warmup_factor\
-    
-        losses = {
-            "color_intra": loss_pairwise,
-            "color_inter": loss_pairwise_neighbor.sum()
-        }
-
-        del src_masks
-        del tgt_masks
-        return losses
-
-
     def loss_mask_dice_ce(self, outputs, targets, indices, num_objs, loss_extra_param):
-        src_masks = outputs['pred_masks'] # b nq h w
-        tgt_masks = targets['masks']
-        src_masks = torch.cat([t[J] for t, (J, _) in zip(src_masks, indices)], dim=0)
+        has_ann = targets['has_ann'] # b t
+        src_masks = outputs['pred_masks'].permute(0, 2, 1, 3, 4).contiguous() # b nq t h w
+        tgt_masks = targets['masks'] # list[n t' h w]
+        # list[nq t' h w] -> n_sigma t' h w
+        src_masks = torch.cat([t[J][:, haosen] for t, (J, _), haosen in zip(src_masks, indices, has_ann)],dim=0) 
         tgt_masks = torch.cat([t[J] for t, (_, J) in zip(tgt_masks, indices)], dim=0)
         tgt_masks = tgt_masks.to(src_masks)
         losses = {
-            "mask_ce": ce_mask_loss(src_masks.flatten(1), tgt_masks.flatten(1), num_boxes=num_objs),
-            "mask_dice": dice_loss(src_masks.flatten(1), tgt_masks.flatten(1), num_boxes=num_objs),
+            "mask_ce": ce_mask_loss(src_masks.flatten(0, 1).flatten(1), tgt_masks.flatten(0, 1).flatten(1), num_boxes=num_objs),
+            "mask_dice": dice_loss(src_masks.flatten(0, 1).flatten(1), tgt_masks.flatten(0, 1).flatten(1), num_boxes=num_objs),
         }
         return losses   
 
@@ -459,7 +377,6 @@ class Video_MaskedAttn_MultiscaleMaskDecoder_v3(nn.Module):
                 multiscales, # b c t h w
                 video_aux_dict=None
                 ):
-        multiscales = multiscales[0]
         multiscales = self.inputs_projs(multiscales)
         # thw b c; b c t h w
         memories, memories_poses, mask_features, size_list = self.get_memories_and_mask_features(multiscales)

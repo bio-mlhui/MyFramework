@@ -177,8 +177,11 @@ class WeakPolyP_EvalAug:
 @VIS_EVAL_AUG_REGISTRY.register()
 class Visha_EvalAug:
     def __init__(self, configs) -> None:
+        sizes = configs['sizes'] if 'max_size' in configs else [[512,512]]
+        max_size = configs['max_size'] if 'max_size' in configs else None
         self.resize = RandomResize(
-            sizes=[[512, 512]],
+            sizes=sizes,
+            max_size=max_size
         )
         self.tensor_video = VideoToTensor() # 先进行tensor
 
@@ -187,6 +190,8 @@ class Visha_EvalAug:
         ret = self.resize(ret)
         ret = self.tensor_video(ret)        
         return ret
+
+
 
 
 

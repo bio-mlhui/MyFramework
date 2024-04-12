@@ -259,6 +259,22 @@ class Visha_TrainAug:
 
 
 @VIS_TRAIN_AUG_REGISTRY.register()
+class Visha_TrainAug_v2:
+    def __init__(self, configs):
+        self.hflip = RandomHFlip(0.5)
+        self.resize = RandomResize(sizes=configs['sizes'], max_size=configs['max_size'])
+        self.compute_box = ComputeBox()
+        self.tensor_video = VideoToTensor()
+
+    def __call__(self, ret):
+        ret = self.hflip(ret)
+        ret = self.resize(ret)
+        ret = self.compute_box(ret)
+        ret = self.tensor_video(ret)
+        return ret
+
+
+@VIS_TRAIN_AUG_REGISTRY.register()
 class WeakPolyP_TrainAug_RotateImageToClip:
     def __init__(self, configs) -> None:
         self.ImageToSeqAugmenter = ImageToSeqAugmenter(perspective=True, affine=True, motion_blur=True,

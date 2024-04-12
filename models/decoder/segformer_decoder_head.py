@@ -208,11 +208,10 @@ class ImageSegformer_SingleObjMaskDecoder(nn.Module):
         batch_size = pred_masks.shape[0]
         # b 
         pred_classes = torch.tensor([1, 0])[None, None, :].repeat(batch_size, 1, 1).float()  # b 1 2
-
+        pred_masks = F.interpolate(pred_masks, scale_factor=self.mask_spatial_stride, mode='bilinear', align_corners=False)
         if self.training:
             return {'pred_masks': pred_masks, 'pred_class': pred_classes}
         else:
-            pred_masks = F.interpolate(pred_masks, scale_factor=self.mask_spatial_stride, mode='bilinear', align_corners=False)
             return {'pred_masks': pred_masks, 'pred_class': pred_classes.softmax(-1)}
 
 

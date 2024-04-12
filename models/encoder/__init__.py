@@ -24,6 +24,7 @@ from .multiscale_encoder import (
     Video2D_InterpolateTimes_MultiscaleEncoder,
 )
 
+from . import query_scan
 # from .msdeformattn_masked import (
 #     Video_Deform2D_DividedTemporal_MultiscaleEncoder_v2
 # )

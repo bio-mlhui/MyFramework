@@ -111,7 +111,7 @@ def run(rank, configs, world_size):
         out_dir = configs['out_dir']
         if mode == 'eval':
             num_of_eval_times = len([eval_txt for eval_txt in os.listdir(out_dir) if eval_txt.endswith('eval.txt')])
-            set_logging_file(out_dir, f"eval.txt", mode='w')
+            set_logging_file(out_dir, f"eval.txt", mode='a')
             path = os.path.join(out_dir, f"config_eval.yaml")
         else:
             num_of_train_times = len([train_txt for train_txt in os.listdir(out_dir) if train_txt.endswith('train.txt')])

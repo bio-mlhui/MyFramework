@@ -23,3 +23,5 @@ from .mask2former_video3 import (
 from .segformer_decoder_head import (
     Video_Image2D_SingleObjSegformer_MaskDecoder
 )
+
+from . import score_distillation_sampling

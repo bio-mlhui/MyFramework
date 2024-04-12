@@ -35,5 +35,6 @@ from .segformer import (
     Segformer, Video2D_Segformer
 )
 
+from . import metaformer
 
 from . import vmamba_new

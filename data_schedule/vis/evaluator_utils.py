@@ -199,7 +199,10 @@ def mask_dice_iou_sen_mae_smeasure(frame_pred, dataset_meta, **kwargs):
     # their_spe = tn / (tn + fp)
     their_sen = tp / (tp + fn)
     their_mae = (pred_mask.float() - gt_mask.float()).abs().mean()
-
+    
+    Np = gt_mask.sum()
+    Nn = gt_mask.shape[0] * gt_mask.shape[1] - Np
+    
     null = Smeasure(length=1, alpha=0.5)
     null.step(pred=(pred_mask.float() * 255 ).numpy(), gt=(gt_mask.float() * 255).numpy(), idx=None)
     their_smeasure = torch.tensor(null.get_results()['Smeasure']).float()
@@ -208,9 +211,14 @@ def mask_dice_iou_sen_mae_smeasure(frame_pred, dataset_meta, **kwargs):
             'their_iou': their_iou,
             'their_sen': their_sen,
             'their_mae_abs': their_mae,
-            'their_smeasure': their_smeasure}
-
- 
+            'their_smeasure': their_smeasure,
+            
+            'tp': tp, # true  positive
+            'fp': fp, # false positive
+            'fn': fn, # false negative
+            'tn': tn, # true  negative
+            'Np': Np, # positive accumulation
+            'Nn': Nn} # negative accumulation
 
 @register_vis_metric
 def web(frame_pred, output_dir, **kwargs):
