@@ -49,6 +49,7 @@ class Video_4DGS_Optimize_AuxMapper:
         return batch_dict
     
 
+# 3D视角, 3D image;
 class Image_3DGS_Optimize_AuxMapper:
     def __init__(self, aux_configs):
         render_auxes = aux_configs['render_auxes']
@@ -63,7 +64,7 @@ class Image_3DGS_Optimize_AuxMapper:
     def collate(self, batch_dict, mode):
         return batch_dict
     
-
+# 4D视角, 4D image
 class Video_4DGS_Learning_AuxMapper:
     def __init__(self, aux_configs):
         render_auxes = aux_configs['render_auxes']

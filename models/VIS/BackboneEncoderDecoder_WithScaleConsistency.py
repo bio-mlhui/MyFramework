@@ -11,30 +11,18 @@ from torch import Tensor
 from models.optimization.utils import get_total_grad_norm
 from einops import repeat, rearrange, reduce
 from functools import partial
-from einops.layers.torch import Rearrange
-from torch import einsum
-import math
-from typing import List, Optional
-from utils.misc import NestedTensor
 import numpy as np
-from models.layers.mamba.ss2d import SS2D
-from timm.models.layers import DropPath, to_2tuple, trunc_normal_
-from mamba_ssm import Mamba
-from torch.cuda.amp import autocast
 import logging
 from data_schedule.vis.apis import VIS_TrainAPI_clipped_video, VIS_Aug_CallbackAPI
 from data_schedule.vis.apis import VIS_EvalAPI_clipped_video_request_ann
 import torchvision.transforms.functional as Trans_F
 import copy
-from models.layers.mamba.vss_layer_3d import VSSLayer_3d
-from models.layers.matching import dice_loss, ce_mask_loss
 from models.registry import register_model
 from models.optimization.optimizer import get_optimizer
 from models.optimization.scheduler import build_scheduler 
-from models.layers.utils import _get_clones
 from detectron2.modeling import BACKBONE_REGISTRY, META_ARCH_REGISTRY
+from models.optimization.utils import ModelAgnostic_Optimizer, ModelAgnostic_Scheduler
 
-from models.backbone.video_swin import PatchEmbed3D, PatchMerging
 from models.backbone.utils import VideoMultiscale_Shape
 
 class BackboneEncoderDecoder_WithScaleConsistency(nn.Module):
@@ -115,7 +103,7 @@ class BackboneEncoderDecoder_WithScaleConsistency(nn.Module):
 
         loss_value_dict = {key: pred1_loss[key] for key in list(self.loss_weight.keys())}
         # gradient_norm = get_total_grad_norm(self.model.parameters(), norm_type=2)
-        return loss_value_dict, self.loss_weight
+        return loss_value_dict, self.loss_weight, None
 
     # def forward(self, batch_dict):
     #     assert self.training
@@ -237,13 +225,15 @@ def backbone_encoder_decoder_withScaleConsistency(configs, device):
     assert len(params_group) == to_train_num_parameters, \
         f'parames_group设计出错, 有{len(to_train_num_parameters) - len(params_group)}个参数没有列在params_group里'
     optimizer = get_optimizer(params_group, configs)
-
     scheduler = build_scheduler(configs=configs, optimizer=optimizer)
+    
+    optimizer = ModelAgnostic_Optimizer(optimizer=optimizer, configs=configs['optim'])
+    scheduler = ModelAgnostic_Scheduler(scheduler=scheduler, configs=configs['optim'])
+    
     model_input_mapper = AUXMapper_v1(configs['model']['input_aux'])
-
     train_samplers, train_loaders, eval_function = build_schedule(configs, 
-                                                                                    model_input_mapper.mapper, 
-                                                                                    partial(model_input_mapper.collate, max_stride=model.max_stride))
+                                                                    model_input_mapper.mapper, 
+                                                                    partial(model_input_mapper.collate, max_stride=model.max_stride))
 
     # dataset_specific initialization
 
@@ -320,7 +310,7 @@ class BackboneEncoderDecoder(nn.Module):
 
         loss_value_dict = {key: pred1_loss[key] for key in list(self.loss_weight.keys())}
         # gradient_norm = get_total_grad_norm(self.model.parameters(), norm_type=2)
-        return loss_value_dict, self.loss_weight
+        return loss_value_dict, self.loss_weight, None
 
     @torch.no_grad()
     def sample(self, batch_dict):
@@ -412,31 +402,38 @@ class BackboneEncoderDecoder(nn.Module):
                 if isinstance(module, torch.nn.Embedding):
                     hyperparams["weight_decay"] = weight_decay_embed
                 params.append({"params": [value], **hyperparams})
-   
+
         return params, log_lr_group_idx
+
+
+    def optimize(self, 
+                 loss=None):
+
+        pass
 
 @register_model
 def backbone_encoder_decoder(configs, device):
     from .aux_mapper import AUXMapper_v1
     model = BackboneEncoderDecoder(configs)
     model.to(device)
-    params_group, log_lr_group_idx = BackboneEncoderDecoder.get_optim_params_group(model=model, configs=configs)
+    params_group, log_lr_group_name_to_idx = BackboneEncoderDecoder.get_optim_params_group(model=model, configs=configs)
     to_train_num_parameters = len([n for n, p in model.named_parameters() if p.requires_grad])
     assert len(params_group) == to_train_num_parameters, \
         f'parames_group设计出错, 有{len(to_train_num_parameters) - len(params_group)}个参数没有列在params_group里'
+    
     optimizer = get_optimizer(params_group, configs)
-
     scheduler = build_scheduler(configs=configs, optimizer=optimizer)
+
+    optimizer = ModelAgnostic_Optimizer(optimizer=optimizer, 
+                                        log_lr_group_name_to_idx=log_lr_group_name_to_idx, configs=configs['optim'])
+    scheduler = ModelAgnostic_Scheduler(scheduler=scheduler, configs=configs['optim'])
+    
     model_input_mapper = AUXMapper_v1(configs['model']['input_aux'])
     
-
-    train_samplers, train_loaders, eval_function = build_schedule(configs, 
-                                                                    model_input_mapper.mapper, 
-                                                                    partial(model_input_mapper.collate, max_stride=model.max_stride))
-
-    # dataset_specific initialization
-
-    return model, optimizer, scheduler,  train_samplers, train_loaders, log_lr_group_idx, eval_function
+    train_samplers, train_loaders, eval_function = build_schedule(configs, model_input_mapper.mapper, 
+                                                                  partial(model_input_mapper.collate, max_stride=model.max_stride))
+    
+    return model, optimizer, scheduler,  train_samplers, train_loaders, eval_function
 
 
 
@@ -513,7 +510,7 @@ class BackboneEncoderDecoder_EncoderLoss(nn.Module):
         
         loss_value_dict = {key: pred1_loss[key] for key in list(self.loss_weight.keys())}
         # gradient_norm = get_total_grad_norm(self.model.parameters(), norm_type=2)
-        return loss_value_dict, self.loss_weight
+        return loss_value_dict, self.loss_weight, None
 
     @torch.no_grad()
     def sample(self, batch_dict):
@@ -618,8 +615,11 @@ def backbone_encoder_decoder_encoderLoss(configs, device):
     assert len(params_group) == to_train_num_parameters, \
         f'parames_group设计出错, 有{len(to_train_num_parameters) - len(params_group)}个参数没有列在params_group里'
     optimizer = get_optimizer(params_group, configs)
-
     scheduler = build_scheduler(configs=configs, optimizer=optimizer)
+
+    optimizer = ModelAgnostic_Optimizer(optimizer=optimizer, configs=configs['optim'])
+    scheduler = ModelAgnostic_Scheduler(scheduler=scheduler, configs=configs['optim'])
+    
     model_input_mapper = AUXMapper_v1(configs['model']['input_aux'])
     
 

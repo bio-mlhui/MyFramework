@@ -1,3 +1,4 @@
+# Trainer for Gaussian Splatting
 import torch
 import numpy as np
 import random
@@ -7,7 +8,6 @@ import time
 import os
 import sys
 from utils.misc import reduce_dict, to_device, reduce_scalar, is_dist_avail_and_initialized
-# from models.optimization.utils import get_total_grad_norm
 import gc
 import wandb
 from utils.misc import  SmoothedValue, MetricLogger
@@ -19,8 +19,8 @@ from data_schedule import build_schedule
 from models import model_entrypoint
 from utils.misc import to_device
 
-__all__ = ['Trainer']
-class Trainer:
+__all__ = ['GS_Trainer']
+class GS_Trainer:
     def __init__(self, configs):
         torch.autograd.set_detect_anomaly(False)
         torch.backends.cuda.matmul.allow_tf32 = True
@@ -36,8 +36,9 @@ class Trainer:
         # model and data
         create_model_schedule = model_entrypoint(configs['model']['name'])
         self.model, self.optimizer, self.scheduler, \
-        self.train_samplers, self.train_loaders, self.eval_function = create_model_schedule(configs, device=self.device,)
-        
+            self.train_samplers, self.train_loaders, self.log_lr_group_name_to_idx, \
+        self.eval_function = create_model_schedule(configs, device=self.device,)
+        self.register_metric_logger([f'lr_group_{haosen}' for haosen in list(self.log_lr_group_name_to_idx.keys())])
         logging.debug(f'模型的总参数数量:{sum(p.numel() for p in self.model.parameters())}')
         logging.debug(f'模型的可训练参数数量:{sum(p.numel() for p in self.model.parameters() if p.requires_grad)}')
         logging.debug(configs)
@@ -84,19 +85,14 @@ class Trainer:
                 batch_dict['visualize_paths'] = self.visualize_path(meta_idxs=meta_idxs, 
                                                                     visualize=visualize) # visualize model训练过程
                 iteration_time = time.time()
-                # 除了Loss其他的东西
-                loss_dict_unscaled, loss_weight, optimizer_step_dict = self.model(batch_dict)
+                loss_dict_unscaled, loss_weight = self.model(batch_dict)
                 loss = sum([loss_dict_unscaled[k] * loss_weight[k] for k in loss_weight.keys()])
                 assert math.isfinite(loss.item()), f"Loss is {loss.item()}, stopping training"
                 loss.backward()       
-                self.optimizer.step(num_iterations=self.num_iterations,
-                                    optimizer_step_dict=optimizer_step_dict,
-                                    num_samples=self.num_samples,
-                                    loss_dict_unscaled=loss_dict_unscaled,
-                                    )
+                self.optimizer.step()
                 iteration_time = time.time() - iteration_time
-                self.optimizer.zero_grad()
-                self.scheduler.step(num_iterations=self.num_iterations,) 
+                self.optimizer.zero_grad(set_to_none=True) # delete gradient 
+                self.scheduler.step() 
                 sample_idxs = comm.all_gather(meta_idxs) 
                 sample_idxs = [taylor for cardib in sample_idxs for taylor in cardib]
                 self.num_samples += len(sample_idxs)
@@ -234,7 +230,13 @@ class Trainer:
             for idx, sp_idx in enumerate(sample_idxs):
                 wandb.log({'sample_idx': sp_idx}, step=self.num_samples - len(sample_idxs) + idx)
             
-            logger_updates = self.optimizer.get_log_lr_dicts()
+            logger_updates = {}
+            for log_lr_group_name, log_lr_group_idx in self.log_lr_group_name_to_idx.items():
+                if log_lr_group_idx is None:
+                    logger_updates[f'lr_group_{log_lr_group_name}'] = 0
+                else:
+                    logger_updates[f'lr_group_{log_lr_group_name}'] = self.optimizer.param_groups[log_lr_group_idx]["lr"]
+            
             logger_updates.update(loss_dict_unscaled_reduced)
             logger_updates.update({
                 'loss_value': loss_value,

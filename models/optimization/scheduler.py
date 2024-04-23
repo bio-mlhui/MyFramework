@@ -110,28 +110,7 @@ def build_scheduler(configs, optimizer):
     #         power=cfg.SOLVER.POLY_LR_POWER,
     #         constant_ending=cfg.SOLVER.POLY_LR_CONSTANT_ENDING,
     #     ), unit
-    
-
-    elif name == 'static_gs_xyz':
-
-        lambas = []
-        param_groups = ['xyz', 'f_dc', 'f_rest', 'opacity', 'scaling', 'rotation']
-        xyz_lr_init = scheduler_configs['position_lr_init'] * scheduler_configs['spatial_lr_scale']
-        xyz_lr_final = scheduler_configs['position_lr_final'] * scheduler_configs['spatial_lr_scale']
-        xyz_lr_delay_mult = scheduler_configs['position_lr_delay_mult']
-        xyz_max_steps = scheduler_configs['position_lr_max_steps']
-        for gname in range(6): 
-            if gname == 0:
-                lambas.append(get_expon_lr_func(lr_init=xyz_lr_init, lr_final=xyz_lr_final, lr_delay_mult=xyz_lr_delay_mult,
-                                                max_steps=xyz_max_steps))
-            else:
-                lambas.append(lambda x : 1)
-
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
-                                                      lr_lambda=lambas,
-                                                      last_epoch=-1,)
-        return scheduler
-    
+        
     elif name == 'polynomial_freezebb':
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
                                                       lr_lambda=partial(polynomial_decay_lambda, 
