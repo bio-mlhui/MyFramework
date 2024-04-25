@@ -18,6 +18,7 @@ import torch_geometric.nn as geo_nn
 from torch import nn, Tensor
 from typing import Any, Dict, List, Optional, Union
 import torch.nn.functional as F
+from models.layers.anyc_trans import MLP, Linear_NormAct
 # norm
 # 使用memory
 from torch_geometric.nn import Aggregation
@@ -162,7 +163,7 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
         self.edge_linear = nn.Linear(d_model, self.head_dim * self.nheads, bias=False)
         obj_query_proj_name = obj_query_proj.pop('name')
         if  obj_query_proj_name == 'FeatureResizer':
-            self.obj_query_proj = FeatureResizer(**obj_query_proj)
+            self.obj_query_proj = Linear_NormAct(**obj_query_proj)
         elif obj_query_proj_name == 'linear':
             self.obj_query_proj = nn.Linear(**obj_query_proj)
         elif obj_query_proj_name == 'mlp':
@@ -178,7 +179,7 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
         if temp_query_proj is not None:
             temp_query_proj_name = temp_query_proj.pop('name')
             if  temp_query_proj_name == 'FeatureResizer':
-                self.temp_query_proj = FeatureResizer(**temp_query_proj)
+                self.temp_query_proj = Linear_NormAct(**temp_query_proj)
             elif temp_query_proj_name == 'linear':
                 self.temp_query_proj = nn.Linear(**temp_query_proj)
             elif temp_query_proj_name == 'mlp':
@@ -188,7 +189,7 @@ class Spatial_Temporal_Grounding_v1(geo_nn.MessagePassing):
         if frame_query_proj is not None:
             frame_query_proj_name = frame_query_proj.pop('name')
             if  frame_query_proj_name == 'FeatureResizer':
-                self.frame_query_proj = FeatureResizer(**frame_query_proj)
+                self.frame_query_proj = Linear_NormAct(**frame_query_proj)
             elif frame_query_proj_name == 'linear':
                 self.frame_query_proj = nn.Linear(**frame_query_proj)
             elif frame_query_proj_name == 'mlp':
