@@ -24,7 +24,7 @@ This codebase includes implementations of the following papers:
 2. [MICCAI2024 submission](./readme/LGRNet.pdf)
     - **Title:** "LGRNet: Local-Global Reciprocal Network for Uterine Fibroid Segmentation in Ultrasound Videos"
     - **Authors:** Huihui Xu, [Yijun Yang (dataset contribution), Angelica Aviles-Rivero, Guang Yang, Jing Qin], Lei Zhu
-    - **[Main Code: Hilbert Selective Scan](./models/encoder/ops/modules/frame_query_ss2d.py#576)**
+    - **[Main Code: Hilbert Selective Scan](./models/encoder/ops/modules/frame_query_ss2d.py#L576)**
 
 3. I've implemented the **[Deformable Selective Scan](./models/encoder/ops/modules/deform_selective_scan_mamba_scan.py)**, and achieved SOTA(IoU=65.8, BER=7.88) on the **Video Shadow Detection(VSD)** task. But I plan to first work on the 3D neural rendering task. A paper on VSD will be submitted to TCSVT after NIPS ddl.
 
