@@ -3,7 +3,6 @@
 **/.vscode/**
 *.out
 *.err
-*.md
 *.zip
 *.tar
 *.pth
