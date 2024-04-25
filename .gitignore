@@ -18,3 +18,8 @@ hostfile
 *.txt
 *.png
 miccai_generate_Dir
+compare1.py
+compare2.py
+pyrightconfig.json
+test.py
+dataset_handle.py
