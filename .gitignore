@@ -15,7 +15,6 @@ hostfile
 **/output/**
 *.pt
 *.txt
-*.png
 miccai_generate_Dir
 compare1.py
 compare2.py
