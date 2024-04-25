@@ -18,7 +18,7 @@ from data_schedule.registry import EVALUATOR_REGISTRY
 import time
 from .evaluator_utils import render_metric_entrypoint
 import json
-from data_schedule.render.apis import Scene_Dataset
+from data_schedule.render.apis import Scene_Meta
 
 
 @EVALUATOR_REGISTRY.register()
@@ -36,7 +36,7 @@ class Render_Evaluator:
         optimization:
             model.sample(video)
         """
-        Scene_Dataset
+        Scene_Meta
         self.dataset_loader = dataset_loader
         self.dataset_name = dataset_name
 
@@ -49,8 +49,8 @@ class Render_Evaluator:
             metric_fn = partial(metric_fn, dataset_meta=dataset_meta, **metric_config)
             self.view_metric_fns.append(metric_fn)
         
-        # 整个4D的metric
-        repre_metrics = configs['data']['evaluate'][dataset_name]['evaluator']['repre_metrics']
+        # 整个scene的metric
+        repre_metrics = configs['data']['evaluate'][dataset_name]['evaluator']['scene_metrics']
         dataset_meta = MetadataCatalog.get(dataset_name)
         self.repre_metric_fns = []
         for metric_name, metric_config in repre_metrics:
@@ -58,13 +58,13 @@ class Render_Evaluator:
             metric_fn = partial(metric_fn, dataset_meta=dataset_meta, **metric_config)
             self.repre_metric_fns.append(metric_fn)
         
-        # 一个数据集中多个scene的metric合并
-        metrics_aggregator = configs['data']['evaluate'][dataset_name]['evaluator']['metrics_aggregator']
-        self.eval_meta_keys = dataset_meta.get('eval_meta_keys')  # {scene_id: list of view_id}
-        self.metrics_aggregator = partial(render_metric_entrypoint(metrics_aggregator[0]),
-                                          dataset_meta=dataset_meta,
-                                          eval_meta_keys=self.eval_meta_keys,
-                                          **metrics_aggregator[1])
+        # # 一个数据集中多个scene的metric合并
+        # metrics_aggregator = configs['data']['evaluate'][dataset_name]['evaluator']['metrics_aggregator']
+        # self.eval_meta_keys = dataset_meta.get('eval_meta_keys')  # {scene_id: list of view_id}
+        # self.metrics_aggregator = partial(render_metric_entrypoint(metrics_aggregator[0]),
+        #                                   dataset_meta=dataset_meta,
+        #                                   eval_meta_keys=self.eval_meta_keys,
+        #                                   **metrics_aggregator[1])
 
     def visualize_path(self, meta_idxs, visualize, evaluator_path):
         return [os.path.join(evaluator_path, f'meta_{meta_idx}') if vis else None for (meta_idx, vis) in zip(meta_idxs, visualize)]

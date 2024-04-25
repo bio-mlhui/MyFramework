@@ -21,11 +21,63 @@ from models.registry import register_model
 from models.optimization.optimizer import get_optimizer
 from models.optimization.scheduler import build_scheduler 
 from detectron2.modeling import BACKBONE_REGISTRY, META_ARCH_REGISTRY
-from models.optimization.utils import ModelAgnostic_Optimizer, ModelAgnostic_Scheduler
+import math
 
 from models.backbone.utils import VideoMultiscale_Shape
+from torch.optim import Optimizer
+from torch.optim.lr_scheduler import LRScheduler
 
-class BackboneEncoderDecoder_WithScaleConsistency(nn.Module):
+class OptimizeModel(nn.Module):
+    """
+    optimize_setup:
+        optimizer, scheduler都是标准类
+        log_lr_idx随着训练不改变
+        
+    optimize:
+        backward, optimzier_step, optimizer_zero_grad, scheduler_step
+        
+    """
+    def __init__(self, ) -> None:
+        super().__init__()
+        self.optimizer: Optimizer = None
+        self.scheduler: LRScheduler = None
+        self.log_lr_group_idx: Dict = None
+
+    def optimize_setup(self):
+        raise ValueError('这是一个virtual method, 需要实现一个新的optimize_setup函数')
+
+    def optimize(self,
+                loss_weight=None,
+                loss_dict_unscaled=None,
+                closure=None,
+                num_iterations=None,
+                **kwargs):
+        
+        loss = sum([loss_dict_unscaled[k] * loss_weight[k] for k in loss_weight.keys()])
+        assert math.isfinite(loss.item()), f"Loss is {loss.item()}, stopping training"
+        loss.backward()  
+        self.optimizer.step(closure=closure)
+        self.optimizer.zero_grad(set_to_none=True) # delete gradient 
+        self.scheduler.step(epoch=num_iterations,)
+
+
+    def get_lr_group_dicts(self, ):
+        return  {f'lr_group_{key}': self.optimizer.param_groups[value]["lr"] if value is not None else 0 \
+                 for key, value in self.log_lr_group_idx.items()}
+
+    def optimize_state_dict(self,):
+        return {
+            'optimizer': self.optimizer.state_dict(),
+            'scheduler': self.scheduler.state_dict(),
+        }
+    
+    def load_optimize_state_dict(self, state_dict):
+        self.optimizer.load_state_dict(state_dict=state_dict['optimizer'])
+        self.scheduler.load_state_dict(state_dict=state_dict['scheduler'])
+
+
+
+class BackboneEncoderDecoder_WithScaleConsistency(OptimizeModel):
     def __init__(
         self,
         configs,
@@ -51,7 +103,7 @@ class BackboneEncoderDecoder_WithScaleConsistency(nn.Module):
         if configs['model']['fusion']['name'] == 'Video_Deform2D_DividedTemporal_MultiscaleEncoder_v2':
             self.fusion_encoder.hack_ref(query_norm=self.decoder.temporal_query_norm, mask_mlp=self.decoder.query_mask)
         
-        self.test_clip_size = configs['model']['test_clip_size']
+        self.test_clip_size = configs['model']['test_clip_size'] if 'test_clip_size' in configs['model'] else None # 默认整个video测试
     @property
     def device(self):
         return self.pixel_mean.device
@@ -156,8 +208,7 @@ class BackboneEncoderDecoder_WithScaleConsistency(nn.Module):
             'pred_class': [pred_classes], # [list[n c], t, probability], 1
         }
 
-    @staticmethod
-    def get_optim_params_group(model, configs):
+    def optimize_setup(self, configs):
         weight_decay_norm = configs['optim']['weight_decay_norm']
         weight_decay_embed = configs['optim']['weight_decay_embed']
 
@@ -182,7 +233,7 @@ class BackboneEncoderDecoder_WithScaleConsistency(nn.Module):
         memo: Set[torch.nn.parameter.Parameter] = set()
         log_lr_group_idx = {'backbone':None, 'base':None}
 
-        for module_name, module in model.named_modules():
+        for module_name, module in self.named_modules():
             for module_param_name, value in module.named_parameters(recurse=False):
                 if not value.requires_grad:
                     continue
@@ -213,35 +264,29 @@ class BackboneEncoderDecoder_WithScaleConsistency(nn.Module):
                     hyperparams["weight_decay"] = weight_decay_embed
                 params.append({"params": [value], **hyperparams})
    
-        return params, log_lr_group_idx
+        to_train_num_parameters = len([n for n, p in self.named_parameters() if p.requires_grad])
+        assert len(params) == to_train_num_parameters, \
+            f'parames_group设计出错, 有{len(to_train_num_parameters) - len(params)}个参数没有列在params_group里'
+        self.optimizer = get_optimizer(params, configs)
+        self.scheduler = build_scheduler(configs=configs, optimizer=self.optimizer)
+        self.log_lr_group_idx = log_lr_group_idx
+
 
 @register_model
 def backbone_encoder_decoder_withScaleConsistency(configs, device):
     from .aux_mapper import AUXMapper_v1
     model = BackboneEncoderDecoder_WithScaleConsistency(configs)
-    model.to(device)
-    params_group, log_lr_group_idx = BackboneEncoderDecoder_WithScaleConsistency.get_optim_params_group(model=model, configs=configs)
-    to_train_num_parameters = len([n for n, p in model.named_parameters() if p.requires_grad])
-    assert len(params_group) == to_train_num_parameters, \
-        f'parames_group设计出错, 有{len(to_train_num_parameters) - len(params_group)}个参数没有列在params_group里'
-    optimizer = get_optimizer(params_group, configs)
-    scheduler = build_scheduler(configs=configs, optimizer=optimizer)
-    
-    optimizer = ModelAgnostic_Optimizer(optimizer=optimizer, configs=configs['optim'])
-    scheduler = ModelAgnostic_Scheduler(scheduler=scheduler, configs=configs['optim'])
-    
     model_input_mapper = AUXMapper_v1(configs['model']['input_aux'])
     train_samplers, train_loaders, eval_function = build_schedule(configs, 
                                                                     model_input_mapper.mapper, 
                                                                     partial(model_input_mapper.collate, max_stride=model.max_stride))
-
-    # dataset_specific initialization
-
-    return model, optimizer, scheduler,  train_samplers, train_loaders, log_lr_group_idx, eval_function
-
+    model.to(device)
+    model.optimize_setup(configs)
+    return model, train_samplers, train_loaders, eval_function
 
 
-class BackboneEncoderDecoder(nn.Module):
+
+class BackboneEncoderDecoder(OptimizeModel):
     def __init__(
         self,
         configs,
@@ -273,6 +318,7 @@ class BackboneEncoderDecoder(nn.Module):
             self.fusion_encoder.hack_ref(query_norm=self.decoder.temporal_query_norm, mask_mlp=self.decoder.query_mask)
 
         self.test_clip_size = configs['model']['test_clip_size'] if 'test_clip_size' in configs['model'] else None
+
     @property
     def device(self):
         return self.pixel_mean.device
@@ -310,7 +356,7 @@ class BackboneEncoderDecoder(nn.Module):
 
         loss_value_dict = {key: pred1_loss[key] for key in list(self.loss_weight.keys())}
         # gradient_norm = get_total_grad_norm(self.model.parameters(), norm_type=2)
-        return loss_value_dict, self.loss_weight, None
+        return loss_value_dict, self.loss_weight, None, 
 
     @torch.no_grad()
     def sample(self, batch_dict):
@@ -346,8 +392,8 @@ class BackboneEncoderDecoder(nn.Module):
             'pred_class': [pred_classes], # [list[n c], t, probability], 1
         }
 
-    @staticmethod
-    def get_optim_params_group(model, configs):
+
+    def optimize_setup(self, configs):
         weight_decay_norm = configs['optim']['weight_decay_norm']
         weight_decay_embed = configs['optim']['weight_decay_embed']
 
@@ -372,7 +418,7 @@ class BackboneEncoderDecoder(nn.Module):
         memo: Set[torch.nn.parameter.Parameter] = set()
         log_lr_group_idx = {'backbone':None, 'base':None}
 
-        for module_name, module in model.named_modules():
+        for module_name, module in self.named_modules():
             for module_param_name, value in module.named_parameters(recurse=False):
                 if not value.requires_grad:
                     continue
@@ -403,41 +449,33 @@ class BackboneEncoderDecoder(nn.Module):
                     hyperparams["weight_decay"] = weight_decay_embed
                 params.append({"params": [value], **hyperparams})
 
-        return params, log_lr_group_idx
 
+        to_train_num_parameters = len([n for n, p in self.named_parameters() if p.requires_grad])
+        assert len(params) == to_train_num_parameters, \
+            f'parames_group设计出错, 有{len(to_train_num_parameters) - len(params)}个参数没有列在params_group里'
+        self.optimizer = get_optimizer(params, configs)
+        self.scheduler = build_scheduler(configs=configs, optimizer=self.optimizer)
+        self.optimizer.get_lr_group_dicts =  partial(lambda x: {f'lr_group_{key}': self.optimizer.param_groups[log_lr_group_idx]["lr"] \
+                                                if value is not None else 0 for key, value in x.items()},
+                                     x=log_lr_group_idx)
 
-    def optimize(self, 
-                 loss=None):
-
-        pass
 
 @register_model
 def backbone_encoder_decoder(configs, device):
     from .aux_mapper import AUXMapper_v1
     model = BackboneEncoderDecoder(configs)
-    model.to(device)
-    params_group, log_lr_group_name_to_idx = BackboneEncoderDecoder.get_optim_params_group(model=model, configs=configs)
-    to_train_num_parameters = len([n for n, p in model.named_parameters() if p.requires_grad])
-    assert len(params_group) == to_train_num_parameters, \
-        f'parames_group设计出错, 有{len(to_train_num_parameters) - len(params_group)}个参数没有列在params_group里'
-    
-    optimizer = get_optimizer(params_group, configs)
-    scheduler = build_scheduler(configs=configs, optimizer=optimizer)
-
-    optimizer = ModelAgnostic_Optimizer(optimizer=optimizer, 
-                                        log_lr_group_name_to_idx=log_lr_group_name_to_idx, configs=configs['optim'])
-    scheduler = ModelAgnostic_Scheduler(scheduler=scheduler, configs=configs['optim'])
-    
     model_input_mapper = AUXMapper_v1(configs['model']['input_aux'])
-    
     train_samplers, train_loaders, eval_function = build_schedule(configs, model_input_mapper.mapper, 
                                                                   partial(model_input_mapper.collate, max_stride=model.max_stride))
     
-    return model, optimizer, scheduler,  train_samplers, train_loaders, eval_function
+    model.to(device)
+    model.optimize_setup(configs)
+    return model, train_samplers, train_loaders, eval_function
 
 
 
 
+# 没有改变
 class BackboneEncoderDecoder_EncoderLoss(nn.Module):
     def __init__(
         self,

@@ -11,38 +11,17 @@
 
 import torch
 import numpy as np
-from data_schedule.render.utils.general_utils import inverse_sigmoid, get_expon_lr_func, build_rotation
+from data_schedule.render.scene_utils.general_utils import inverse_sigmoid, get_expon_lr_func, build_rotation
 from torch import nn
 import os
-from data_schedule.render.utils.system_utils import mkdir_p
+from data_schedule.render.scene_utils.system_utils import mkdir_p
 from plyfile import PlyData, PlyElement
-from data_schedule.render.utils.sh_utils import RGB2SH
+from data_schedule.render.scene_utils.sh_utils import RGB2SH
 from simple_knn._C import distCUDA2
-from data_schedule.render.utils.graphics_utils import BasicPointCloud
-from data_schedule.render.utils.general_utils import strip_symmetric, build_scaling_rotation
-from detectron2.modeling import META_ARCH_REGISTRY
+from data_schedule.render.scene_utils.graphics_utils import BasicPointCloud
+from data_schedule.render.scene_utils.general_utils import strip_symmetric, build_scaling_rotation
 
-
-# 可以看成一堆gaussian splattings
-@META_ARCH_REGISTRY.register()
-class GS_3D(nn.Module):
-    def __init__(self, configs):
-        super().__init__()
-        self.active_sh_degree = 0
-        self.max_sh_degree = configs['sh_degree']  
-        self._xyz = torch.empty(0)
-        self._features_dc = torch.empty(0)
-        self._features_rest = torch.empty(0)
-        self._scaling = torch.empty(0)
-        self._rotation = torch.empty(0)
-        self._opacity = torch.empty(0)
-        self.max_radii2D = torch.empty(0)
-        self.xyz_gradient_accum = torch.empty(0)
-        self.denom = torch.empty(0)
-        self.optimizer = None
-        self.percent_dense = 0
-        self.spatial_lr_scale = 0
-        self.setup_functions()
+class GaussianModel:
 
     def setup_functions(self):
         def build_covariance_from_scaling_rotation(scaling, scaling_modifier, rotation):
@@ -61,6 +40,23 @@ class GS_3D(nn.Module):
 
         self.rotation_activation = torch.nn.functional.normalize
 
+
+    def __init__(self, configs):
+        self.active_sh_degree = 0
+        self.max_sh_degree = configs['model']['render']['max_sh_degree']
+        self._xyz = torch.empty(0)
+        self._features_dc = torch.empty(0)
+        self._features_rest = torch.empty(0)
+        self._scaling = torch.empty(0)
+        self._rotation = torch.empty(0)
+        self._opacity = torch.empty(0)
+        self.max_radii2D = torch.empty(0)
+        self.xyz_gradient_accum = torch.empty(0)
+        self.denom = torch.empty(0)
+        self.optimizer = None
+        self.percent_dense = 0
+        self.spatial_lr_scale = 0
+        self.setup_functions()
 
     def capture(self):
         return (
@@ -150,9 +146,8 @@ class GS_3D(nn.Module):
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
-
-    def training_setup(self, configs):
-        self.percent_dense = configs['percent_dense']
+    def training_setup(self, training_args):
+        self.percent_dense = training_args.percent_dense
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
 
@@ -170,44 +165,6 @@ class GS_3D(nn.Module):
                                                     lr_final=training_args.position_lr_final*self.spatial_lr_scale,
                                                     lr_delay_mult=training_args.position_lr_delay_mult,
                                                     max_steps=training_args.position_lr_max_steps)
-
-        self.densify_from_iter = configs['densify_from_iter']
-        self.densification_interval = configs['densification_interval']
-        self.opacity_reset_interval = configs['opacity_reset_interval']
-        self.densify_grad_threshold = configs['densify_grad_threshold']
-        self.densify_until_iter = configs['densify_until_iter']
-        self.scene_white_background = MetadataCatalog.get(scene_features['scene_name']).get('white_background')
-        self.scene_cameras_extent = MetadataCatalog.get(scene_features['scene_name']).get('cameras_extent')
-
-
-    def optimize(self, 
-                 closure=None,
-                 num_iterations=None,
-                 optimizer_step_dict=None,
-                 **kwargs):
-
-        viewspace_point_tensor = optimizer_step_dict['viewspace_points']
-        visibility_filter = optimizer_step_dict['visibility_filter']
-        radii = optimizer_step_dict['radii']
-
-        # Every 1000 its we increase the levels of SH up to a maximum degree
-        if num_iterations % 1000 == 0:
-            self.oneupSHdegree()
-        
-        if num_iterations < self.densify_until_iter:
-            # Keep track of max radii in image-space for pruning
-            self.max_radii2D[visibility_filter] = torch.max(self.max_radii2D[visibility_filter], radii[visibility_filter])
-            self.add_densification_stats(viewspace_point_tensor, visibility_filter)
-
-            if num_iterations > self.densify_from_iter and num_iterations % self.densification_interval == 0:
-                size_threshold = 20 if num_iterations > self.opacity_reset_interval else None
-                self.densify_and_prune(self.densify_grad_threshold, 0.005, self.scene_cameras_extent, size_threshold)
-            
-            if num_iterations % self.opacity_reset_interval == 0 or (self.scene_white_background and num_iterations == self.densify_from_iter):
-                self.reset_opacity()
-
-
-        pass
 
     def update_learning_rate(self, iteration):
         ''' Learning rate scheduling per step '''

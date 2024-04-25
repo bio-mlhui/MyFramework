@@ -10,7 +10,6 @@ elif os.getenv('CURRENT_TASK') in ['Render']:
     from . import render
 else:
     raise ValueError()
-
 # 合并多个训练集成一个train set，每次eval对每个eval dataset进行测试
 def build_schedule(configs, model_input_mapper, model_input_collate_fn):
     import logging
@@ -20,12 +19,15 @@ def build_schedule(configs, model_input_mapper, model_input_collate_fn):
     from .registry import MAPPER_REGISTRY, EVALUATOR_REGISTRY
     from detectron2.data import DatasetCatalog, DatasetFromList, MapDataset, MetadataCatalog
     from data_schedule.utils.sampler import Evaluate_ExactSampler_Distributed, Train_InfiniteSampler_Distributed
+    DatasetCatalog.register('global_dataset', func=lambda: [])
     datasets = {'train': [], 'evaluate': []}
     meta_idx_shift = 0 # train, eval都对meta_idx进行shift, 每个set的idx都在独立的范围内
     for mode in ['train', 'evaluate']:
         for dataset_name in configs['data'][mode].keys():
             dataset_assume_mode = MetadataCatalog.get(dataset_name).get('mode')
-            if dataset_assume_mode != mode:
+            # 注册的时候的mode只是一个预先的定义, meta(数据集), mapper(任务), model(任务)
+            # 由于train/test只和任务有关, meta不对meta有强制的要求
+            if (dataset_assume_mode != mode) and (dataset_assume_mode != 'all'): 
                 logging.warning(f'{dataset_name} 的预设是用于 {dataset_assume_mode} 而非{mode}')
             dataset_dicts = DatasetFromList(DatasetCatalog.get(dataset_name), copy=True, serialize=True)
             mapper = MAPPER_REGISTRY.get(configs['data'][mode][dataset_name]['mapper']['name'])(mode=mode,
@@ -39,7 +41,7 @@ def build_schedule(configs, model_input_mapper, model_input_collate_fn):
                 datasets[mode].append(dataset)
             else:
                 datasets[mode].append((dataset_name, dataset))
-
+    MetadataCatalog.get('global_dataset').set(subset_list=list(configs['data'][mode].keys()))
     train_dataset = ConcatDataset(datasets['train'])
     logging.debug(f'Total number of training meta: {len(train_dataset)}')
 

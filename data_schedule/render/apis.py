@@ -1,50 +1,45 @@
 
-# learning-based: 在训练的时候
-
-class Scene_Terminology:
+class Scene_Meta:
     """
-    scene_id:
-    scene_text: 
-    scene_video_id: 
-    scene_video
+    generalize_v1版本: video->4D, images->3D, text->3D, text->4D;         如果有其他condition 也可以加进去
+        scene_id: 这个场景的scene_id
+        scene_text: 这个场景的text
+        scene_video_id: 这个场景的video_id
+        metalog_name: 通过metalog获得meta_data的名字key
 
-    condense: 如果condense=False的话, 每个sample就是一个view; 如果condense=True的话, 每个sample就是(scene_text/scene_video, list[view, rendering])
-    view_camera: 带view的camera对象, 抽象的数据结构
-    view_cameras: 当前scene的所有cameras
-    condense=True -> view_cameras
-    condense=False-> view_camera
+        view_camera: 当前scene的单个视角
+        view_cameras: 当前scene的多个视角
 
-    rendering: video/image的渲染的图像
-    get_rendering_fn: 根据(scene_id, 
-                           view_camera,
-                           scene_text,
-                           scene_video,
-                           scene_video_id,
-                           ) 获得对应的rendering; 都可以是none, 只要满足一种方式就行
-    """
+        rendering: 这个场景的这个视角的渲染的图像
 
-class Scene_Dataset: 
-    """
-    scene_id: str
-    scene_text: str/None
-    scene_video_id: str/None
-    
-    view_camera: 3DCamera/4DCamera  # 对于condense=False的
-    view_cameras: list[3DCamera/4D Camera]  # 对于condense=True的
-    """ 
-
+        """
 
 class Scene_Mapper:
     """
-    condense_mapper: 每个
-        # view_sampler
+    condense: 如果condense=False的话, 每个sample就是一个view; 如果condense=True的话, 每个sample就是(scene_text/scene_video, list[view, rendering])
+    get_rendering_fn: 根据(scene_id,  view_camera, scene_text, scene_video_id, ) 获得对应的rendering; 都可以是none, 只要满足一种方式就行
+    
+    
+    mapper: (view,rendering) -> view,rendering
+        'scene_dict':
+            scene_id
+            scene_text
+            scene_video
+            metalog_name
 
-    mapper: 输入输出一样
-        'view_dict': {'viewcamera': data_dict['view_camera'] },
-        'targets': {
-            'rendering': data_dict['rendering']
+        'view_dict':
+            view_camera
+
+        'rendering_dict':
+            rendering: image, 0-1,float
+
+    condense_mapper: scene -> scene
+        'scene_dict': {
         }
-
+        views_dict: {
+        }
+        renderings_dict:{
+    }
     contrastive mapper: 对于condense数据集
     """
 

@@ -9,10 +9,10 @@
 # For inquiries contact  george.drettakis@inria.fr
 #
 
-from scene.cameras import Camera
+from .cameras import Camera
 import numpy as np
-from utils.general_utils import PILtoTorch
-from utils.graphics_utils import fov2focal
+from .general_utils import PILtoTorch
+from .graphics_utils import fov2focal
 
 WARNED = False
 

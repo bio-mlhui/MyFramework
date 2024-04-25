@@ -13,15 +13,15 @@ import os
 import sys
 from PIL import Image
 from typing import NamedTuple
-from scene.colmap_loader import read_extrinsics_text, read_intrinsics_text, qvec2rotmat, \
+from .colmap_loader import read_extrinsics_text, read_intrinsics_text, qvec2rotmat, \
     read_extrinsics_binary, read_intrinsics_binary, read_points3D_binary, read_points3D_text
-from utils.graphics_utils import getWorld2View2, focal2fov, fov2focal
+from .graphics_utils import getWorld2View2, focal2fov, fov2focal
 import numpy as np
 import json
 from pathlib import Path
 from plyfile import PlyData, PlyElement
-from utils.sh_utils import SH2RGB
-from scene.gaussian_model import BasicPointCloud
+from .sh_utils import SH2RGB
+from .graphics_utils import BasicPointCloud
 
 class CameraInfo(NamedTuple):
     uid: int
@@ -133,8 +133,8 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
     try:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
-        cam_extrinsics = read_extrinsics_binary(cameras_extrinsic_file)
-        cam_intrinsics = read_intrinsics_binary(cameras_intrinsic_file)
+        cam_extrinsics = read_extrinsics_binary(cameras_extrinsic_file) # 相机的position, look, up 
+        cam_intrinsics = read_intrinsics_binary(cameras_intrinsic_file) # fovY, n, f
     except:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.txt")
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.txt")

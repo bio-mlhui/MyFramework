@@ -225,16 +225,9 @@ def reduce_scalar(input, average=True):
 
 class MetricLogger(object):
     def __init__(self, delimiter="\t"):
-        self.meters = defaultdict(SmoothedValue)
+        self.meters = {}
         self.delimiter = delimiter
-
-    def update(self, **kwargs):
-        for k, v in kwargs.items():
-            if isinstance(v, torch.Tensor):
-                v = v.item()
-            assert isinstance(v, (float, int))
-            self.meters[k].update(v)
-
+        
     def __getattr__(self, attr):
         if attr in self.meters:
             return self.meters[attr]

@@ -4,7 +4,7 @@ from copy import deepcopy as dcopy
 import cv2 as cv
 from data_schedule.registry import Mapper
 import copy
-from data_schedule.render.apis import Scene_Dataset, Scene_Terminology
+from data_schedule.render.apis import Scene_Meta
 
 import torch.nn as nn
 
@@ -12,7 +12,7 @@ class Render_Mapper(Mapper):
     def __init__(self, 
                  meta_idx_shift,
                  dataset_meta,) -> None:
-        Scene_Terminology
+        Scene_Meta
         super().__init__(meta_idx_shift=meta_idx_shift, dataset_meta=dataset_meta)
         self.get_rendering_fn = dataset_meta.get('get_rendering_fn')
 

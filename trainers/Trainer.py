@@ -35,9 +35,11 @@ class Trainer:
 
         # model and data
         create_model_schedule = model_entrypoint(configs['model']['name'])
-        self.model, self.optimizer, self.scheduler, \
-        self.train_samplers, self.train_loaders, self.eval_function = create_model_schedule(configs, device=self.device,)
-        
+
+        self.model,\
+            self.train_samplers, self.train_loaders, self.eval_function = create_model_schedule(configs, device=self.device,)
+        if comm.is_main_process():
+            self.metric_logger = TrainerLogger(delimiter='\t')
         logging.debug(f'模型的总参数数量:{sum(p.numel() for p in self.model.parameters())}')
         logging.debug(f'模型的可训练参数数量:{sum(p.numel() for p in self.model.parameters() if p.requires_grad)}')
         logging.debug(configs)
@@ -84,29 +86,29 @@ class Trainer:
                 batch_dict['visualize_paths'] = self.visualize_path(meta_idxs=meta_idxs, 
                                                                     visualize=visualize) # visualize model训练过程
                 iteration_time = time.time()
-                # 除了Loss其他的东西
-                loss_dict_unscaled, loss_weight, optimizer_step_dict = self.model(batch_dict)
-                loss = sum([loss_dict_unscaled[k] * loss_weight[k] for k in loss_weight.keys()])
-                assert math.isfinite(loss.item()), f"Loss is {loss.item()}, stopping training"
-                loss.backward()       
-                self.optimizer.step(num_iterations=self.num_iterations,
-                                    optimizer_step_dict=optimizer_step_dict,
+
+                loss_dict_unscaled, loss_weight, optimize_dict = self.model(batch_dict)   
+                # backward, step, zero_grad, lr_scheduler  
+                model_without_ddp = self.model.module if isinstance(self.model, DDP) else self.model
+                model_without_ddp.optimize(loss_dict_unscaled=loss_dict_unscaled,
+                                    loss_weight=loss_weight,
+                                    num_iterations=self.num_iterations,
+                                    optimize_dict=optimize_dict,
                                     num_samples=self.num_samples,
-                                    loss_dict_unscaled=loss_dict_unscaled,
                                     )
                 iteration_time = time.time() - iteration_time
-                self.optimizer.zero_grad()
-                self.scheduler.step(num_iterations=self.num_iterations,) 
                 sample_idxs = comm.all_gather(meta_idxs) 
                 sample_idxs = [taylor for cardib in sample_idxs for taylor in cardib]
                 self.num_samples += len(sample_idxs)
                 self.num_iterations += 1
-                loss_dict_unscaled_item = {key: torch.tensor(value.detach().item(), device=self.device) for key, value in loss_dict_unscaled.items()}
-                del loss, loss_dict_unscaled # delete graph
+                loss_dict_unscaled_item = {key: torch.tensor(value.detach().item(), 
+                                                             device=self.device) for key, value in loss_dict_unscaled.items()}
+                del loss_dict_unscaled # delete graph
                 self._log(loss_dict_unscaled=loss_dict_unscaled_item,
                           loss_weight=loss_weight,
                           sample_idxs=sample_idxs,
-                          iteration_time=iteration_time)
+                          iteration_time=iteration_time,
+                          lr_group_dicts=model_without_ddp.get_lr_group_dicts())
     def save_ckpt(self):
         rng_state_dict = {comm.get_rank(): {
             'cpu_rng_state': torch.get_rng_state(),
@@ -122,8 +124,7 @@ class Trainer:
             model_without_ddp = self.model.module if isinstance(self.model, DDP) else self.model
             checkpoint_dict = {
                 'model': model_without_ddp.state_dict(),
-                'optimizer': self.optimizer.state_dict(),
-                'scheduler': self.scheduler.state_dict(),
+                'optimizer': model_without_ddp.optimize_state_dict(),
                 'num_samples': self.num_samples,
                 'num_iterations': self.num_iterations,
                 'rng_state_dict_by_rank': rng_state_dict_by_rank, 
@@ -198,8 +199,7 @@ class Trainer:
             model_without_ddp.load_state_dict(checkpoint['model'], strict=True)
             
         if load_optimize:
-            self.optimizer.load_state_dict(checkpoint['optimizer'])
-            self.scheduler.load_state_dict(checkpoint['scheduler'])
+            model_without_ddp.load_optimize_state_dict(checkpoint['optimizer'])
 
         if load_schedule:
             self.num_samples = checkpoint['num_samples'] # 已经见过的sample的数量/下一次iteration的第一个sample的下标
@@ -224,6 +224,7 @@ class Trainer:
     def _log(self, 
              loss_dict_unscaled,
              loss_weight,
+             lr_group_dicts,
              sample_idxs, 
              iteration_time,):
         loss_dict_unscaled_reduced = reduce_dict(loss_dict_unscaled) 
@@ -234,7 +235,7 @@ class Trainer:
             for idx, sp_idx in enumerate(sample_idxs):
                 wandb.log({'sample_idx': sp_idx}, step=self.num_samples - len(sample_idxs) + idx)
             
-            logger_updates = self.optimizer.get_log_lr_dicts()
+            logger_updates = lr_group_dicts
             logger_updates.update(loss_dict_unscaled_reduced)
             logger_updates.update({
                 'loss_value': loss_value,
@@ -306,16 +307,22 @@ class Trainer:
         # epc1_iter500_sap8099/eval_dataset1/metric2/
         return [os.path.join(self.iteration_dir, 'visualize_model', f'train_meta_{str(meta_idx)}') if vis else None for (meta_idx, vis) in zip(meta_idxs, visualize)]
 
-    def register_metric_logger(self, log_keys):
-        if comm.is_main_process():
-            if not hasattr(self, 'metric_logger'):
-                # default smooth value: window_size=1, fmt='{value:.6f}', handler='value'
-                self.metric_logger = MetricLogger(delimiter='\t')
 
-            for haosen in log_keys:
-                if 'lr_group' in haosen:
-                    self.metric_logger.add_meter(haosen, SmoothedValue(window_size=1,fmt='{value:.8f}', handler='value'))
-                elif haosen == 'iteration_time':
-                    self.metric_logger.add_meter(haosen, SmoothedValue(window_size=1,fmt='{value:2f}',handler='value'))
+class TrainerLogger(MetricLogger):
+    def __init__(self, delimiter="\t"):
+        super().__init__(delimiter)
+
+    def update(self, **kwargs):
+        for k, v in kwargs.items():
+            if isinstance(v, torch.Tensor):
+                v = v.item()
+            assert isinstance(v, (float, int))
+            if k not in self.meters:
+                if 'lr_group' in k:
+                    self.meters[k] = SmoothedValue(window_size=1,fmt='{value:.8f}', handler='value')
+                elif 'iteration_time' in k:
+                    self.meters[k] = SmoothedValue(window_size=1,fmt='{value:2f}',handler='value')
                 else:
-                    raise ValueError()
+                    self.meters[k] = SmoothedValue()
+                    
+            self.meters[k].update(v)
