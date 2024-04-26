@@ -11,7 +11,7 @@ class Scene_Meta:
         view_cameras: 当前scene的多个视角
 
         rendering: 这个场景的这个视角的渲染的图像
-
+        meta_idx, visualize
         """
 
 class Scene_Mapper:
@@ -32,7 +32,7 @@ class Scene_Mapper:
 
         'rendering_dict':
             rendering: image, 0-1,float
-
+         meta_idx, visualize
     condense_mapper: scene -> scene
         'scene_dict': {
         }

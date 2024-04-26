@@ -8,7 +8,7 @@
 #
 # For inquiries contact  george.drettakis@inria.fr
 #
-
+import logging
 import torch
 import numpy as np
 from data_schedule.render.scene_utils.general_utils import inverse_sigmoid, get_expon_lr_func, build_rotation
@@ -20,8 +20,11 @@ from data_schedule.render.scene_utils.sh_utils import RGB2SH
 from simple_knn._C import distCUDA2
 from data_schedule.render.scene_utils.graphics_utils import BasicPointCloud
 from data_schedule.render.scene_utils.general_utils import strip_symmetric, build_scaling_rotation
+from models.Render.model.GSTrainer_Model import Trainer_GSModel
 
-class GaussianModel:
+# 假设
+#   只有一张卡
+class GaussianModel(Trainer_GSModel):
 
     def setup_functions(self):
         def build_covariance_from_scaling_rotation(scaling, scaling_modifier, rotation):
@@ -42,6 +45,7 @@ class GaussianModel:
 
 
     def __init__(self, configs):
+        super().__init__()
         self.active_sh_degree = 0
         self.max_sh_degree = configs['model']['render']['max_sh_degree']
         self._xyz = torch.empty(0)
@@ -129,7 +133,7 @@ class GaussianModel:
         features[:, :3, 0 ] = fused_color
         features[:, 3:, 1:] = 0.0
 
-        print("Number of points at initialisation : ", fused_point_cloud.shape[0])
+        logging.debug(f"Number of points at initialisation : {fused_point_cloud.shape[0]}")
 
         dist2 = torch.clamp_min(distCUDA2(torch.from_numpy(np.asarray(pcd.points)).float().cuda()), 0.0000001)
         scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
@@ -405,3 +409,10 @@ class GaussianModel:
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
+    
+    def train(self):
+        pass
+
+    def eval(self):
+        pass
+

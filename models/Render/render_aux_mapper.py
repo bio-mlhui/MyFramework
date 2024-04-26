@@ -49,7 +49,7 @@ class Video_4DGS_Optimize_AuxMapper:
         return batch_dict
     
 
-from data_schedule.render.apis import Scene_Meta
+from data_schedule.render.apis import Scene_Meta, Scene_Mapper
 # 3D视角, 3Dimage;
 class Image_3DGS_Optimize_AuxMapper:
     def __init__(self, aux_configs):
@@ -67,11 +67,14 @@ class Image_3DGS_Optimize_AuxMapper:
         self.rendering_auxes = [MODELITY_INPUT_MAPPER_REGISTRY.get(config['name'])(config) for config in rendering_auxes]
 
     def mapper(self, data_dict, mode,):      
-        Scene_Meta     
+        Scene_Mapper     
+        data_dict['meta_idxs'] = [data_dict['meta_idx']]
+        data_dict['visualize'] = [data_dict['visualize']]
         return data_dict
 
     def collate(self, batch_dict, mode):
-        return batch_dict
+        # 因为batch_size就是1
+        return batch_dict[0]
     
 # 4D视角, 4D image
 class Video_4DGS_Learning_AuxMapper:

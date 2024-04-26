@@ -149,6 +149,89 @@ class Render_Evaluator:
         comm.synchronize() 
         return eval_metrics
 
+
+@EVALUATOR_REGISTRY.register()
+class Image3D_Optimize_Evaluator:
+    """
+    单个scene, 最普通的重建
+    单个gpu
+    """
+    def __init__(self,
+                 dataset_name=None,
+                 data_loader=None,
+                 configs=None,
+                 **kwargs) -> None:
+        
+        Scene_Meta
+        self.dataset_loader = data_loader
+        self.dataset_name = dataset_name
+
+        view_metrics = configs['data']['evaluate'][dataset_name]['evaluator']['view_metrics']
+        dataset_meta = MetadataCatalog.get(dataset_name)
+        self.view_metric_fns = []
+        for metric_name, metric_config in view_metrics:
+            metric_fn = render_metric_entrypoint(metric_name)
+            metric_fn = partial(metric_fn, dataset_meta=dataset_meta, **metric_config)
+            self.view_metric_fns.append(metric_fn)
+        
+        # metric aggregator
+        metrics_aggregator = configs['data']['evaluate'][dataset_name]['evaluator']['metrics_aggregator']
+        eval_meta_keys = dataset_meta.get('eval_meta_keys')
+        assert len(list(eval_meta_keys.keys())) == 1
+        self.eval_meta_keys = eval_meta_keys[list(eval_meta_keys.keys())[0]]  # {list of view_id}
+        self.metrics_aggregator = partial(render_metric_entrypoint(metrics_aggregator[0]),
+                                          dataset_meta=dataset_meta,
+                                          eval_meta_keys=self.eval_meta_keys,
+                                          **metrics_aggregator[1])
+
+    def visualize_path(self, meta_idxs, visualize, evaluator_path):
+        return [os.path.join(evaluator_path, f'meta_{meta_idx}') if vis else None for (meta_idx, vis) in zip(meta_idxs, visualize)]
+    
+    @torch.no_grad()
+    def __call__(self, model, output_dir):
+        assert comm.is_main_process()
+        # render: dataset_1/config/eval_
+        # learing_render: dataset_1/config/eval_text1
+        #                 dataset_1/config/eval_text2
+        evaluator_path = os.path.join(output_dir, f'eval_{self.dataset_name}')
+        os.makedirs(evaluator_path, exist_ok=True)
+        metrics_by_view_id = defaultdict(dict) # {scene_id: {view_id: {}}}}
+        # 设置成worker>0会造成mem leak, https://github.com/pytorch/pytorch/issues/92134
+        for batch_dict in tqdm(self.dataset_loader):
+            # batch_size就是1
+            from data_schedule.render.apis import Scene_Mapper
+            scene_id = batch_dict['scene_dict']['scene_id'] # list[str]
+            view_camera_uid = batch_dict['view_dict']['view_camera'].uid
+            visualize_path = self.visualize_path(meta_idxs=[batch_dict['meta_idx']],
+                                                  visualize=[batch_dict['visualize']], 
+                                                 evaluator_path=os.path.join(evaluator_path, 'visualize_model'))
+            batch_dict['visualize_paths'] = visualize_path
+            batch_dict = to_device(batch_dict, device=model.device)
+            pred_rendering = model.sample(batch_dict)['rendering'] # 0-1, float
+
+            view_pred = {
+                'view_id': view_camera_uid,
+                'scene_id': scene_id,
+                'rendering': pred_rendering,
+                'view_camera': batch_dict['view_dict']['view_camera']
+            }
+            meta_key_metrics = {}                
+            for metric_fn in self.view_metric_fns:
+                metric_values = metric_fn(view_pred=view_pred, output_dir=evaluator_path)
+                for key, value in metric_values.items():
+                    assert key not in meta_key_metrics
+                    meta_key_metrics[key] = value
+            assert view_camera_uid not in metrics_by_view_id
+            metrics_by_view_id[view_camera_uid] = meta_key_metrics
+        
+        assert set(metrics_by_view_id.keys()).issubset(set(self.eval_meta_keys))
+        assert set(self.eval_meta_keys).issubset(set(metrics_by_view_id.keys()))
+        eval_metrics = self.metrics_aggregator(metrics_by_view_id=metrics_by_view_id)
+
+        comm.synchronize() 
+        return eval_metrics
+
+
 @EVALUATOR_REGISTRY.register()
 class SLAM_4D_Render_Evaluator:
     pass

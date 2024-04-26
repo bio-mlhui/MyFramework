@@ -29,7 +29,9 @@ def build_schedule(configs, model_input_mapper, model_input_collate_fn):
             # 由于train/test只和任务有关, meta不对meta有强制的要求
             if (dataset_assume_mode != mode) and (dataset_assume_mode != 'all'): 
                 logging.warning(f'{dataset_name} 的预设是用于 {dataset_assume_mode} 而非{mode}')
-            dataset_dicts = DatasetFromList(DatasetCatalog.get(dataset_name), copy=True, serialize=True)
+            dataset_dicts = DatasetFromList(DatasetCatalog.get(dataset_name), 
+                                            copy=configs['data'][mode][dataset_name].pop('dcopy', True), 
+                                            serialize=configs['data'][mode][dataset_name].pop('serialize', True))
             mapper = MAPPER_REGISTRY.get(configs['data'][mode][dataset_name]['mapper']['name'])(mode=mode,
                                                                                                 dataset_name=dataset_name, 
                                                                                                 configs=configs,
@@ -64,6 +66,7 @@ def build_schedule(configs, model_input_mapper, model_input_collate_fn):
     # 保证split_t - split_t-1 整除 batch_size_t 
     train_samplers = []
     train_loaders = []
+    pin_memory = configs['data'].pop('pin_memory', True)
     for btch_size, (range_start, range_end) in zip(batch_sizes, splits):
         if range_end is not None:
             assert (range_end - range_start) % btch_size == 0, '要保证每个split的长度可以被当时的batch_size整除'
@@ -78,8 +81,8 @@ def build_schedule(configs, model_input_mapper, model_input_collate_fn):
                                         sampler=loader_sampler,
                                         collate_fn=partial(model_input_collate_fn, mode='train'), 
                                         num_workers=int(os.getenv('TORCH_NUM_WORKERS')),
-                                        pin_memory=True,
-                                        persistent_workers=True))
+                                        pin_memory=pin_memory,
+                                        persistent_workers=True if int(os.getenv('TORCH_NUM_WORKERS')) > 0 else False))
 
     evaluators = []
     for eval_dataset_name, eval_dataset in datasets['evaluate']:
@@ -89,8 +92,8 @@ def build_schedule(configs, model_input_mapper, model_input_collate_fn):
                             sampler=Evaluate_ExactSampler_Distributed(eval_dataset),
                             collate_fn=partial(model_input_collate_fn, mode='evaluate'),
                             num_workers=int(os.getenv('TORCH_NUM_WORKERS')),
-                            pin_memory=True,
-                            persistent_workers=True)
+                            pin_memory=pin_memory,
+                            persistent_workers=True if int(os.getenv('TORCH_NUM_WORKERS')) > 0 else False)
         
         evaluator = EVALUATOR_REGISTRY.get(configs['data']['evaluate'][eval_dataset_name]['evaluator']['name'])(configs=configs,
                                                                                                                 dataset_name=eval_dataset_name,

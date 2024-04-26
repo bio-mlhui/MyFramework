@@ -2,6 +2,8 @@ import torch
 import os
 import shutil
 from PIL import Image
+import torchvision
+from data_schedule.render.scene_utils.image_utils import psnr as compute_psnr
 _render_metric_entrypoints = {}
 
 def register_render_metric(fn):
@@ -21,39 +23,26 @@ def render_metric_entrypoint(render_metric_name):
 
 @register_render_metric
 def psnr(view_pred, dataset_meta, **kwargs):
-    scene_name = view_pred['scene_name']
-    view_point = view_pred['view_point']
-    get_gt_view_fn = dataset_meta.get('get_gt_view_fn')
-    gt_view = get_gt_view_fn(scene_name=scene_name, view_points=[view_point])[0] # h w
-    
-    pred_view = view_pred['pred']
+    rendering = torch.clamp(view_pred['rendering'], 0.0, 1.0).cuda()  # 0-1, float # 3 h w
+    gt_image = torch.clamp(view_pred['view_camera'].original_image.cuda(), 0.0, 1.0)
 
-    # psnr
-    psnr = PSNR(pred_view, gt_view)
+    psnr = compute_psnr(rendering, gt_image).mean().double()
 
     return {'psnr': psnr}
 
 @register_render_metric
-def web(frame_pred, output_dir, **kwargs):
-
-    os.makedirs(os.path.join(output_dir, 'web'), exist_ok=True) 
-    video_id = frame_pred['video_id']
-    frame_name = frame_pred['frame_name']
-    masks = frame_pred['masks'] # nq h w
-
-    scores = torch.tensor(frame_pred['classes']) # nq c
-    foreground_scores = scores[:, :-1].sum(-1) # nq
-    max_idx = foreground_scores.argmax()
-    pred_mask = masks[max_idx].int() # h w
-
-    mask = Image.fromarray(255 * pred_mask.int().numpy()).convert('L')
-    save_path = os.path.join(output_dir, 'web', video_id)
-
-    os.makedirs(save_path, exist_ok=True)
-    png_path = os.path.join(save_path, f'{frame_name}.png')
-    if os.path.exists(png_path):
-        os.remove(png_path)
-    mask.save(png_path)
+def web(view_pred, output_dir, 
+        append_scene_id=False, **kwargs):
+    if append_scene_id:
+        save_dir = os.path.join(output_dir, 'web', view_pred['scene_id'])
+    else:
+        save_dir = os.path.join(output_dir, 'web')
+    os.makedirs(save_dir, exist_ok=True) 
+    view_id = view_pred['view_id']
+    rendering = view_pred['rendering']  # 0-1, float # 3 h w
+    torchvision.utils.save_image(rendering, os.path.join(save_dir, f'{view_id:05d}.png'))
     return {}
+
+
 
 

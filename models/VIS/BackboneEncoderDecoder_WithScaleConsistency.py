@@ -22,11 +22,11 @@ from models.optimization.optimizer import get_optimizer
 from models.optimization.scheduler import build_scheduler 
 from detectron2.modeling import BACKBONE_REGISTRY, META_ARCH_REGISTRY
 import math
-
+from detectron2.utils import comm
+from torch.nn.parallel import DistributedDataParallel as DDP
 from models.backbone.utils import VideoMultiscale_Shape
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
-
 class OptimizeModel(nn.Module):
     """
     optimize_setup:
@@ -43,7 +43,7 @@ class OptimizeModel(nn.Module):
         self.scheduler: LRScheduler = None
         self.log_lr_group_idx: Dict = None
 
-    def optimize_setup(self):
+    def optimize_setup(self, **kwargs):
         raise ValueError('这是一个virtual method, 需要实现一个新的optimize_setup函数')
 
     def optimize(self,
@@ -60,6 +60,8 @@ class OptimizeModel(nn.Module):
         self.optimizer.zero_grad(set_to_none=True) # delete gradient 
         self.scheduler.step(epoch=num_iterations,)
 
+    def sample(self, **kwargs):
+        raise ValueError('这是一个virtual method, 需要实现一个新的optimize_setup函数')        
 
     def get_lr_group_dicts(self, ):
         return  {f'lr_group_{key}': self.optimizer.param_groups[value]["lr"] if value is not None else 0 \
@@ -280,8 +282,15 @@ def backbone_encoder_decoder_withScaleConsistency(configs, device):
     train_samplers, train_loaders, eval_function = build_schedule(configs, 
                                                                     model_input_mapper.mapper, 
                                                                     partial(model_input_mapper.collate, max_stride=model.max_stride))
+    if comm.is_main_process():
+        logging.debug(f'模型的总参数数量:{sum(p.numel() for p in model.parameters())}')
+        logging.debug(f'模型的可训练参数数量:{sum(p.numel() for p in model.parameters() if p.requires_grad)}')
+
     model.to(device)
     model.optimize_setup(configs)
+    if comm.get_world_size() > 1:
+        # broadcast_buffers = False
+        model = DDP(model, device_ids=[comm.get_local_rank()], find_unused_parameters=True, broadcast_buffers = False)
     return model, train_samplers, train_loaders, eval_function
 
 
@@ -467,9 +476,16 @@ def backbone_encoder_decoder(configs, device):
     model_input_mapper = AUXMapper_v1(configs['model']['input_aux'])
     train_samplers, train_loaders, eval_function = build_schedule(configs, model_input_mapper.mapper, 
                                                                   partial(model_input_mapper.collate, max_stride=model.max_stride))
-    
+    if comm.is_main_process():
+        logging.debug(f'模型的总参数数量:{sum(p.numel() for p in model.parameters())}')
+        logging.debug(f'模型的可训练参数数量:{sum(p.numel() for p in model.parameters() if p.requires_grad)}')
+        
     model.to(device)
     model.optimize_setup(configs)
+
+    if comm.get_world_size() > 1:
+        # broadcast_buffers = False
+        model = DDP(model, device_ids=[comm.get_local_rank()], find_unused_parameters=True, broadcast_buffers = False)
     return model, train_samplers, train_loaders, eval_function
 
 

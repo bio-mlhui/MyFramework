@@ -35,14 +35,10 @@ class Trainer:
 
         # model and data
         create_model_schedule = model_entrypoint(configs['model']['name'])
-
-        self.model,\
-            self.train_samplers, self.train_loaders, self.eval_function = create_model_schedule(configs, device=self.device,)
+        self.model, self.train_samplers, self.train_loaders, self.eval_function = create_model_schedule(configs, device=self.device,)
+        logging.debug(configs)
         if comm.is_main_process():
             self.metric_logger = TrainerLogger(delimiter='\t')
-        logging.debug(f'模型的总参数数量:{sum(p.numel() for p in self.model.parameters())}')
-        logging.debug(f'模型的可训练参数数量:{sum(p.numel() for p in self.model.parameters() if p.requires_grad)}')
-        logging.debug(configs)
         # trainer
         self.eval_seed = configs['eval_seed']
         self.out_dir = configs['out_dir']
@@ -50,10 +46,7 @@ class Trainer:
         self.num_iterations = 0 
         self.num_samples = 0 # wandb的横坐标, 模型见过(forward-backward成功)的samples的数量
         assert self.train_samplers[0].start_idx == self.num_samples
-        if comm.get_world_size() > 1:
-            # broadcast_buffers = False
-            self.model = DDP(self.model, device_ids=[comm.get_local_rank()], find_unused_parameters=True, broadcast_buffers = False)
-    
+
         random.seed(seed + comm.get_rank())
         np.random.seed(seed + comm.get_rank())
         torch.random.manual_seed(seed + comm.get_rank())
@@ -110,6 +103,10 @@ class Trainer:
                           iteration_time=iteration_time,
                           lr_group_dicts=model_without_ddp.get_lr_group_dicts())
     def save_ckpt(self):
+        """
+        存储模型的状态, 模型的优化状态, 随机状态, 训练的当前节点, 
+        模型的metrics设置为空
+        """
         rng_state_dict = {comm.get_rank(): {
             'cpu_rng_state': torch.get_rng_state(),
             'gpu_rng_state': torch.cuda.get_rng_state(self.device),
@@ -139,11 +136,12 @@ class Trainer:
 
     @torch.no_grad()
     def evaluate(self):
-        """使用独立的seed对当前model进行评比(要求当前状态的ckpt存在)
+        """
+        TODO: 怎么保证测试的model 和ckpt里的Model是一样的 ?
+        使用统一的 evaluate随机状态 对model进行评估, 要求存在ckpt
         得到的metrics写进 当前状态的ckpt里
             如果当前状态ckpt的指标 和新计算的指标差别非常大, 那么把新值写进去, 但是wandb如果已经log了的话不能更改
             log新metric, 存metric到当前的ckpt里
-        torch, numpy重回训练时的随机状态
         """
         random.seed(self.eval_seed)
         np.random.seed(self.eval_seed)
@@ -187,10 +185,17 @@ class Trainer:
                   load_model=False,
                   load_random=False, # 随机状态
                   ):
-        # lrsm: load_model,     sampler要恢复, optimizer, scheduler不恢复
-        # imseg_pt: load_model, sampler不恢复, optimizer, scheduler不恢复
-        # resume: load_model, sampler恢复，optimizer, scheduler恢复
-        # 默认是把model, iter, optimizer, scheduler, sampler都进行load ckpt(根据iter的大小)
+        """
+        load其中一个状态:
+        load_model: 模型的状态(load_model, model.load_state_dict), 
+        load_optimize: 模型的优化状态(load_optimize, model.load_optimize_state_dict)
+        load_random: 代码的随机状态
+        load_schedule: 训练的当前节点
+
+        lrsm:     model恢复, random要恢复, optimize不恢复, schedule要恢复
+        imseg_pt: model恢复, random不恢复, optimize不恢复, schedule不恢复, 
+        resume:   model恢复, random恢复,, optimize恢复,, schedule恢复,, 
+        """
         assert os.path.exists(ckpt_path)
         model_without_ddp = self.model.module if isinstance(self.model, DDP) else self.model
         checkpoint = torch.load(ckpt_path, map_location='cpu')
@@ -227,6 +232,13 @@ class Trainer:
              lr_group_dicts,
              sample_idxs, 
              iteration_time,):
+        """
+        每个iteration存储 loss值, 运行时间, sample_idx, 学习率状态
+        如果当前iteration要进行evaluate:
+            先调用save_ckpt (存储训练的random状态)
+            再调用evaluate  (把metric写到ckpt里)
+            再调用load_ckpt (回到当时的训练random状态)
+        """
         loss_dict_unscaled_reduced = reduce_dict(loss_dict_unscaled) 
         loss_value = sum([loss_dict_unscaled_reduced[key] * loss_weight[key] for key in loss_weight.keys()])
 
@@ -262,10 +274,10 @@ class Trainer:
             torch.cuda.empty_cache()
         if do_ckpt:
             # try: 
-            self.save_ckpt() # 先存储
-            self.evaluate() # 测试的随机状态独立于训练的状态
+            self.save_ckpt()
+            self.evaluate()
             self.load_ckpt(os.path.join(self.iteration_dir, 'ckpt.pth.tar'),  # 训练的随机状态
-                        load_random=True, load_schedule=False, load_model=False, load_optimize=False,)
+                           load_random=True, load_schedule=False, load_model=False, load_optimize=False,)
             # except:
             #     if comm.is_main_process():
             #         logging.error(f'Iteration {self.num_iterations} evaluate错误')

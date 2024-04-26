@@ -1,3 +1,4 @@
+from . import GSTrainer_Model
 from . import GS3D
 
 # from . import GS4D

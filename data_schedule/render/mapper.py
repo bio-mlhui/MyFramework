@@ -119,7 +119,7 @@ class Image3D_TrainMapper(Render_TrainMapper):
                 'metalog_name': data_dict['metalog_name']
             },
             'view_dict': {
-                'viewcamera': data_dict['view_camera']
+                'view_camera': data_dict['view_camera']
             },
             'rendering_dict': {
                 'rendering': data_dict['rendering']
@@ -155,7 +155,7 @@ class Image3D_EvalMapper(Render_EvalMapper):
                 'callback_fns': callback_fns
             },
             'view_dict': {
-                'viewcamera': data_dict['view_camera']
+                'view_camera': data_dict['view_camera'],
             },
         }
 

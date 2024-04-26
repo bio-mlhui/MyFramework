@@ -14,15 +14,23 @@ from detectron2.modeling import META_ARCH_REGISTRY
 from models.Render.model.GS3D import GaussianModel
 from models.Render.model.loss import l1_loss, ssim
 from models.optimization.gs_optimizer import get_expon_lr_func
-
-
-
+import copy
+from detectron2.utils import comm
+import logging
+from models.Render.gaussian_renderer import render
+from detectron2.data import MetadataCatalog
+from argparse import Namespace
+import math
 class Image_3DGS_OptimizeBased(GaussianModel):
     def __init__(self, configs,):
         super().__init__(configs=configs)
         self.loss_weight = configs['model']['loss_weight']
         assert sum(list(self.loss_weight.values())) == 1.0, 'loss权重不是1'
-
+        self.random_background = configs['optim']['random_background']
+        # sample_setup
+        self.pipe = Namespace(convert_SHs_python=configs['model']['sample']['convert_SHs_python'],
+                         compute_cov3D_python=configs['model']['sample']['compute_cov3D_python'],
+                         debug= configs['model']['sample']['debug'])
     @property
     def device(self):
         return self._xyz.device
@@ -33,36 +41,46 @@ class Image_3DGS_OptimizeBased(GaussianModel):
                   configs=None):
         self.gaussians.restore(ckpt_dict, configs)
     
-    def forward(self, batch_dict):
-        viewpoint_cam = batch_dict['viewpoint_cam']
-        pipe = batch_dict['pipe']
-        bg = batch_dict['bg']
-        
-        assert self.training
-        render_pkg = render(viewpoint_cam, self.gaussians, pipe, bg)
+    def __call__(self, batch_dict):
+        from data_schedule.render.apis import Scene_Mapper
+        scene_meta = MetadataCatalog.get(batch_dict['scene_dict']['metalog_name'])
+        wbcg = scene_meta.get('white_background')
+        cameras_extent = scene_meta.get('cameras_extent')
+        bg_color = [1,1,1] if wbcg else [0, 0, 0]
+        background = torch.tensor(bg_color, dtype=torch.float32, device="cuda") 
+        bg = torch.rand((3), device="cuda") if self.random_background else background
+
+        view_camera = batch_dict['view_dict']['view_camera']
+        render_pkg = render(view_camera, self, self.pipe, bg)
         
         image, viewspace_point_tensor, visibility_filter, radii \
             = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-        gt_image = viewpoint_cam.original_image.to(self.device)
+        gt_image = view_camera.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
         ssim_loss = 1.0 - ssim(image, gt_image)
 
         return {'loss_l1': Ll1,
-                'loss_ssim': ssim_loss}, self.loss_weight   
+                'loss_ssim': ssim_loss}, self.loss_weight, {'viewspace_points':viewspace_point_tensor, 
+                                                            'visibility_filter': visibility_filter,
+                                                             'radii': radii,
+                                                              'white_background':wbcg,
+                                                            'cameras_extent': cameras_extent }  
 
     @torch.no_grad()
     def sample(self, batch_dict): 
         # list of test viewpoints -> list of renderings
-        assert not self.training
+        wbcg = MetadataCatalog.get(batch_dict['scene_dict']['metalog_name']).get('white_background')
+        bg_color = [1,1,1] if wbcg else [0, 0, 0]
+        background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")  
+        rendering = render(batch_dict['view_dict']['view_camera'], self, self.pipe, background)["render"] # 0-1, float
         return {
-            'renderings': None
+            'rendering': rendering.cpu()
         }
 
-    def optimize_setup(self, configs):
+    def optimize_setup(self, optimize_configs):
         """
         模型已经根据场景初始化了, 并且放到了gpu里
         """
-        optimize_configs = configs['optim']
         self.percent_dense = optimize_configs['percent_dense']
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device=self.device)
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device=self.device)
@@ -104,12 +122,21 @@ class Image_3DGS_OptimizeBased(GaussianModel):
                  num_iterations=None,
                  optimize_dict=None,
                  **kwargs):
+        num_iterations += 1
+        self.update_learning_rate(num_iterations)  
+        if num_iterations % 1000 == 0:
+            self.oneupSHdegree()
+
         # loss backward了嘛?
+        loss = sum([loss_dict_unscaled[k] * loss_weight[k] for k in loss_weight.keys()])
+        assert math.isfinite(loss.item()), f"Loss is {loss.item()}, stopping training"
+        loss.backward()  
+
         viewspace_point_tensor = optimize_dict['viewspace_points']
         visibility_filter = optimize_dict['visibility_filter']
         radii = optimize_dict['radii']
-        scene_cameras_extent = optimize_dict['scene_cameras_extent']
-        scene_white_background = optimize_dict['scene_white_background']
+        cameras_extent = optimize_dict['cameras_extent']
+        white_background = optimize_dict['white_background']
 
         if num_iterations < self.densify_until_iter:
             # Keep track of max radii in image-space for pruning
@@ -118,23 +145,15 @@ class Image_3DGS_OptimizeBased(GaussianModel):
 
             if num_iterations > self.densify_from_iter and num_iterations % self.densification_interval == 0:
                 size_threshold = 20 if num_iterations > self.opacity_reset_interval else None
-                self.densify_and_prune(self.densify_grad_threshold, 0.005, scene_cameras_extent, size_threshold)
+                self.densify_and_prune(self.densify_grad_threshold, 0.005, cameras_extent, size_threshold)
             
-            if num_iterations % self.opacity_reset_interval == 0 or (scene_white_background and num_iterations == self.optimizer.densify_from_iter):
+            if num_iterations % self.opacity_reset_interval == 0 or (white_background and num_iterations == self.densify_from_iter):
                 self.reset_opacity()
 
         # Optimizer step
         self.optimizer.step()
         self.optimizer.zero_grad(set_to_none = True)
 
-        for param_group in self.optimizer.param_groups:
-            if param_group["name"] == "xyz":
-                lr = self.xyz_scheduler_args(num_iterations)
-                param_group['lr'] = lr            
-        # Every 1000 its we increase the levels of SH up to a maximum degree
-        if num_iterations % 1000 == 0:
-            self.oneupSHdegree()
-        
     def get_lr_group_dicts(self,):
         return  {f'lr_group_{key}': self.optimizer.param_groups[value]["lr"] if value is not None else 0 \
                  for key, value in self.log_lr_group_idx.items()}
@@ -142,49 +161,69 @@ class Image_3DGS_OptimizeBased(GaussianModel):
     def optimize_state_dict(self,):
         return {
             'optimizer': self.optimizer.state_dict(),
-            'defaults': {
+            'max_radii2D': self.max_radii2D,
+            'xyz_gradient_accum': self.xyz_gradient_accum,
+            'denom': self.denom,
+            'spatial_lr_scale': self.spatial_lr_scale,
+
+            'defaults':{
+                'percent_dense': self.percent_dense,
+                'position_lr_init': self.position_lr_init,
+                'feature_lr': self.optimizer.param_groups[1]['lr'],
+                'opacity_lr': self.optimizer.param_groups[3]['lr'],
+                'scaling_lr': self.optimizer.param_groups[4]['lr'],
+                'rotation_lr': self.optimizer.param_groups[5]['lr'],
+
+                'position_lr_final': self.position_lr_final,
+                'position_lr_delay_mult': self.position_lr_delay_mult,
+                'position_lr_max_steps': self.position_lr_max_steps, 
+
+                
                 'densify_from_iter': self.densify_from_iter,
                 'densification_interval': self.densification_interval,
                 'opacity_reset_interval': self.opacity_reset_interval,
                 'densify_grad_threshold': self.densify_grad_threshold,
-                'densify_until_iter': self.densify_until_iter,
-                'percent_dense': self.percent_dense,
-                'xyz_gradient_accum': self.xyz_gradient_accum,
-                'denom': self.denom,
-            },
-            'scheduler': {
-                'position_lr_init': self.position_lr_init,
-                'position_lr_final': self.position_lr_final,
-                'position_lr_delay_mult': self.position_lr_delay_mult,
-                'position_lr_max_steps': self.position_lr_max_steps, 
-            },
-        }
+                'densify_until_iter': self.densify_until_iter,                
+
+                }
+        },
         
     def load_optimize_state_dict(self, state_dict):
-        gs_defaults = state_dict['defaults']
-        self.percent_dense = gs_defaults['percent_dense']
-        self.xyz_gradient_accum = gs_defaults['xyz_gradient_accum']  # tensor
-        self.denom = gs_defaults['denom']  # tensor
-        self.densify_from_iter = gs_defaults['']
-        self.densification_interval = gs_defaults['densification_interval']
-        self.opacity_reset_interval = gs_defaults['opacity_reset_interval']
-        self.densify_grad_threshold = gs_defaults['densify_grad_threshold']
-        self.densify_until_iter = gs_defaults['densify_until_iter']
+        # 先init当前状态对应的默认optimize状态
+        self.optimize_setup(state_dict['defaults']) # 应该是config的形式
+
+        self.xyz_gradient_accum = state_dict['xyz_gradient_accum']  # tensor
+        self.denom = state_dict['denom']  # tensor
+        self.max_radii2D = state_dict['max_radii2D'] # tensor
         self.optimizer.load_state_dict(state_dict['optimizer'])
+        self.spatial_lr_scale = state_dict['spatial_lr_scale']
 
-        scheduler = state_dict['scheduler']
-        self.xyz_scheduler_args = get_expon_lr_func(lr_init= scheduler['position_lr_init']* self.spatial_lr_scale,
-                                    lr_final= scheduler['position_lr_final']* self.spatial_lr_scale,
-                                    lr_delay_mult=scheduler['position_lr_delay_mult'],
-                                    max_steps=scheduler['position_lr_max_steps']) 
-        assert self.position_lr_init == scheduler['position_lr_init']
-        assert self.position_lr_final == scheduler['position_lr_final']
-        assert self.position_lr_delay_mult == scheduler['position_lr_delay_mult']
-        assert self.position_lr_max_steps == scheduler['position_lr_max_steps']
+    def load_state_dict(self, ckpt, strict=True):
+        # 只load model
+        from models.trainer_model_api import Trainer_Model_API
+        (self.active_sh_degree, 
+        self._xyz, 
+        self._features_dc, 
+        self._features_rest,
+        self._scaling, 
+        self._rotation, 
+        self._opacity,) = ckpt       
 
+    def state_dict(self,):
+        from models.trainer_model_api import Trainer_Model_API
+        return (
+            self.active_sh_degree,
+            self._xyz,
+            self._features_dc,
+            self._features_rest,
+            self._scaling,
+            self._rotation,
+            self._opacity,          
+        )
 
 @register_model
 def image_3dgs_optim_based(configs, device):
+    # 假设只有一张卡, 并且全部用.cuda() 操作
     from .render_aux_mapper import Image_3DGS_Optimize_AuxMapper
     model_input_mapper = Image_3DGS_Optimize_AuxMapper(configs['model']['input_aux'])
 
@@ -197,9 +236,9 @@ def image_3dgs_optim_based(configs, device):
     assert len(scene_list) == 1, '基于optimize的必须是一个scene'
     renderer.create_from_pcd(pcd=MetadataCatalog.get(scene_list[0]).get('point_cloud'), 
                              spatial_lr_scale=MetadataCatalog.get(scene_list[0]).get('cameras_extent'))
+    renderer.optimize_setup(optimize_configs=configs['optim'])
+    assert comm.is_main_process(), '3d重建只需要一张卡'
+    # logging.debug(f'初始化的总参数数量:{sum(p.numel() for p in renderer.parameters())}')
+    # logging.debug(f'初始化的可训练参数数量:{sum(p.numel() for p in renderer.parameters() if p.requires_grad)}')
 
-    renderer.optimize_setup(configs=configs)
-    
-    renderer.to(device)
-    
     return renderer, train_samplers, train_loaders, eval_function
