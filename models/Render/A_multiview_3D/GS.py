@@ -11,16 +11,19 @@ from functools import partial
 from models.registry import register_model
 from data_schedule import build_schedule
 from detectron2.modeling import META_ARCH_REGISTRY
-from models.Render.model.GS3D import GaussianModel
-from models.Render.model.loss import l1_loss, ssim
+from models.Render.representation.GS3D import GaussianModel
+from models.Render.representation.loss import l1_loss, ssim
+from models.Render.representation.gaussian_renderer import render
+
 from models.optimization.gs_optimizer import get_expon_lr_func
 import copy
 from detectron2.utils import comm
 import logging
-from models.Render.gaussian_renderer import render
+
 from detectron2.data import MetadataCatalog
 from argparse import Namespace
 import math
+
 class Image_3DGS_OptimizeBased(GaussianModel):
     def __init__(self, configs,):
         super().__init__(configs=configs)
@@ -221,10 +224,11 @@ class Image_3DGS_OptimizeBased(GaussianModel):
             self._opacity,          
         )
 
+
 @register_model
 def image_3dgs_optim_based(configs, device):
     # 假设只有一张卡, 并且全部用.cuda() 操作
-    from .render_aux_mapper import Image_3DGS_Optimize_AuxMapper
+    from .aux_mapper import Image_3DGS_Optimize_AuxMapper
     model_input_mapper = Image_3DGS_Optimize_AuxMapper(configs['model']['input_aux'])
 
     renderer = Image_3DGS_OptimizeBased(configs)

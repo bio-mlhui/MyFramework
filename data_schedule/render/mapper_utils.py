@@ -15,6 +15,8 @@ class Render_Mapper(Mapper):
         Scene_Meta
         super().__init__(meta_idx_shift=meta_idx_shift, dataset_meta=dataset_meta)
         self.get_rendering_fn = dataset_meta.get('get_rendering_fn')
+        self.get_extrinstic_fn = dataset_meta.get('get_extrinstic_fn')
+        self.get_intrinstic_fn = dataset_meta.get('get_intrinstic_fn')
 
 class Render_TrainMapper(Render_Mapper):
     def __init__(self, 

@@ -1,4 +1,22 @@
 
+"""
+3D 模态的一般形式是scene, view, rendering, 一个scene有多个view, 每个view有对应的rendering
+
+3D scene: 一堆(view, rendering), 可以是multi-view 图片相机文件夹; 可以是一个3d 模型文件; 
+      抽象成一堆(view, rendering)
+
+注册所有的场景, 组合不同的场景成
+
+任务数据集: 每个meta是一个(view,rendering); 对于基于优化的, 这个dataset的每个meta都属于一个scene; 
+           对于基于学习的, 每个meta不一定属于同一个scene
+mapper: 
+
+
+统一的相机接口,
+
+
+"""
+
 class Scene_Meta:
     """
     generalize_v1版本: video->4D, images->3D, text->3D, text->4D;         如果有其他condition 也可以加进去

@@ -9,7 +9,8 @@ from detectron2.data import DatasetCatalog, MetadataCatalog
 from data_schedule.render.apis import Scene_Meta, Scene_Mapper
 from data_schedule.render.scene_utils.camera_utils import camera_to_JSON, cameraList_from_camInfos
 import random
-
+import objaverse
+objaverse.load_objects()
 scene_ids = ['deepblend_drjohnson', 'deepblend_playroom', 'deepblend_train', 'deepblend_truck']
 
 scene_id_to_dir = {
@@ -32,7 +33,14 @@ scene_id_to_wbcg = {
 
 def get_rendering_fn(view_camera=None, **kwargs):
     return view_camera.original_image
-    
+
+def get_extrinstic_fn(view_camera=None, **kwargs):
+    raise ValueError()
+
+def get_intrinstic_fn(view_camera=None, **kwargs):
+    raise ValueError()
+
+
 class GetSceneInfo:
     def __init__(self, 
                  # scene-general
@@ -166,6 +174,8 @@ for scene_id in scene_ids:
         MetadataCatalog.get(reg_name).set(scene_id=scene_id, # scene-general
                                           white_background=wbcg,
                                           get_rendering_fn=get_rendering_fn,
+                                          get_extrinstic_fn=get_extrinstic_fn,
+                                          get_intrinstic_fn=get_intrinstic_fn,
                                           
                                           mode=reg_mode, # split-specific
                                           condense=reg_condense,

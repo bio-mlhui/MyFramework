@@ -1,2 +1,4 @@
-from . import model
-from . import video_4dgs
+from . import representation
+
+from . import multiview_3D
+from . import singleview_3D

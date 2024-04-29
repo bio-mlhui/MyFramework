@@ -9,6 +9,9 @@
 2. 
 
 zero-1-to-3
+
+Point-E
+
 Make-It-3D
 
 基于学习的single image到3D

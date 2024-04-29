@@ -4,6 +4,9 @@ import shutil
 from PIL import Image
 import torchvision
 from data_schedule.render.scene_utils.image_utils import psnr as compute_psnr
+import logging
+
+
 _render_metric_entrypoints = {}
 
 def register_render_metric(fn):
@@ -42,6 +45,8 @@ def web(view_pred, output_dir,
     rendering = view_pred['rendering']  # 0-1, float # 3 h w
     torchvision.utils.save_image(rendering, os.path.join(save_dir, f'{view_id:05d}.png'))
     return {}
+
+
 
 
 
