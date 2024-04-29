@@ -29,10 +29,33 @@ class Scene_Meta:
         view_cameras: 当前scene的多个视角
 
         rendering: 这个场景的这个视角的渲染的图像
+        
+
+        condense: 如果condense=False的话, 每个sample就是一个view; 如果condense=True的话, 每个sample就是scene
+        get_rendering_fn: 根据(scene_id,  view_camera, scene_text, scene_video_id, ) 获得对应的rendering; 都可以是none, 只要满足一种方式就行
+        get_camera_fn(scene_id, view_id)
+
         meta_idx, visualize
         """
 
-class Scene_Mapper:
+class Multiview3D_Optimize_Mapper:
+    """  
+    mapper: (view,rendering) -> view,rendering
+        'scene_dict':
+            scene_id
+            metalog_name
+
+        'view_dict':
+            view_camera
+
+        'rendering_dict':
+            rendering: image, 0-1,float
+
+    contrastive mapper: 对于condense数据集
+    """
+
+
+class SingleView_3D_Mapper:
     """
     condense: 如果condense=False的话, 每个sample就是一个view; 如果condense=True的话, 每个sample就是(scene_text/scene_video, list[view, rendering])
     get_rendering_fn: 根据(scene_id,  view_camera, scene_text, scene_video_id, ) 获得对应的rendering; 都可以是none, 只要满足一种方式就行
@@ -41,25 +64,38 @@ class Scene_Mapper:
     mapper: (view,rendering) -> view,rendering
         'scene_dict':
             scene_id
-            scene_text
-            scene_video
             metalog_name
 
-        'view_dict':
-            view_camera
+        'inviews_dict':
+            view_cameras
+            renderings:
 
-        'rendering_dict':
-            rendering: image, 0-1,float
-         meta_idx, visualize
-    condense_mapper: scene -> scene
-        'scene_dict': {
-        }
-        views_dict: {
-        }
-        renderings_dict:{
-    }
-    contrastive mapper: 对于condense数据集
+        'outviews_dict':
+            view_cameras:
+            renderings:
+    """  
+
+class Text_3D_Mapper:
     """
+    condense: 如果condense=False的话, 每个sample就是一个view; 如果condense=True的话, 每个sample就是(scene_text/scene_video, list[view, rendering])
+    get_rendering_fn: 根据(scene_id,  view_camera, scene_text, scene_video_id, ) 获得对应的rendering; 都可以是none, 只要满足一种方式就行
+    
+    
+    mapper: (view,rendering) -> view,rendering
+        'scene_dict':
+            scene_id:
+            scene_text:
+            metalog_name:
+
+        'text_dict':
+            text
+
+        'outview_dict':
+            view_cameras:
+            renderings:
+    """  
+
+ 
 
 class Scene_Model:
     """

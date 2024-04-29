@@ -6,7 +6,7 @@ import logging
 from data_schedule.render.scene_utils.dataset_readers import sceneLoadTypeCallbacks
 from functools import partial
 from detectron2.data import DatasetCatalog, MetadataCatalog
-from data_schedule.render.apis import Scene_Meta, Scene_Mapper
+from data_schedule.render.apis import Scene_Meta
 from data_schedule.render.scene_utils.camera_utils import camera_to_JSON, cameraList_from_camInfos
 import random
 import objaverse
@@ -34,10 +34,7 @@ scene_id_to_wbcg = {
 def get_rendering_fn(view_camera=None, **kwargs):
     return view_camera.original_image
 
-def get_extrinstic_fn(view_camera=None, **kwargs):
-    raise ValueError()
-
-def get_intrinstic_fn(view_camera=None, **kwargs):
+def get_camera_fn(view_camera=None, **kwargs):
     raise ValueError()
 
 

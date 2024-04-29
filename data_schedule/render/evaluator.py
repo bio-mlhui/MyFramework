@@ -199,7 +199,7 @@ class Image3D_Optimize_Evaluator:
         # 设置成worker>0会造成mem leak, https://github.com/pytorch/pytorch/issues/92134
         for batch_dict in tqdm(self.dataset_loader):
             # batch_size就是1
-            from data_schedule.render.apis import Scene_Mapper
+            from data_schedule.render.apis import Multiview3D_Optimize_Mapper
             scene_id = batch_dict['scene_dict']['scene_id'] # list[str]
             view_camera_uid = batch_dict['view_dict']['view_camera'].uid
             visualize_path = self.visualize_path(meta_idxs=[batch_dict['meta_idx']],

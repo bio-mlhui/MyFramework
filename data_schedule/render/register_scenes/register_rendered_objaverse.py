@@ -28,20 +28,9 @@ class Camera:
         self.height = height
         self.width = width
         self.radius = radius
-
-        
-        # default camera intrinsics
-        self.tan_half_fov = np.tan(0.5 * np.deg2rad(fovY))
-        self.proj_matrix = torch.zeros(4, 4, dtype=torch.float32)
-        self.proj_matrix[0, 0] = 1 / self.tan_half_fov
-        self.proj_matrix[1, 1] = 1 / self.tan_half_fov
-        self.proj_matrix[2, 2] = (zfar + znear) / (zfar - znear)
-        self.proj_matrix[3, 2] = - (zfar * znear) / (zfar - znear)
-        self.proj_matrix[2, 3] = 1
-
-        # extrinstic
         self.c2w = c2w
-
+        
+        
 
 def get_rendering_fn(scene_path=None,  scene_id=None, view_id=None, return_alpha=True, **kwargs):
     image_path = os.path.join(scene_path, scene_id, 'rgb', f'{view_id:03d}.png')
@@ -57,9 +46,7 @@ def get_rendering_fn(scene_path=None,  scene_id=None, view_id=None, return_alpha
     else: 
         return image
 
-def get_camera_fn(scene_path=None,  
-                  scene_id=None, 
-                  view_id=None, 
+def get_camera_fn(scene_path=None,  scene_id=None, view_id=None, 
                   camera_zfar=None,
                   camera_znear=None,
                   camera_fovY=None,
@@ -83,7 +70,7 @@ def get_camera_fn(scene_path=None,
 
 
 # 已经渲染的objaverse的meta,
-def original_objaverse_meta(ov_root, 
+def rendered_objaverse_meta(ov_root, 
                             filtered_version='kiuiv1',
                             register_name=None):
 
@@ -98,31 +85,49 @@ def original_objaverse_meta(ov_root,
     Scene_Meta
     metas = []
     for idx, scene_uid in tqdm(enumerate(scene_files)):
+        view_ids = os.listdir(os.path.join(scene_uid, 'rgb'))
+        view_ids = [int(haosen[:-4]) for haosen in view_ids]
+        for vid in view_ids:
+            assert os.path.join(scene_uid, 'pose', f'{vid:03d}.txt')
+            assert os.path.join(scene_uid, 'rgb', f'{vid:03d}.png')
         metas.append({
             'scene_id': scene_uid,
             'metalog_name': register_name,
+            'view_cameras': view_ids,  # list[object], get_camera_fn(object) -> camera
             'meta_idx': idx
         })
     logging.debug(f'{register_name} Total metas: [{len(metas)}]')
     return metas
 
-
-
 dataset_root = os.path.join(os.getenv('DATASET_PATH'), 'oxl')
 
-DatasetCatalog.register('objaverse_kiuiv1', partial(original_objaverse_meta,
+# renderv1: zero123的渲染
+DatasetCatalog.register('objaverse_renderv1_kiuiv1', partial(rendered_objaverse_meta,
                                                             ov_root=os.path.join(dataset_root, 'renderv1'),
                                                             filtered_version='kiuiv1',
-                                                            register_name='rendred_objaverse_kiuiv1')) 
+                                                            register_name='rendred_objaverse_kiuiv1'))
 
-# view是由mapper产生的
+# 渲染时候的相机参数:
+with open(os.path.join(dataset_root, 'renderv1', 'render_config.json'), 'r') as f:
+    render_config = json.load(f)
+    camera_zfar=render_config['camera_zfar']
+    camera_znear=render_config['camera_znear']
+    camera_fovY=render_config['camera_fovY']
+    camera_height=render_config['camera_height']
+    camera_width=render_config['camera_width']
+    camera_radius=render_config['camera_radius']  
 
-MetadataCatalog.get('objaverse_kiuiv1').set(white_background=False,
+MetadataCatalog.get('objaverse_renderv1_kiuiv1').set(white_background=False,
                                                     get_rendering_fn=partial(get_rendering_fn,
                                                                              scene_path=dataset_root,
                                                                              return_alpha=True),
                                                     get_camera_fn=partial(get_camera_fn,
-                                                                          scene_path=dataset_root,), 
+                                                                          scene_path=dataset_root,
+                                                                            camera_zfar=camera_zfar,
+                                                                            camera_znear=camera_znear,
+                                                                            camera_fovY=camera_fovY,
+                                                                            camera_height=camera_height,
+                                                                            camera_width=camera_width,
+                                                                            camera_radius=camera_radius), 
                                                     visualize_meta_idxs=[])
-
 

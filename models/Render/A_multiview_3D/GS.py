@@ -45,7 +45,7 @@ class Image_3DGS_OptimizeBased(GaussianModel):
         self.gaussians.restore(ckpt_dict, configs)
     
     def __call__(self, batch_dict):
-        from data_schedule.render.apis import Scene_Mapper
+        from data_schedule.render.apis import Multiview3D_Optimize_Mapper
         scene_meta = MetadataCatalog.get(batch_dict['scene_dict']['metalog_name'])
         wbcg = scene_meta.get('white_background')
         cameras_extent = scene_meta.get('cameras_extent')

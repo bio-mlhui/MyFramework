@@ -49,7 +49,7 @@ class Video_4DGS_Optimize_AuxMapper:
         return batch_dict
     
 
-from data_schedule.render.apis import Scene_Meta, Scene_Mapper
+from data_schedule.render.apis import Scene_Meta, Multiview3D_Optimize_Mapper
 # 3D视角, 3Dimage;
 class Image_3DGS_Optimize_AuxMapper:
     def __init__(self, aux_configs):
@@ -67,7 +67,7 @@ class Image_3DGS_Optimize_AuxMapper:
         self.rendering_auxes = [MODELITY_INPUT_MAPPER_REGISTRY.get(config['name'])(config) for config in rendering_auxes]
 
     def mapper(self, data_dict, mode,):      
-        Scene_Mapper     
+        Multiview3D_Optimize_Mapper     
         data_dict['meta_idxs'] = [data_dict['meta_idx']]
         data_dict['visualize'] = [data_dict['visualize']]
         return data_dict
