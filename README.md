@@ -31,9 +31,9 @@ This codebase includes implementations of the following papers:
 
 ### My presentations
 
-1. Final Project of 2022 Fall IOT5501 Convex Optimization (Neural Tangent Kernel) [Report](./readme/report-AI-Huihui Xu-50003870.pdf)  [Presentation](./readme/slides-AI-Huihui Xu-50003870.png) 
+1. Final Project of 2022 Fall IOT5501 Convex Optimization (Neural Tangent Kernel) **[Report](./readme/report-AI-Huihui Xu-50003870.pdf)**  **[Presentation](./readme/slides-AI-Huihui Xu-50003870.png)** 
 
-2. Final Presentation of 2023 Spring ROAS6000G Medical Computer Vision (Using Diffusion for Ambiguous Medical Segmentation) [Presentation] (./readme/ROAS6000G_Presentation.pdf) 
+2. Final Presentation of 2023 Spring ROAS6000G Medical Computer Vision (Using Diffusion for Ambiguous Medical Segmentation) **[Presentation] (./readme/ROAS6000G_Presentation.pdf)** 
 
-3. Self Presentation of 2024 Spring ROAS6800E (Introduction of Gaussian Splatting) [Presentation]
+3. Self Presentation of 2024 Spring ROAS6800E (Introduction of Gaussian Splatting) **[Presentation](./readme/haosen_gs.pdf)**
 
