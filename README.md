@@ -1,18 +1,13 @@
-## Task-Agnostic Coding Framework Overview
+## Self-Designed Task-Agnostic Coding Framework
 
 This is my task-agnostic coding framework. It currently supports various functionalities including:
 
 - **Referring Video/Image Segmentation (RIS/RVOS)**
 - **Image/Video Instance/Object Segmentation (VIS/VOS)**
+- **Multi-View to 3D (Optimized-Based, ongoing)**
+- **Several-View to 3D (Learning-Based, ongoing)**
 
-### Ongoing Developments
-
-I am now working on incorporating 3D modalities into the framework:
-
-- **Novel-View Synthesis (Images to 3D)**
-- **Dynamic Novel-View Synthesis (Video to 4D)**
-
-### Implemented Papers/Tasks
+## Implemented Papers/Tasks
 
 This codebase includes implementations of the following papers:
 
@@ -28,12 +23,18 @@ This codebase includes implementations of the following papers:
 
 3. I've implemented the **[Deformable Selective Scan](./models/encoder/ops/modules/deform_selective_scan_mamba_scan.py)**, and achieved SOTA(IoU=65.8, BER=7.88) on the **Video Shadow Detection(VSD)** task, which is higher thatn CVPR2023 SOTA SCOTCH_AND_SODA. But I plan to first work on the 3D neural rendering task.
 
-
-### My presentations
+## My presentations
 
 1. Final Project of 2022 Fall IOT5501 Convex Optimization (Neural Tangent Kernel) **[Report](./readme/ntk_report.pdf)**  **[Presentation](./readme/ntk_pre.pdf)** 
 
 2. Final Presentation of 2023 Spring ROAS6000G Medical Computer Vision (Using Diffusion for Ambiguous Medical Segmentation) **[Presentation](./readme/ROAS6000G_Presentation.pdf)** 
 
 3. Self Presentation of 2024 Spring ROAS6800E (Introduction of Gaussian Splatting) **[Presentation](./readme/haosen_gs.pdf)**
+
+## My transcripts & certificates
+1. SCUT Transcript
+2. SCUT Certificate
+3. Meriterious Winner
+4. First Prize
+
 
