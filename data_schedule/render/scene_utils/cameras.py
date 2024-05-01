@@ -68,4 +68,23 @@ class MiniCam:
         self.full_proj_transform = full_proj_transform
         view_inv = torch.inverse(self.world_view_transform)
         self.camera_center = view_inv[3][:3]
+    
+
+class MiniMiniCam:
+    def __init__(self, zfar, znear, fovY, height, width, radius, c2w):
+        self.zfar = zfar
+        self.znear = znear
+        self.fovY = fovY
+        self.height = height
+        self.width = width
+        self.radius = radius
+        
+        self.tan_half_fov = np.tan(0.5 * np.deg2rad(fovY))
+        self.proj_matrix = torch.zeros(4, 4, dtype=torch.float32)
+        self.proj_matrix[0, 0] = 1 / self.tan_half_fov
+        self.proj_matrix[1, 1] = 1 / self.tan_half_fov
+        self.proj_matrix[2, 2] = (zfar + znear) / (zfar - znear)
+        self.proj_matrix[3, 2] = - (zfar * znear) / (zfar - znear)
+        self.proj_matrix[2, 3] = 1   
+        self.c2w = c2w  
 

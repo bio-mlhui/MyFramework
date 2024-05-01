@@ -67,12 +67,17 @@ class SingleView_3D_Mapper:
             metalog_name
 
         'inviews_dict':
-            view_cameras
-            renderings:
+            intrin: list[Intrin obj] B V / Intrin obj (所有相机的内参都相同);
+            extrin: Extrin obj, B V (同一个)
+            rendering_rgbs: B V 3 H W
+            rendering_alphas: B V H W
 
         'outviews_dict':
-            view_cameras:
-            renderings:
+            intrin: list[Intrin obj] B V / Intrin obj (所有相机的内参都相同);
+            extrin: Extrin obj, B V (同一个)
+            rendering_rgbs: B V 3 H W
+            rendering_alphas: B V H W
+
     """  
 
 class Text_3D_Mapper:
