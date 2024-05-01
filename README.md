@@ -35,7 +35,7 @@ This codebase includes implementations of the following papers:
 
 ## Others
 1. **[TCYB的第一次提交 IEEE TCYB 2022 submission](./readme/tcyb.pdf)**
-2. **[SCUT Transcript](./readme/transcript.pdf)**; **[SCUT Certificate](./readme/certificate.jpg)**(I was born on 11/1999)
+2. **[SCUT Transcript](./readme/transcript.pdf)**
 3. **[美赛M](./readme/meri2.pdf)**, **[金融建模一等奖](./readme/first_math.pdf)**, 
 
 ## All files are real.
