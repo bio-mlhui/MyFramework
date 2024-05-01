@@ -4,8 +4,8 @@ This is my task-agnostic coding framework. It currently supports various functio
 
 - **Referring Video/Image Segmentation (RIS/RVOS)**
 - **Image/Video Instance/Object Segmentation (VIS/VOS)**
-- **Multi-View to 3D (Optimized-Based, ongoing)**
-- **Several-View to 3D (Learning-Based, ongoing)**
+- **Optimized-Based Multi-View to 3D (ongoing)**
+- **Learning-Based Multi-View to 3D (ongoing)**
 
 ## Implemented Papers/Tasks
 
