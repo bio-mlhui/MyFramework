@@ -34,10 +34,9 @@ This codebase includes implementations of the following papers:
 4. HPC usage (During preparing CVPR2024, I self-learned slurm to use HKUSTGZ A800 GPUS. I was also the HPC tester of LLM Training.) **[File1](./readme/hpc.pdf)** **[File2](./readme/hpc_v2.pdf)**
 
 ## Others
-1. **[SCUT Transcript](./readme/haosen_gs.pdf)** 
-2. **[SCUT Certificate](./readme/haosen_gs.pdf)**
-3. **[美赛M](./readme/haosen_gs.pdf)**
-4. **[IEEE TCYB 2022 submission](./readme/haosen_gs.pdf)**
+1. **[TCYB的第一次提交 IEEE TCYB 2022 submission](./readme/tcyb.pdf)**
+2. **[SCUT Transcript](./readme/transcript.pdf)**; **[SCUT Certificate](./readme/certificate.jpg)**(I was born on 11/1999)
+3. **[美赛M](./readme/meri.pdf)**  
 
 ## All files are real.
 
