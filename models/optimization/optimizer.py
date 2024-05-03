@@ -128,8 +128,9 @@ def get_optimizer(params, configs):
             params, base_lr, momentum=configs['optim']['momentum'], weight_decay=weight_decay, nesterov =configs['optim']['nesterov']
         )
     elif optimizer_type == "AdamW":
+        betas = configs['optim']['betas'] if 'betas' in configs['optim'] else (0.9, 0.999)
         optimizer = maybe_add_full_model_gradient_clipping(torch.optim.AdamW, configs)(
-            params, base_lr, weight_decay=weight_decay,
+            params, base_lr, weight_decay=weight_decay, betas=betas
         )
     # elif optimizer_type == 'lion':
     #     from lion_pytorch import Lion

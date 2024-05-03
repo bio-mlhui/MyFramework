@@ -21,7 +21,7 @@ IMAGENET_DEFAULT_STD = (0.229, 0.224, 0.225)
 
 class Camera:
     def __init__(self, zfar, znear, fovY, height, width, radius, c2w):
-        # 这是某次渲染的时候的相机参数, 固定不变
+        # 这是某次渲染的时候的相机内参, 固定不变
         self.zfar = zfar
         self.znear = znear
         self.fovY = fovY
@@ -82,14 +82,18 @@ def get_camera_fn(scene_path=None,
                   c2w=c2w)
 
 
-# 已经渲染的objaverse的meta,
 def original_objaverse_meta(ov_root, 
-                            filtered_version='kiuiv1',
+                            subset_version='kiuiv1',
                             register_name=None):
+    if subset_version == 'kiuiv1':
+        pass
+    else:
+        raise ValueError()
 
+    
     scene_files = []
     if filtered_version == 'kiuiv1':
-        with open(os.path.join(ov_root, 'lrm/kiuisobj_v1.txt'), 'r') as f:
+        with open(os.path.join(ov_root, 'kiuisobj_v1.txt'), 'r') as f:
             for line in f.readlines():
                 scene_files.append(line.strip())
     else:
@@ -101,28 +105,31 @@ def original_objaverse_meta(ov_root,
         metas.append({
             'scene_id': scene_uid,
             'metalog_name': register_name,
-            'meta_idx': idx
+            'meta_idx': len(metas)
         })
     logging.debug(f'{register_name} Total metas: [{len(metas)}]')
     return metas
 
 
+# root
+    # original
+    # zero123_rendered
+    # lgm_rendered
+    # kiuiv1.txt
+dataset_root = os.path.join(os.getenv('DATASET_PATH'), 'objaverse')
 
-dataset_root = os.path.join(os.getenv('DATASET_PATH'), 'oxl')
+DatasetCatalog.register('objaverse_original_kiuiv1', partial(original_objaverse_meta,
+                                                             ov_root=dataset_root,
+                                                             filtered_version='kiuiv1',
+                                                             register_name='objaverse_original_kiuiv1')) 
 
-DatasetCatalog.register('objaverse_kiuiv1', partial(original_objaverse_meta,
-                                                            ov_root=os.path.join(dataset_root, 'renderv1'),
-                                                            filtered_version='kiuiv1',
-                                                            register_name='rendred_objaverse_kiuiv1')) 
-
-# view是由mapper产生的
-
-MetadataCatalog.get('objaverse_kiuiv1').set(white_background=False,
+MetadataCatalog.get('objaverse_original_kiuiv1').set(white_background=False,
                                                     get_rendering_fn=partial(get_rendering_fn,
-                                                                             scene_path=dataset_root,
+                                                                             scene_path=os.path.join(dataset_root, 'original'),
                                                                              return_alpha=True),
                                                     get_camera_fn=partial(get_camera_fn,
-                                                                          scene_path=dataset_root,), 
+                                                                          scene_path=dataset_root,
+                                                                          only_extrinsic=True,), 
                                                     visualize_meta_idxs=[])
 
 

@@ -16,18 +16,21 @@ from data_schedule.render.scene_utils.sh_utils import eval_sh
 import numpy as np
 import kiui
 
-class GaussianRender:
+class GaussianRender_SameIntrin:
+    """
+    假设h=w=output_size
+    每次调用render 内参不变
+    """
     def __init__(self, configs):
         # 相机的内参
         self.configs = configs
-
-        self.camera_tan_half_fov = configs['camera']['tan_half_fov']
+        self.camera_tan_half_fov = np.tan(0.5 * np.deg2rad(configs['camera']['fovy']))
         self.camera_zfar = configs['camera']['zfar']
         self.camera_znear = configs['camera']['znear']
-        self.camera_height = configs['camera']['output_size']
-        self.camera_width = configs['camera']['outptu_width']
 
-        wbcg = configs.pop('wbcg', True)
+        self.camera_height = configs['output_size']
+        self.camera_width = configs['output_size']
+        wbcg = configs['white_background']
         self.bg_color = torch.tensor([1, 1, 1]).float().cuda() if wbcg else torch.tensor([0, 0, 0]).float().cuda()
     
     def render(self, gaussians, cam_view, cam_view_proj, cam_pos, bg_color=None, scale_modifier=1):

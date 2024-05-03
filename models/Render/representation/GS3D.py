@@ -20,7 +20,7 @@ from data_schedule.render.scene_utils.sh_utils import RGB2SH
 from simple_knn._C import distCUDA2
 from data_schedule.render.scene_utils.graphics_utils import BasicPointCloud
 from data_schedule.render.scene_utils.general_utils import strip_symmetric, build_scaling_rotation
-from models.Render.model.GSTrainer_Model import Trainer_GSModel
+from models.Render.representation.GSTrainer_Model import Trainer_GSModel
 
 # 假设
 #   只有一张卡

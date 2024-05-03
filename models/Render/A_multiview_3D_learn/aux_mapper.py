@@ -8,18 +8,12 @@ from data_schedule.render.apis import Scene_Meta, SingleView_3D_Mapper
 
 
 class AuxMapper:
-    # inview_auxes
-    # outview_auxes
-
-    # view
-    # rendering
-
     def __init__(self, aux_configs):
-        view_auxes = aux_configs['inview_auxes']
+        view_auxes = aux_configs['view_auxes']
         view_auxes_names = [config['name'] for config in view_auxes]
         assert len(list(set(view_auxes_names))) == len(view_auxes_names), '每个aux的名字必须不一样'
         self.view_auxes_names = view_auxes_names
-        self.view_auxes = [MODELITY_INPUT_MAPPER_REGISTRY.get(config['name'])(config) for config in view_auxes_names]
+        self.view_auxes = [MODELITY_INPUT_MAPPER_REGISTRY.get(config['name'])(config) for config in view_auxes]
         self.view_auxes_on_inview =  [config['do_in'] for config in view_auxes]
         self.view_auxes_on_outview =  [config['do_out'] for config in view_auxes]
 
@@ -29,8 +23,8 @@ class AuxMapper:
         assert len(list(set(rendering_auxes_names))) == len(rendering_auxes_names), '每个aux的名字必须不一样'
         self.rendering_auxes_names = rendering_auxes_names
         self.rendering_auxes = [MODELITY_INPUT_MAPPER_REGISTRY.get(config['name'])(config) for config in rendering_auxes]
-        self.rendering_auxes_on_inview =  [config['do_in'] for config in view_auxes]
-        self.rendering_auxes_on_outview =  [config['do_out'] for config in view_auxes]
+        self.rendering_auxes_on_inview =  [config['do_in'] for config in rendering_auxes]
+        self.rendering_auxes_on_outview =  [config['do_out'] for config in rendering_auxes]
 
 
     def mapper(self, data_dict, mode,):      
