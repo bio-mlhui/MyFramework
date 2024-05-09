@@ -35,17 +35,18 @@ class Gaussian_Cameras:
             intrin_matrix = outviews_intrin.proj_matrix
         else:
             raise ValueError()
-        
         # opengl to colmap camera for gaussian renderer
         cam_poses[:, :3, 1:3] *= -1 # invert up & forward direction
+        
         # cameras needed by gaussian rasterizer
+        # c2w -> w2c^T
         cam_view = torch.inverse(cam_poses).transpose(1, 2) # [V, 4, 4]
         cam_view_proj = cam_view @ intrin_matrix # [V, 4, 4]
         cam_pos = - cam_poses[:, :3, 3] # [V, 3]
         views_dict['gaussian_cam'] = {
-            'cam_view': cam_view,
-            'cam_view_proj': cam_view_proj,
-            'cam_pos': cam_pos
+            'cam_view': cam_view, # w2c^T
+            'cam_view_proj': cam_view_proj, # w2c^T * proj^T
+            'cam_pos': cam_pos # camera_center
         }
         return views_dict
         

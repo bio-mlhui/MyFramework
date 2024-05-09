@@ -36,19 +36,18 @@ parser = argparse.ArgumentParser()
 parser.add_argument(
     "--object_path",
     type=str,
-    required=True,
     help="Path to the object file",
+    default='/home/xuhuihui/datasets/objaverse/original/glbs/000-003/0cd2b2538a7f4cfea2a04ec9ac89a712.glb'
 )
-parser.add_argument("--output_dir", type=str, default="~/.objaverse/hf-objaverse-v1/views_whole_sphere")
+parser.add_argument("--output_dir", type=str, default="/home/xuhuihui/datasets/objaverse/self_render_v1/")
 parser.add_argument(
     "--engine", type=str, default="CYCLES", choices=["CYCLES", "BLENDER_EEVEE"]
 )
 parser.add_argument("--scale", type=float, default=0.8)
 parser.add_argument("--num_images", type=int, default=8)
 parser.add_argument("--camera_dist", type=int, default=1.2)
-    
-argv = sys.argv[sys.argv.index("--") + 1 :]
-args = parser.parse_args(argv)
+
+args = parser.parse_args()
 
 print('===================', args.engine, '===================')
 
@@ -58,7 +57,7 @@ render = scene.render
 
 cam = scene.objects["Camera"]
 cam.location = (0, 1.2, 0)
-cam.data.lens = 35
+cam.data.lens = 24
 cam.data.sensor_width = 32
 # fov 是由焦距和image plane的宽度决定
 
@@ -253,7 +252,7 @@ def get_3x4_RT_matrix_from_blender(cam):
 
 def normalize_scene():
     bbox_min, bbox_max = scene_bbox()
-    scale = 1 / max(bbox_max - bbox_min)
+    scale = 2 / max(bbox_max - bbox_min)
     for obj in scene_root_objects():
         obj.scale = obj.scale * scale
     # Apply scale to matrix_world.

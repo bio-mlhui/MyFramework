@@ -23,7 +23,7 @@ class Naive_MultiView3D_InOut_Sampler:
                  **kwargs):
         in_size, out_size = random.choice(self.in_out_sizes)
         if self.multiview_distribute == 'sparse_both':
-            chosen_idxs = torch.randperm(len(all_cameras))[:(in_size + out_size)]
+            chosen_idxs = torch.randperm(len(all_cameras))[:(in_size + out_size)].tolist()
             if len(chosen_idxs) < (in_size + out_size):
                 chosen_idxs = chosen_idxs + [chosen_idxs[-1]] * (in_size + out_size - len(chosen_idxs))
             chosen_cameras = [all_cameras[haosen] for haosen in chosen_idxs]

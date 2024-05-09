@@ -18,6 +18,7 @@ import json
 import math
 from collections import defaultdict
 
+from PIL import Image
 
 IMAGENET_DEFAULT_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_DEFAULT_STD = (0.229, 0.224, 0.225)
@@ -26,35 +27,61 @@ from data_schedule.render.scene_utils.cameras import MiniMiniCam
 
 def get_rendering_fn(scene_path=None,  scene_id=None, view_id=None, return_alpha=True, **kwargs):
     image_path = os.path.join(scene_path, 'zero123_rendered/views_release', scene_id,  f'{view_id:03d}.png')
-    image = np.frombuffer(image_path, np.uint8)
-    image = torch.from_numpy(cv2.imdecode(image, cv2.IMREAD_UNCHANGED).astype(np.float32) / 255) # [512, 512, 4] in [0, 1]
+    image = np.asarray(Image.open(image_path).convert('RGBA')).astype(np.float32) / 255
+    image = torch.from_numpy(image) # [512, 512, 4] in [0, 1]
     image = image.permute(2, 0, 1) # [4, 512, 512]
     mask = image[3:4].squeeze(0) # [1, 512, 512]
     image = image[:3] * mask + (1 - mask) # [3, 512, 512], to white bg
-    image = image[[2,1,0]].contiguous() # bgr to rgb
+    image = image.contiguous()
     if return_alpha:
         return image, mask
     else: 
         return image
 
+
 def get_camera_fn(scene_path=None,  
                   scene_id=None, 
                   view_id=None, 
-                  camera_radius=None,
-                  only_extrinsic=False,
+                  only_c2w=True,
+                  world_format='opengl',
+                  camera_format='opengl',
                   **kwargs):
-    camera_path = os.path.join(scene_path, 'zero123_rendered/views_release', scene_id, f'{view_id:03d}.npy')
-    pose = np.load(camera_path)
-    pose = np.concatenate([pose, np.array([[0, 0, 0, 1]])], axis=0) # [4, 4]
-    c2w = torch.tensor(pose).float().reshape(4, 4)
-    # TODO: you may have a different camera system
-    # blender world + opencv cam --> opengl world & cam
-    c2w[1] *= -1
-    c2w[[1, 2]] = c2w[[2, 1]]
-    c2w[:3, 1:3] *= -1 # invert up and forward direction
-    # scale up radius to fully use the [-1, 1]^3 space!
-    c2w[:3, 3] *= camera_radius / 1.5 # 1.5 is the default scale
-    assert only_extrinsic
+    """
+    return proj/c2w ;
+    """
+    assert only_c2w
+    w2c = os.path.join(scene_path, 'zero123_rendered/views_release', scene_id, f'{view_id:03d}.npy')
+    w2c = np.load(w2c)  # blender camera
+    w2c = np.concatenate([w2c, np.array([[0, 0, 0, 1]])], axis=0) # [4, 4]
+    w2c = torch.tensor(w2c).float().reshape(4, 4)
+
+    c2w = torch.inverse(w2c)
+    # blender world + camera
+    # [[Right_x, Up_x, Forward_x, Position_x],
+    #  [Right_y, Up_y, Forward_y, Position_y],
+    #  [Right_z, Up_z, Forward_z, Position_z],
+    #  [0,       0,    0,         1         ]]
+
+    if world_format == 'opengl':
+        c2w[1] *= -1  # reverse y
+        c2w[[1, 2]] = c2w[[2, 1]] # switch y and z
+    elif world_format == 'colmap' or world_format == 'opencv':
+        c2w[1] *= -1  # reverse y
+        c2w[[1, 2]] = c2w[[2, 1]] # switch y and z
+        c2w[[1, 2]] *= -1 # reverse y and z
+    elif world_format == 'blender':
+        pass
+    elif world_format == 'unity' or world_format == 'directx':
+        c2w[[1, 2]] = c2w[[2, 1]] # switch y and z
+    else:
+        raise ValueError()
+
+    if camera_format == 'opengl' or camera_format == 'blender':
+        pass
+    elif camera_format == 'colmap' or camera_format == 'opencv':
+        c2w[:, 1:3] *= -1 # reverse up and forward
+    else:
+        raise ValueError()
     return c2w
 
 
@@ -80,8 +107,8 @@ def zero123_rendered_objaverse_meta(ov_root,
         raise ValueError()
 
     camera_intrin = MiniMiniCam(
-        zfar=2.5,
-        znear=0.5,
+        zfar=100,
+        znear=0.01,
         fovY=49.1,
         height=512,
         width=512,
@@ -140,7 +167,7 @@ DatasetCatalog.register('objaverse_zero123_kiuiv1', partial(zero123_rendered_obj
 
 MetadataCatalog.get('objaverse_zero123_kiuiv1').set(white_background=False,
                                                     mode='all',
-                                                    get_rendering_fn=partial(get_rendering_fn, scene_path=dataset_root, return_alpha=True),
+                                                    get_rendering_fn=partial(get_rendering_fn, scene_path=dataset_root),
                                                     get_camera_fn=partial(get_camera_fn, scene_path=dataset_root,),
                                                     visualize_meta_idxs=[])
 
@@ -149,7 +176,7 @@ DatasetCatalog.register('objaverse_zero123_kiuiv1_test', partial(zero123_rendere
 
 MetadataCatalog.get('objaverse_zero123_kiuiv1_test').set(white_background=False,
                                                     mode='all',
-                                                    get_rendering_fn=partial(get_rendering_fn, scene_path=dataset_root, return_alpha=True),
+                                                    get_rendering_fn=partial(get_rendering_fn, scene_path=dataset_root),
                                                     get_camera_fn=partial(get_camera_fn, scene_path=dataset_root,),
                                                     visualize_meta_idxs=[])
 

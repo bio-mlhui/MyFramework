@@ -117,9 +117,10 @@ class SingleView_3D_TrainMapper_BlenderSameIntrin(Render_TrainMapper):
 
         self.input_view_size = mapper_config['input_view_size']
         self.output_view_size = mapper_config['output_view_size']
-        self.get_extrinsic_fn = partial(self.get_camera_fn, 
-                                        camera_radius=self.camera.radius,
-                                        only_extrinsic=True)
+        self.get_c2w_fn = partial(self.get_camera_fn, 
+                                  only_c2w=True, world_format='opengl', camera_format='opengl')
+        
+        self.get_rendering_fn = partial(self.get_rendering_fn, return_alpha=True)
 
     def _call(self, data_dict): 
         Scene_Meta
@@ -129,22 +130,22 @@ class SingleView_3D_TrainMapper_BlenderSameIntrin(Render_TrainMapper):
         sampled_views = input_views + output_views
         num_input_views = len(input_views)
 
-        rgbs, alphas = list(zip(*[self.get_rendering_fn(haosen) for haosen in sampled_views]))
+        rgbs, alphas = list(zip(*[self.get_rendering_fn(scene_id=scene_id, view_id=haosen) for haosen in sampled_views]))
 
-        cam_poses = [self.get_extrinsic_fn(haosen) for haosen in sampled_views]
+        c2ws = [self.get_c2w_fn(scene_id=scene_id, view_id=haosen,) for haosen in sampled_views]
 
         rgbs = torch.stack(rgbs, dim=0) # [V, C, H, W]
         alphas = torch.stack(alphas, dim=0) # [V, H, W]
-        cam_poses = torch.stack(cam_poses, dim=0) # [V, 4, 4] 
+        c2ws = torch.stack(c2ws, dim=0) # [V, 4, 4] 
         
         # normalized camera feats as in paper (transform the first pose to a fixed position)
-        transform = torch.tensor([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, self.camera.radius], [0, 0, 0, 1]], dtype=torch.float32) @ torch.inverse(cam_poses[0])
-        cam_poses = transform.unsqueeze(0) @ cam_poses  # [V, 4, 4]
+        transform = torch.tensor([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, self.camera.radius], [0, 0, 0, 1]], dtype=torch.float32) @ torch.inverse(c2ws[0])
+        c2ws = transform.unsqueeze(0) @ c2ws  # [V, 4, 4]
 
         # [V_in, C, H, W]
         in_rendering_rgbs = F.interpolate(rgbs[:num_input_views].clone(), 
                                           size=(self.input_view_size, self.input_view_size), mode='bilinear', align_corners=False)
-        in_cam_poses = cam_poses[:num_input_views].clone()
+        in_cam_poses = c2ws[:num_input_views].clone()
         in_dict = {
             'rendering_rgbs': in_rendering_rgbs, # V_in C H W
             'extrin': in_cam_poses, # V_in 4 4 
@@ -166,13 +167,11 @@ class SingleView_3D_TrainMapper_BlenderSameIntrin(Render_TrainMapper):
             # 输出的views
             'outviews_dict':{
                 'intrin': self.camera,
-                'extrin': cam_poses,
+                'extrin': c2ws,
                 # resize render ground-truth images, range still in [0, 1]
-                'rendering_rgbs': F.interpolate(rgbs, 
-                                                size=(self.output_view_size, self.output_view_size), mode='bilinear', align_corners=False), 
+                'rendering_rgbs': F.interpolate(rgbs,  size=(self.output_view_size, self.output_view_size), mode='bilinear', align_corners=False), 
                                                 # [V, C, output_size, output_size],
-                'rendering_alphas': F.interpolate(alphas.unsqueeze(1), 
-                                                  size=(self.output_view_size, self.output_view_size), mode='bilinear',align_corners=False)
+                'rendering_alphas': F.interpolate(alphas.unsqueeze(1), size=(self.output_view_size, self.output_view_size), mode='bilinear',align_corners=False)
                                                 # [V, 1, output_size, output_size
             }
         }
