@@ -17,7 +17,7 @@ This codebase includes implementations of the following papers:
     - **[Main Code: Temporal Concept-Role Reasoning](./models/graph/reason_module.py)**
 
 2. **[MICCAI2024 early acceptance](./readme/LGRNet.pdf)**
-    - **Title:** "LGRNet: Local-Global Reciprocal Network for Uterine Fibroid Segmentation in Ultrasound Videos"
+    - **Title:** ["LGRNet: Local-Global Reciprocal Network for Uterine Fibroid Segmentation in Ultrasound Videos"](https://github.com/bio-mlhui/LGRNet)
     - **Authors:** Huihui Xu, [Yijun Yang (dataset contribution), Angelica Aviles-Rivero, Guang Yang, Jing Qin, Lei Zhu]
     - **[Main Code: Hilbert Selective Scan](./models/encoder/ops/modules/frame_query_ss2d.py#L576)**. This is also the implementation and main motivation of **[one of my co-authored ACMMM24 sumbimissions](./readme/mm1.pdf)** (Although I am the idea provider and implementation provider, I was positioned as the third author of this ACMMM24 paper. It should be noted that MICCAI24 ddl is before ACMMM24 ddl.)
 
