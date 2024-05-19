@@ -11,7 +11,7 @@ This is my task-agnostic universal coding framework. It currently supports tasks
 
 This codebase includes implementations of the following papers:
 
-1. **[ECCV2024 submission](./readme/EventRR.pdf)**  **[CVPR2024 reviews](./readme/screencapture-openreview-net-forum-2024-04-25-11_37_54.png)** 
+1. **[ECCV2024 submission](./readme/EventRR.pdf)**  **[CVPR2024 reviews](./readme/screencapture-openreview-net-forum-2024-04-25-11_37_54.png)**  **[ECCV2024 reviews](./readme/eccv_rebuttal.pdf)** 
     - **Title:** "EventRR: Event Referential Reasoning for Referring Video Object Segmentation"
     - **Authors:** Huihui Xu, Qiang Nie, Lei Zhu
     - **[Main Code: Temporal Concept-Role Reasoning](./models/graph/reason_module.py)**
