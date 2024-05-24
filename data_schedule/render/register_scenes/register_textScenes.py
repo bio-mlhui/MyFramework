@@ -17,7 +17,7 @@ from functools import partial
 import json
 import math
 from collections import defaultdict
-from data_schedule.render.scene_utils.cameras import MiniMiniCam
+from data_schedule.render.scene_utils.cameras import OrbitCamera
 from PIL import Image
 
 IMAGENET_DEFAULT_MEAN = (0.485, 0.456, 0.406)
@@ -78,14 +78,13 @@ def get_camera_fn(scene_path=None,
 
 def text_scene(text,
                register_name=None):
-    camera_intrin = MiniMiniCam(
-        zfar=100,
-        znear=0.01,
-        fovY=49.1,
-        height=512,
-        width=512,
-        radius=1.5, 
-        c2w=None 
+    camera_intrin = OrbitCamera(
+        W=512,
+        H=512,
+        r=2,
+        fovy=None,
+        near=None,
+        far=None,
     )
     MetadataCatalog.get(register_name).set(camera_intrin=camera_intrin)
     Scene_Meta
@@ -112,16 +111,28 @@ input_texts = [
     'Donald Trump is holding a puppy',
 ]
 
-for text in input_texts: # 每个text就是一个数据集, 每个数据集
+# images only
+dataset_root = os.path.join(os.getenv('DATASET_PATH'), 'TaskDataset/Text3D')
 
+for text in input_texts: # 每个text就是一个数据集, 每个数据集
     register_name = f'{text}_text23d'
+
+    maybe_image_prompt = os.path.join(dataset_root, f'{text}.png')
     DatasetCatalog.register(register_name, 
                             partial(text_scene,
                                     text=text,
                                     register_name=register_name,))
+    
 
     MetadataCatalog.get(register_name).set(white_background=False,
                                             mode='all',
+                                            text_3d={
+                                                'input_text': text,
+                                                'input_negative_text': None,
+                                                'image_prompt': maybe_image_prompt if os.path.exists(maybe_image_prompt) else None
+                                            },
+
+                                            gaussian_initialize=None,
                                             get_rendering_fn=None,
                                             get_camera_fn=get_camera_fn,
                                             visualize_meta_idxs=[])

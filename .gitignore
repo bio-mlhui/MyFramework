@@ -13,6 +13,7 @@ hostfile
 **/olds/**
 **/old/**
 **/output/**
+**/task_dataset/**
 *.pt
 *.txt
 miccai_generate_Dir

@@ -42,7 +42,7 @@ class Image_3DGS_OptimizeBased(GaussianModel):
                   ckpt_dict=None, 
                   iteration=None,
                   configs=None):
-        self.gaussians.restore(ckpt_dict, configs)
+        self.restore(ckpt_dict, configs)
     
     def __call__(self, batch_dict):
         from data_schedule.render.apis import Multiview3D_Optimize_Mapper
