@@ -23,7 +23,7 @@ def render_metric_entrypoint(render_metric_name):
     except KeyError as e:
         print(f'render_metric Name {render_metric_name} not found')
 
-
+# view_level
 @register_render_metric
 def psnr(view_pred, dataset_meta, **kwargs):
     rendering = torch.clamp(view_pred['rendering'], 0.0, 1.0).cuda()  # 0-1, float # 3 h w
@@ -46,6 +46,13 @@ def web(view_pred, output_dir,
     torchvision.utils.save_image(rendering, os.path.join(save_dir, f'{view_id:05d}.png'))
     return {}
 
+# scene_level
+@register_render_metric
+def gs_to_mesh(scene_model, output_dir, append_scene_id=False, **kwargs):
+    # get_mesh
+    #mesh = scene_model.get_mesh()
+
+    return {}
 
 
 

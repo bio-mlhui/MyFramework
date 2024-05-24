@@ -349,6 +349,122 @@ class Multiview3D_Learn_Evaluator:
         return eval_metrics
 
 
+@EVALUATOR_REGISTRY.register()
+class Text3D_Optimize_Evaluator:
+    def __init__(self,
+                 dataset_name=None,
+                 data_loader=None,
+                 configs=None,
+                 **kwargs) -> None:
+        
+        Scene_Meta
+        self.dataset_loader = data_loader
+        self.dataset_name = dataset_name
+
+        # 每个scene有多个test view
+        # view-level的metric    
+        # scene-level的metric
+        # aggregator
+        view_metrics = configs['data']['evaluate'][dataset_name]['evaluator']['view_metrics']
+        dataset_meta = MetadataCatalog.get(dataset_name)
+        self.view_metric_fns = []
+        for metric_name, metric_config in view_metrics:
+            metric_fn = render_metric_entrypoint(metric_name)
+            metric_fn = partial(metric_fn, dataset_meta=dataset_meta, **metric_config)
+            self.view_metric_fns.append(metric_fn)
+
+        scene_metrics = configs['data']['evaluate'][dataset_name]['evaluator']['scene_metrics']
+        dataset_meta = MetadataCatalog.get(dataset_name)
+        self.scene_metric_fns = []
+        for metric_name, metric_config in scene_metrics:
+            metric_fn = render_metric_entrypoint(metric_name)
+            metric_fn = partial(metric_fn, dataset_meta=dataset_meta, **metric_config)
+            self.scene_metric_fns.append(metric_fn)
+
+        # metric aggregator
+        metrics_aggregator = configs['data']['evaluate'][dataset_name]['evaluator']['metrics_aggregator']
+        self.eval_meta_keys = dataset_meta.get('eval_meta_keys') # scene_id: list[view_id]
+        self.metrics_aggregator = partial(render_metric_entrypoint(metrics_aggregator[0]),
+                                          dataset_meta=dataset_meta,
+                                          eval_meta_keys=self.eval_meta_keys,
+                                          **metrics_aggregator[1])
+
+    def visualize_path(self, meta_idxs, visualize, evaluator_path):
+        return [os.path.join(evaluator_path, f'meta_{meta_idx}') if vis else None for (meta_idx, vis) in zip(meta_idxs, visualize)]
+    
+    @torch.no_grad()
+    def __call__(self, model, output_dir):
+        # 假设: 一个scene只有一个测试sample
+
+        assert comm.is_main_process()
+        # render: dataset_1/config/eval_
+        # learing_render: dataset_1/config/eval_text1
+        #                 dataset_1/config/eval_text2
+        evaluator_path = os.path.join(output_dir, f'eval_{self.dataset_name}')
+        os.makedirs(evaluator_path, exist_ok=True)
+        metrics_by_scene_id_view_id = defaultdict(dict) # {scene_id: {view_id: {}}}}
+        for batch_dict in tqdm(self.dataset_loader):
+            from data_schedule.render.apis import Text_3D_Mapper
+            scene_id = batch_dict['scene_dict']['scene_id'][0] # list[str]
+            outview_ids = batch_dict['outviews_dict']['view_ids'][0] # list[str]
+
+            visualize_path = self.visualize_path(meta_idxs=[batch_dict['meta_idx']],
+                                                 visualize=[batch_dict['visualize']], 
+                                                 evaluator_path=os.path.join(evaluator_path, 'visualize_model'))
+            
+            batch_dict['visualize_paths'] = visualize_path
+            batch_dict = to_device(batch_dict, device=model.device)
+
+            pred_outviews = model.sample(batch_dict)['outviews_preds'][0] # V 3 H W
+
+            for view_id, view_pred in zip(outview_ids, pred_outviews):
+                view_pred = {
+                    'view_id': view_id,
+                    'scene_id': scene_id,
+                    'rendering': view_pred,
+                }
+                meta_key_metrics = {}                
+                for metric_fn in self.view_metric_fns:
+                    metric_values = metric_fn(view_pred=view_pred, output_dir=evaluator_path)
+                    for key, value in metric_values.items():
+                        assert key not in meta_key_metrics
+                        meta_key_metrics[key] = value
+
+                assert view_id not in metrics_by_scene_id_view_id[scene_id]
+                metrics_by_scene_id_view_id[scene_id][view_id] = meta_key_metrics
+
+            # scene_metrics:
+            scene_metrics = {}
+            for metric_fn in self.scene_metric_fns:
+                metric_values = metric_fn(views_pred=metrics_by_scene_id_view_id[scene_id], 
+                                          scene_model=model,
+                                          output_dir=evaluator_path)
+                for key, value in metric_values.items():
+                    assert key not in meta_key_metrics
+                    scene_metrics[key] = value
+            assert 'scene_metrics' not in metrics_by_scene_id_view_id[scene_id]
+
+            # 假设: 一个scene只有一个测试sample
+            assert set(metrics_by_scene_id_view_id[scene_id].keys()).issubset(set(self.eval_meta_keys[scene_id]))
+            assert set(self.eval_meta_keys[scene_id]).issubset(set(metrics_by_scene_id_view_id[scene_id].keys()))
+
+            metrics_by_scene_id_view_id[scene_id]['scene_metrics'] = scene_metrics
+
+        assert set(metrics_by_scene_id_view_id.keys()).issubset(set(self.eval_meta_keys.keys()))
+        assert set(self.eval_meta_keys.keys()).issubset(set(metrics_by_scene_id_view_id.keys()))
+
+        metrics_by_scene_id_view_id = comm.gather(dict(metrics_by_scene_id_view_id), dst=0)
+        eval_metrics = {}
+        if comm.is_main_process():
+            metrics_by_scene = {} # scene:view
+            for scene_id in tqdm(self.eval_meta_keys.keys(), desc='gathering different processes'):
+                scene_id_predictions = [taylor[scene_id] for taylor in metrics_by_scene_id_view_id if scene_id in taylor]
+                assert len(scene_id_predictions) == 0
+                metrics_by_scene[scene_id] = scene_id_predictions[0]
+            eval_metrics = self.metrics_aggregator(metrics_by_scene=metrics_by_scene)
+        comm.synchronize() 
+        return eval_metrics
+
 
 
 @EVALUATOR_REGISTRY.register()

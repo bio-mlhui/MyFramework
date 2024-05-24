@@ -1,5 +1,9 @@
 
 """
+一个metaset里有多个meta, 每个meta有id, 一个Meta就是一个scene, 所有任务的每个scene 必须有不同的 meta_id
+每个metaset有metaset_id, 通过metaset_id来组合train/test
+
+
 3D 模态的一般形式是scene, view, rendering, 一个scene有多个view, 每个view有对应的rendering
 
 3D scene: 一堆(view, rendering), 可以是multi-view 图片相机文件夹; 可以是一个3d 模型文件; 
@@ -19,7 +23,7 @@ mapper:
 
 class Scene_Meta:
     """
-    generalize_v1版本: video->4D, images->3D, text->3D, text->4D;         如果有其他condition 也可以加进去
+    generalize_v1版本: video->4D, images->3D, text->3D, text->4D;  如果有其他condition 也可以加进去
         scene_id: 这个场景的scene_id
         scene_text: 这个场景的text
         scene_video_id: 这个场景的video_id
@@ -95,9 +99,9 @@ class Text_3D_Mapper:
         'text_dict':
             text
 
-        'outview_dict':
-            view_cameras:
-            renderings:
+        'outviews_dict':
+            intrin: list[Intrin obj] B V / Intrin obj (所有相机的内参都相同);
+            extrin: Extrin obj, B V (同一个)
     """  
 
  

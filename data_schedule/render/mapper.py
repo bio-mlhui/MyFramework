@@ -15,7 +15,7 @@ from detectron2.data import MetadataCatalog
 from data_schedule.registry import MAPPER_REGISTRY
 from .mapper_utils import Render_TrainMapper, Render_EvalMapper
 from .render_view_sampler import RENDER_VIEWS_SAMPLER_REGISTRY
-from data_schedule.render.apis import Multiview3D_Optimize_Mapper, Scene_Meta, SingleView_3D_Mapper
+from data_schedule.render.apis import Multiview3D_Optimize_Mapper, Scene_Meta, SingleView_3D_Mapper, Text_3D_Mapper
 import torch.nn.functional as F
 from data_schedule.render.scene_utils.cameras import MiniMiniCam
 
@@ -263,6 +263,107 @@ class SingleView_3D_EvalMapper_BlenderSameIntrin(Render_EvalMapper):
             }
         }
         
+
+
+@MAPPER_REGISTRY.register()
+class Text3D_Optimize_TrainMapper_SameIntrin(Render_TrainMapper):
+    # 只有一个meta
+    # meta里只有text
+    def __init__(self,
+                 configs=None,
+                 dataset_name=None,
+                 mode=None,
+                 meta_idx_shift=None,
+                 ): 
+        if mode != 'train':
+            logging.warning('this mapper should be used on training datasets')
+        dataset_meta = MetadataCatalog.get(dataset_name)
+        mapper_config = configs['data'][mode][dataset_name]['mapper']
+        super().__init__(meta_idx_shift=meta_idx_shift,
+                         dataset_meta=dataset_meta,
+                         mapper_config=mapper_config)
+        
+        self.camera = MetadataCatalog.get(dataset_name).get('camera_intrin') # camera
+
+        self.input_view_size = mapper_config['input_view_size']
+        self.output_view_size = mapper_config['output_view_size']
+        self.get_c2w_fn = partial(self.get_camera_fn, 
+                                  only_c2w=True, world_format='opengl', camera_format='opengl')
+
+
+    def _call(self, data_dict): 
+        Scene_Meta
+        scene_id, view_cameras, metalog_name = data_dict['scene_id'], data_dict['view_cameras'], data_dict['metalog_name']
+        scene_text = data_dict['scene_text']
+
+        # 随机抽取一个view
+        c2w = None
+
+        Text_3D_Mapper
+        return {
+            'scene_dict':{
+                'scene_id': scene_id,
+                'metalog_name': metalog_name,
+                'scene_text': scene_text
+            },
+            'text_dict':{
+                'text': scene_text,
+            },
+            # 输出的views
+            'outviews_dict':{
+                'intrin': self.camera,
+                'extrin': c2w,
+            }
+        }
+                  
+
+@MAPPER_REGISTRY.register()
+class Text3D_Optimize_EvalMapper_SameIntrin(Render_EvalMapper):
+    def __init__(self,
+                 configs=None,
+                 dataset_name=None,
+                 mode=None,
+                 meta_idx_shift=None,
+                 ): 
+        if mode != 'evaluate':
+            logging.warning('this mapper should be used on training datasets')
+        dataset_meta = MetadataCatalog.get(dataset_name)
+        mapper_config = configs['data'][mode][dataset_name]['mapper']
+        super().__init__(meta_idx_shift=meta_idx_shift,
+                         dataset_meta=dataset_meta,
+                         mapper_config=mapper_config)
+        
+        self.camera = MetadataCatalog.get(dataset_name).get('camera_intrin') # camera
+        self.input_view_size = mapper_config['input_view_size']
+        self.output_view_size = mapper_config['output_view_size']
+        self.get_c2w_fn = partial(self.get_camera_fn, 
+                                  only_c2w=True, world_format='opengl', camera_format='opengl')
+
+    def _call(self, data_dict): 
+        Scene_Meta
+        scene_id, view_cameras, metalog_name = data_dict['scene_id'], data_dict['view_cameras'], data_dict['metalog_name']
+        scene_text = data_dict['scene_text']
+
+        # 4个test views
+        c2ws = [self.get_c2w_fn(haosen) for haosen in view_cameras]
+
+        Text_3D_Mapper
+        return {
+            'scene_dict':{
+                'scene_id': scene_id,
+                'metalog_name': metalog_name,
+                'scene_text': scene_text
+            },
+            'text_dict':{
+                'text': scene_text,
+            },
+            # 输出的views
+            'outviews_dict':{
+                'intrin': self.camera,
+                'extrin': c2ws,
+            }
+        }
+
 
 
 # class Text4D_Condense_TrainMapper
