@@ -1,5 +1,3 @@
-from . import stable_diffuion
-
 class Distiller2D_API:
     """
     forward:

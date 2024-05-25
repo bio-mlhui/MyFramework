@@ -282,11 +282,6 @@ class Text3D_Optimize_TrainMapper_SameIntrin(Render_TrainMapper):
         super().__init__(meta_idx_shift=meta_idx_shift,
                          dataset_meta=dataset_meta,
                          mapper_config=mapper_config)
-        
-        self.camera = MetadataCatalog.get(dataset_name).get('camera_intrin') # camera
-
-        self.input_view_size = mapper_config['input_view_size']
-        self.output_view_size = mapper_config['output_view_size']
         self.get_c2w_fn = partial(self.get_camera_fn, 
                                   only_c2w=True, world_format='opengl', camera_format='opengl')
 
@@ -295,9 +290,6 @@ class Text3D_Optimize_TrainMapper_SameIntrin(Render_TrainMapper):
         Scene_Meta
         scene_id, view_cameras, metalog_name = data_dict['scene_id'], data_dict['view_cameras'], data_dict['metalog_name']
         scene_text = data_dict['scene_text']
-
-        # 随机抽取一个view
-        c2w = None
 
         Text_3D_Mapper
         return {
@@ -311,8 +303,6 @@ class Text3D_Optimize_TrainMapper_SameIntrin(Render_TrainMapper):
             },
             # 输出的views
             'outviews_dict':{
-                'intrin': self.camera,
-                'extrin': c2w,
             }
         }
                   
@@ -333,9 +323,6 @@ class Text3D_Optimize_EvalMapper_SameIntrin(Render_EvalMapper):
                          dataset_meta=dataset_meta,
                          mapper_config=mapper_config)
         
-        self.camera = MetadataCatalog.get(dataset_name).get('camera_intrin') # camera
-        self.input_view_size = mapper_config['input_view_size']
-        self.output_view_size = mapper_config['output_view_size']
         self.get_c2w_fn = partial(self.get_camera_fn, 
                                   only_c2w=True, world_format='opengl', camera_format='opengl')
 
@@ -345,7 +332,7 @@ class Text3D_Optimize_EvalMapper_SameIntrin(Render_EvalMapper):
         scene_text = data_dict['scene_text']
 
         # 4个test views
-        c2ws = [self.get_c2w_fn(haosen) for haosen in view_cameras]
+        # c2ws = [self.get_c2w_fn(haosen) for haosen in view_cameras]
 
         Text_3D_Mapper
         return {
@@ -359,8 +346,7 @@ class Text3D_Optimize_EvalMapper_SameIntrin(Render_EvalMapper):
             },
             # 输出的views
             'outviews_dict':{
-                'intrin': self.camera,
-                'extrin': c2ws,
+                # 'extrin': c2ws,
             }
         }
 

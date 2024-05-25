@@ -13,12 +13,14 @@ def text3d_metric_aggregator(dataset_meta,
                             **kwargs):
     # {scene_id: {view_id: {key:value}}}
     eval_metrics = {}
+    scene_metrics = {key: metrics_by_scene[key].pop('scene_metrics') for key in metrics_by_scene.keys()}
     # video, frame_name
     # perframe metrics
-    metric_names = metrics_by_scene[list(eval_meta_keys.keys())[0]][eval_meta_keys[list(eval_meta_keys.keys())[0]][0]]
-    for taylor_swift in metric_names:
-        eval_metrics[taylor_swift] = torch.tensor([metrics_by_scene[video][frame][taylor_swift]  \
-                                                   for video in eval_meta_keys.keys() for frame in eval_meta_keys[video]]).mean()
+    if len(metrics_by_scene[list(eval_meta_keys.keys())[0]]) != 0:
+        metric_names = metrics_by_scene[list(eval_meta_keys.keys())[0]][eval_meta_keys[list(eval_meta_keys.keys())[0]][0]]
+        for taylor_swift in metric_names:
+            eval_metrics[taylor_swift] = torch.tensor([metrics_by_scene[video][frame][taylor_swift]  \
+                                                    for video in eval_meta_keys.keys() for frame in eval_meta_keys[video]]).mean()
     
     # print specific metrics for each scene
     # # metrics by each video

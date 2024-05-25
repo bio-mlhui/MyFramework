@@ -49,9 +49,10 @@ def web(view_pred, output_dir,
 # scene_level
 @register_render_metric
 def gs_to_mesh(scene_model, output_dir, append_scene_id=False, **kwargs):
-    # get_mesh
-    #mesh = scene_model.get_mesh()
-
+    save_dir = os.path.join(output_dir, 'mesh')
+    os.makedirs(save_dir, exist_ok=True) 
+    scene_model.save_model(mode='model', output_dir=save_dir)
+    scene_model.save_model(mode='geo+tex', output_dir=save_dir)
     return {}
 
 

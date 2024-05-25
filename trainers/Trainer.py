@@ -78,6 +78,7 @@ class Trainer:
                 batch_dict = to_device(batch_dict, self.device)
                 batch_dict['visualize_paths'] = self.visualize_path(meta_idxs=meta_idxs, 
                                                                     visualize=visualize) # visualize model训练过程
+                batch_dict['num_iterations'] = self.num_iterations
                 iteration_time = time.time()
 
                 loss_dict_unscaled, loss_weight, optimize_dict = self.model(batch_dict)   

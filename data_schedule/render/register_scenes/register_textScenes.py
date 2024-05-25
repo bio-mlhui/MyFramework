@@ -73,26 +73,15 @@ def get_camera_fn(scene_path=None,
 
 # 每个text就是一个数据集，并且只有一个meta, 是(text, views)
 
-# text-to-3D的相机内参永远不变
-
-
+# text-to-3D的相机内参永远不变, 放到模型里面
 def text_scene(text,
                register_name=None):
-    camera_intrin = OrbitCamera(
-        W=512,
-        H=512,
-        r=2,
-        fovy=None,
-        near=None,
-        far=None,
-    )
-    MetadataCatalog.get(register_name).set(camera_intrin=camera_intrin)
     Scene_Meta
     # 只有一个meta, (text, view_cameras)
     metas = []
     view_ids = list(range(4))
     eval_meta_keys = {
-        text: list(range(4))
+        f'{register_name}_0': list(range(4))
     }
     # 数据集_Scene_id
     metas.append({
@@ -109,15 +98,18 @@ def text_scene(text,
 
 input_texts = [
     'Donald Trump is holding a puppy',
+    'a tulip',
+    'a photo of an icecream',
+    'a person head'
 ]
 
 # images only
 dataset_root = os.path.join(os.getenv('DATASET_PATH'), 'TaskDataset/Text3D')
 
 for text in input_texts: # 每个text就是一个数据集, 每个数据集
-    register_name = f'{text}_text23d'
+    register_name = f"{'_'.join(text.split(' '))}_text23d"
 
-    maybe_image_prompt = os.path.join(dataset_root, f'{text}.png')
+    maybe_image_prompt = os.path.join(dataset_root, f'{text}.jpg')
     DatasetCatalog.register(register_name, 
                             partial(text_scene,
                                     text=text,
@@ -128,7 +120,7 @@ for text in input_texts: # 每个text就是一个数据集, 每个数据集
                                             mode='all',
                                             text_3d={
                                                 'input_text': text,
-                                                'input_negative_text': None,
+                                                'input_negative_text': "ugly, bad anatomy, blurry, pixelated obscure, unnatural colors, poor lighting, dull, and unclear, cropped, lowres, low quality, artifacts, duplicate, morbid, mutilated, poorly drawn face, deformed, dehydrated, bad proportions",
                                                 'image_prompt': maybe_image_prompt if os.path.exists(maybe_image_prompt) else None
                                             },
 

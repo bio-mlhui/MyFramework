@@ -405,8 +405,7 @@ class Text3D_Optimize_Evaluator:
         metrics_by_scene_id_view_id = defaultdict(dict) # {scene_id: {view_id: {}}}}
         for batch_dict in tqdm(self.dataset_loader):
             from data_schedule.render.apis import Text_3D_Mapper
-            scene_id = batch_dict['scene_dict']['scene_id'][0] # list[str]
-            outview_ids = batch_dict['outviews_dict']['view_ids'][0] # list[str]
+            scene_id = batch_dict['scene_dict']['scene_id'] # list[str]
 
             visualize_path = self.visualize_path(meta_idxs=[batch_dict['meta_idx']],
                                                  visualize=[batch_dict['visualize']], 
@@ -415,23 +414,30 @@ class Text3D_Optimize_Evaluator:
             batch_dict['visualize_paths'] = visualize_path
             batch_dict = to_device(batch_dict, device=model.device)
 
-            pred_outviews = model.sample(batch_dict)['outviews_preds'][0] # V 3 H W
+            model_pred_views = model.sample(batch_dict)
 
-            for view_id, view_pred in zip(outview_ids, pred_outviews):
-                view_pred = {
-                    'view_id': view_id,
-                    'scene_id': scene_id,
-                    'rendering': view_pred,
-                }
-                meta_key_metrics = {}                
-                for metric_fn in self.view_metric_fns:
-                    metric_values = metric_fn(view_pred=view_pred, output_dir=evaluator_path)
-                    for key, value in metric_values.items():
-                        assert key not in meta_key_metrics
-                        meta_key_metrics[key] = value
+            if model_pred_views is not None:
+                outview_ids = batch_dict['outviews_dict']['view_ids'][0] # list[str]
+                pred_outviews = model_pred_views['outviews_preds'][0] # V 3 H W
+                for view_id, view_pred in zip(outview_ids, pred_outviews):
+                    view_pred = {
+                        'view_id': view_id,
+                        'scene_id': scene_id,
+                        'rendering': view_pred,
+                    }
+                    meta_key_metrics = {}                
+                    for metric_fn in self.view_metric_fns:
+                        metric_values = metric_fn(view_pred=view_pred, output_dir=evaluator_path)
+                        for key, value in metric_values.items():
+                            assert key not in meta_key_metrics
+                            meta_key_metrics[key] = value
 
-                assert view_id not in metrics_by_scene_id_view_id[scene_id]
-                metrics_by_scene_id_view_id[scene_id][view_id] = meta_key_metrics
+                    assert view_id not in metrics_by_scene_id_view_id[scene_id]
+                    metrics_by_scene_id_view_id[scene_id][view_id] = meta_key_metrics
+
+                # 假设: 一个scene只有一个测试sample
+                assert set(metrics_by_scene_id_view_id[scene_id].keys()).issubset(set(self.eval_meta_keys[scene_id]))
+                assert set(self.eval_meta_keys[scene_id]).issubset(set(metrics_by_scene_id_view_id[scene_id].keys()))
 
             # scene_metrics:
             scene_metrics = {}
@@ -443,11 +449,6 @@ class Text3D_Optimize_Evaluator:
                     assert key not in meta_key_metrics
                     scene_metrics[key] = value
             assert 'scene_metrics' not in metrics_by_scene_id_view_id[scene_id]
-
-            # 假设: 一个scene只有一个测试sample
-            assert set(metrics_by_scene_id_view_id[scene_id].keys()).issubset(set(self.eval_meta_keys[scene_id]))
-            assert set(self.eval_meta_keys[scene_id]).issubset(set(metrics_by_scene_id_view_id[scene_id].keys()))
-
             metrics_by_scene_id_view_id[scene_id]['scene_metrics'] = scene_metrics
 
         assert set(metrics_by_scene_id_view_id.keys()).issubset(set(self.eval_meta_keys.keys()))
@@ -459,7 +460,7 @@ class Text3D_Optimize_Evaluator:
             metrics_by_scene = {} # scene:view
             for scene_id in tqdm(self.eval_meta_keys.keys(), desc='gathering different processes'):
                 scene_id_predictions = [taylor[scene_id] for taylor in metrics_by_scene_id_view_id if scene_id in taylor]
-                assert len(scene_id_predictions) == 0
+                assert len(scene_id_predictions) == 1
                 metrics_by_scene[scene_id] = scene_id_predictions[0]
             eval_metrics = self.metrics_aggregator(metrics_by_scene=metrics_by_scene)
         comm.synchronize() 
