@@ -24,7 +24,7 @@ class ImageDream(nn.Module):
         self.model_name = model_name
         self.ckpt_path = os.path.join(os.getenv('PT_PATH'), 'imagedream')
 
-        self.model = build_model(self.model_name, ckpt_path=self.ckpt_path).eval().to(self.device)
+        self.model = build_model(self.model_name, ckpt_path=None).eval().to(self.device)
         self.model.device = device
         for p in self.model.parameters():
             p.requires_grad_(False)
@@ -39,7 +39,8 @@ class ImageDream(nn.Module):
         self.embeddings = {}
 
         self.scheduler = DDIMScheduler.from_pretrained(
-            "stabilityai/stable-diffusion-2-1-base", subfolder="scheduler", torch_dtype=self.dtype
+            os.path.join(os.getenv('PT_PATH'), 'stable_diffusion21'), 
+            subfolder="scheduler", torch_dtype=self.dtype
         )
 
     @torch.no_grad()

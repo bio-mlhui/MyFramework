@@ -3,7 +3,6 @@ import argparse
 import logging
 import wandb
 import importlib
-from trainers import task_to_trainer
 from detectron2.engine import launch
 import detectron2.utils.comm as comm # deepspeed也能用
 # import deepspeed
@@ -173,7 +172,14 @@ if __name__=="__main__":
     configs['task'], configs['group'], configs['config'] = task, group, config
     configs['out_dir'] = os.path.join('./', 'output', task, group, config)
     configs['trainer_mode'] = args.trainer_mode
+    if os.getenv('CURRENT_TASK') is None:
+        current_task = configs['CURRENT_TASK']
+        os.environ['CURRENT_TASK'] = current_task
+        if current_task == 'Render':
+            os.environ['RENDER_TASK'] == configs['RENDER_TASK']
 
+    # laze import
+    from trainers import task_to_trainer
     wandb_id = f'{task}_{group}_{config}'
     if args.append_wandb_id != '':
         wandb_id = wandb_id + '_' + args.append_wandb_id

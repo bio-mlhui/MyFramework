@@ -9,7 +9,7 @@ import torch.nn.functional as F
 import sys
 sys.path.append('./')
 
-from zero123 import Zero123Pipeline
+from .zero123_copy import Zero123Pipeline
 
 
 class Zero123(nn.Module):

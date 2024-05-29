@@ -210,8 +210,7 @@ class Distill3DGS_From_2DDM(GaussianModel_meshfy):
         if self.guidance_zero123 is None and self.enable_zero123:
             from .distiller_2ddm.zero123 import Zero123
             if zero123_config['is_stable']:
-                raise ValueError()
-                self.guidance_zero123 = Zero123(self.device, model_key=os.path.join(os.getenv('PT_PATH'), 'zero123'))
+                self.guidance_zero123 = Zero123(self.device, model_key=os.path.join(os.getenv('PT_PATH'), 'zero123_stable'))
             else:
                 self.guidance_zero123 = Zero123(self.device, model_key=os.path.join(os.getenv('PT_PATH'), 'zero123'))
 
@@ -675,12 +674,13 @@ class Distill3DGS_From_2DDM_mesh:
         # load image
         logging.debug(f'[INFO] load image from {file}...')
         img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+        self.bg_remover = None
         if img.shape[-1] == 3:
             if self.bg_remover is None:
                 self.bg_remover = rembg.new_session()
             img = rembg.remove(img, session=self.bg_remover)
 
-        img = cv2.resize(img, (self.W, self.H), interpolation=cv2.INTER_AREA)
+        img = cv2.resize(img, (self.cam.W, self.cam.H), interpolation=cv2.INTER_AREA)
         img = img.astype(np.float32) / 255.0
 
         self.input_mask = img[..., 3:]
@@ -734,7 +734,7 @@ class Distill3DGS_From_2DDM_mesh:
         if self.guidance_zero123 is None and self.enable_zero123:
             from .distiller_2ddm.zero123 import Zero123
             if zero123_config['is_stable']:
-                self.guidance_zero123 = Zero123(self.device, model_key='ashawkey/stable-zero123-diffusers')
+                self.guidance_zero123 = Zero123(self.device, model_key=os.path.join(os.getenv('PT_PATH'), 'zero123_stable'))
             else:
                 self.guidance_zero123 = Zero123(self.device, model_key='ashawkey/zero123-xl-diffusers')
 

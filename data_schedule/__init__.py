@@ -8,6 +8,8 @@ elif os.getenv('CURRENT_TASK') == 'VIS':
     from . import vis
 elif os.getenv('CURRENT_TASK') in ['Render']:
     from . import render
+elif os.getenv('CURRENT_TASK') == 'PSC':
+    from . import psc
 else:
     raise ValueError()
 # 合并多个训练集成一个train set，每次eval对每个eval dataset进行测试
