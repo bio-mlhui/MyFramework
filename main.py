@@ -173,10 +173,13 @@ if __name__=="__main__":
     configs['out_dir'] = os.path.join('./', 'output', task, group, config)
     configs['trainer_mode'] = args.trainer_mode
     if os.getenv('CURRENT_TASK') is None:
-        current_task = configs['CURRENT_TASK']
+        current_task = configs.pop('CURRENT_TASK', None)
+        assert current_task is not None
         os.environ['CURRENT_TASK'] = current_task
-        if current_task == 'Render':
-            os.environ['RENDER_TASK'] == configs['RENDER_TASK']
+        task_environs = configs.pop('TASK_ENVIRONS', None) # {key, value}
+        if task_environs is not None:
+            for key, value in task_environs.items():
+                os.environ[key] = value
 
     # laze import
     from trainers import task_to_trainer

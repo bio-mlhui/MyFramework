@@ -5,6 +5,7 @@ task_to_trainer = {
     'RVOS': Trainer,
     'VIS': Trainer,
     'Render': Trainer,
+    'VIDenoise': Trainer
 }
 
 # optimizer, schedule都交给model构建

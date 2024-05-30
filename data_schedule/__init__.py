@@ -10,6 +10,8 @@ elif os.getenv('CURRENT_TASK') in ['Render']:
     from . import render
 elif os.getenv('CURRENT_TASK') == 'PSC':
     from . import psc
+elif os.getenv('CURRENT_TASK') == 'VIDenoise':
+    from . import videnoise
 else:
     raise ValueError()
 # 合并多个训练集成一个train set，每次eval对每个eval dataset进行测试
