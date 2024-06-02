@@ -6,12 +6,12 @@ if os.getenv('CURRENT_TASK') == "RVOS":
     from . import rvos
 elif os.getenv('CURRENT_TASK') == 'VIS':
     from . import vis
-elif os.getenv('CURRENT_TASK') in ['Render']:
+elif os.getenv('CURRENT_TASK') == 'RENDER':
     from . import render
 elif os.getenv('CURRENT_TASK') == 'PSC':
     from . import psc
-elif os.getenv('CURRENT_TASK') == 'VIDenoise':
-    from . import videnoise
+elif os.getenv('CURRENT_TASK') == 'VIDVID':
+    from . import vidvid
 else:
     raise ValueError()
 # 合并多个训练集成一个train set，每次eval对每个eval dataset进行测试

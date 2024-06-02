@@ -8,6 +8,7 @@
 1. 3D数据少, nips24
 2. 
 
+Point-E
 zero-1-to-3
 Make-It-3D
 

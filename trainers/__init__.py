@@ -4,8 +4,8 @@ from .Trainer import Trainer  # RVOS, RIOS, Generation
 task_to_trainer = {
     'RVOS': Trainer,
     'VIS': Trainer,
-    'Render': Trainer,
-    'VIDenoise': Trainer
+    'RENDER': Trainer,
+    'VIDVID': Trainer
 }
 
 # optimizer, schedule都交给model构建

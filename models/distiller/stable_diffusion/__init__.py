@@ -1,0 +1,1 @@
+from . import stable_diffusion
