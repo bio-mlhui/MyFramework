@@ -84,6 +84,7 @@ def single_meta(video_id, frames, ):
         {
             'video_id': video_id,
             'frames': frames,
+            'meta_idx': 0,
         }
     ]
 
@@ -103,8 +104,13 @@ for video_id in video_ids:
         'get_frames_fn': partial(get_frames, root=root,),
         'videnoise_optimize':{
             'tensor_frames': partial(to_tensor, get_frame_fn=partial(get_frames,  root=root, video_id=video_id, frames=frames),),
-            'input_text': "",
-            "negative_text": "",
+            'input_text': "Several people are walking across the road, and many cars are pulling over the road. Many tall buildings and some trees",
+            "input_negative_text": "ugly, bad anatomy, blurry, pixelated obscure, unnatural colors, poor lighting, dull, and unclear, cropped, lowres, low quality, artifacts, duplicate, morbid, mutilated, poorly drawn face, deformed, dehydrated, bad proportions",
+            'frame_interval': 3, # 只是存储的时候用到
+            'fps': 10,
+        },
+        'eval_meta_keys':{
+            video_id: frames
         }
         
     }

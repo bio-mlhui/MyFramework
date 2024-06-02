@@ -31,11 +31,11 @@ class VIDenoiseOptimize_EvalMapper(Optimize_EvalMapper):
         super().__init__(meta_idx_shift=meta_idx_shift,
                          dataset_meta=dataset_meta,
                          mapper_config=mapper_config)
-
+    VIDenoise_Meta
     def _call(self, data_dict):
         ret = {}
         ret['video_dict'] = {}
-        ret['targets'] = {}
+        ret['metas'] = data_dict
         return ret
 
 @MAPPER_REGISTRY.register()

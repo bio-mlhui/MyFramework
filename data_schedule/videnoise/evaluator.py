@@ -50,12 +50,12 @@ class VIDenoiseOptimize_Evaluator:
         evaluator_path = os.path.join(output_dir, f'eval_{self.dataset_name}')
         os.makedirs(evaluator_path, exist_ok=True)
 
-        metrics_by_video_id_frame_id = {}
+        metrics_by_video_id_frame_id = defaultdict(dict)
         assert len(self.loader) == 1, '对于optimize模型来说, video在model里'
         for batch_dict in tqdm(self.loader):
             eval_metas = batch_dict.pop('metas')
-            frame_strs = eval_metas['frames'][0] # t', list[str]
-            video_id = eval_metas['video_id'][0] # str
+            frame_strs = eval_metas['frames'] # t', list[str]
+            video_id = eval_metas['video_id'] # str
             visualize_path = self.visualize_path(meta_idxs=batch_dict['meta_idxs'], visualize=batch_dict['visualize'], 
                                                  evaluator_path=os.path.join(evaluator_path, 'visualize_model')) # 模型的可视化
             batch_dict['visualize_paths'] = visualize_path
@@ -86,9 +86,10 @@ class VIDenoiseOptimize_Evaluator:
 
             video_metrics = {}
             for metric_fn in self.video_metric_fns:
-                metric_values = metric_fn(views_pred=metrics_by_video_id_frame_id[video_id], 
-                                          video_model=model,
-                                          output_dir=evaluator_path)
+                metric_values = metric_fn(video_model=model,
+                                          output_dir=evaluator_path,
+                                          video_id=video_id,
+                                          frames=frame_strs)
                 for key, value in metric_values.items():
                     assert key not in meta_key_metrics
                     video_metrics[key] = value

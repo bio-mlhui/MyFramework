@@ -2,17 +2,18 @@ import torch
 import torch.nn as nn
 from diffusers.models import AutoencoderKL, AutoencoderKLTemporalDecoder
 from einops import rearrange
-
+import os
 from detectron2.modeling import META_ARCH_REGISTRY
 
 @META_ARCH_REGISTRY.register()
 class VideoAutoencoderKL(nn.Module):
     def __init__(self, vae_configs):
         # from_pretrained=None, micro_batch_size=None, cache_dir=None, local_files_only=False
-        from_pretrained=vae_configs['from_pretrained']
-        micro_batch_size=vae_configs['micro_batch_size']
-        cache_dir=vae_configs['cache_dir']
-        local_files_only=vae_configs['local_files_only']
+        from_pretrained=vae_configs.pop('from_pretrained', None)
+        micro_batch_size=vae_configs.pop('micro_batch_size', None)
+        cache_dir=vae_configs.pop('cache_dir', None)
+        local_files_only=vae_configs.pop('local_files_only', False)
+        from_pretrained = os.path.join(os.getenv('PT_PATH'), from_pretrained)
         super().__init__()
         self.module = AutoencoderKL.from_pretrained(
             from_pretrained, cache_dir=cache_dir, local_files_only=local_files_only

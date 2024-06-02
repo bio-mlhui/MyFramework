@@ -22,10 +22,10 @@ from opensora.models.layers.blocks import (
     get_layernorm,
     t2i_modulate,
 )
-from opensora.registry import MODELS
 from transformers import PretrainedConfig, PreTrainedModel
 from opensora.utils.ckpt_utils import load_checkpoint
 
+from detectron2.modeling import META_ARCH_REGISTRY
 
 class STDiT2Block(nn.Module):
     def __init__(
@@ -210,7 +210,6 @@ class STDiT2Config(PretrainedConfig):
         super().__init__(**kwargs)
 
 
-@MODELS.register_module()
 class STDiT2(PreTrainedModel):
 
     config_class = STDiT2Config
@@ -308,7 +307,7 @@ class STDiT2(PreTrainedModel):
             timestep (torch.Tensor): diffusion time steps; of shape [B]
             y (torch.Tensor): representation of prompts; of shape [B, 1, N_token, C]
             mask (torch.Tensor): mask for selecting prompt tokens; of shape [B, N_token]
-
+            height: b, width: b, 
         Returns:
             x (torch.Tensor): output latent representation; of shape [B, C, T, H, W]
         """
@@ -501,30 +500,22 @@ class STDiT2(PreTrainedModel):
         nn.init.constant_(self.final_layer.linear.bias, 0)
 
 
-@MODELS.register_module("STDiT2-XL/2")
-def STDiT2_XL_2(from_pretrained=None, **kwargs):
-    if from_pretrained is not None:
-        if os.path.isdir(from_pretrained) or os.path.isfile(from_pretrained):
-            # if it is a directory or a file, we load the checkpoint manually
-            config = STDiT2Config(
-                depth=28,
-                hidden_size=1152,
-                patch_size=(1, 2, 2),
-                num_heads=16, **kwargs
-            )
-            model = STDiT2(config)
-            load_checkpoint(model, from_pretrained)
-            return model
-        else:
-            # otherwise, we load the model from hugging face hub
-            return STDiT2.from_pretrained(from_pretrained)
-    else:
-        # create a new model
+@META_ARCH_REGISTRY.register()
+class STDiT2_XL_2(STDiT2):
+    def __init__(self, configs):
+        name = configs.pop('name')
+        from_pretrained = configs.pop('from_pretrained')
+        from_pretrained = os.path.join(os.getenv('PT_PATH'), from_pretrained)
         config = STDiT2Config(
             depth=28,
             hidden_size=1152,
             patch_size=(1, 2, 2),
-            num_heads=16, **kwargs
+            num_heads=16, **configs
         )
-        model = STDiT2(config)
-    return model
+        super().__init__(config)
+        pretrained_model = STDiT2.from_pretrained(from_pretrained)
+        self.load_state_dict(pretrained_model.state_dict(), strict=True)
+        del pretrained_model
+        # if from_pretrained is not None:
+        #     load_checkpoint(self, from_pretrained)
+    

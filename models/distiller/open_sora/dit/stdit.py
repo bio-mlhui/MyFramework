@@ -26,7 +26,7 @@ from opensora.models.layers.blocks import (
 )
 from opensora.registry import MODELS
 from opensora.utils.ckpt_utils import load_checkpoint
-
+import os
 
 class STDiTBlock(nn.Module):
     def __init__(
@@ -153,7 +153,6 @@ class STDiTBlock(nn.Module):
         return x
 
 
-@MODELS.register_module()
 class STDiT(nn.Module):
     def __init__(
         self,
@@ -429,10 +428,15 @@ class STDiT(nn.Module):
         nn.init.constant_(self.final_layer.linear.weight, 0)
         nn.init.constant_(self.final_layer.linear.bias, 0)
 
+from detectron2.modeling import META_ARCH_REGISTRY
 
-@MODELS.register_module("STDiT-XL/2")
-def STDiT_XL_2(from_pretrained=None, **kwargs):
-    model = STDiT(depth=28, hidden_size=1152, patch_size=(1, 2, 2), num_heads=16, **kwargs)
-    if from_pretrained is not None:
-        load_checkpoint(model, from_pretrained)
-    return model
+@META_ARCH_REGISTRY.register()
+class STDiT_XL_2(STDiT):
+    def __init__(self, configs):
+        name = configs.pop('name')
+        from_pretrained = configs.pop('from_pretrained')
+        from_pretrained = os.path.join(os.getenv('PT_PATH'), from_pretrained)
+        super().__init__(depth=28, hidden_size=1152, patch_size=(1, 2, 2), num_heads=16, **configs)
+        if from_pretrained is not None:
+            load_checkpoint(self, from_pretrained)
+

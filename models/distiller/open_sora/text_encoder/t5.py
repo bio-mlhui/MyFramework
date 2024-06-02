@@ -27,12 +27,12 @@ import re
 import ftfy
 import torch
 from transformers import AutoTokenizer, T5EncoderModel
-
+import os
 from detectron2.modeling import META_ARCH_REGISTRY
 
 
 class T5Embedder:
-    available_models = ["DeepFloyd/t5-v1_1-xxl"]
+    available_models = ["DeepFloyd_t5-v1_1-xxl"]
 
     def __init__(
         self,
@@ -100,6 +100,7 @@ class T5Embedder:
         self.hf_token = hf_token
 
         assert from_pretrained in self.available_models
+        from_pretrained = os.path.join(os.getenv('PT_PATH'), from_pretrained)
         self.tokenizer = AutoTokenizer.from_pretrained(
             from_pretrained,
             cache_dir=cache_dir,
@@ -148,7 +149,6 @@ class T5Encoder:
         shardformer=text_encoder_configs.pop('shardformer', False)
         local_files_only=text_encoder_configs.pop('local_files_only', False)
 
-
         assert from_pretrained is not None, "Please specify the path to the T5 model"
 
         self.t5 = T5Embedder(
@@ -192,6 +192,8 @@ class T5Encoder:
             p.requires_grad = False
 
     def encode(self, text):
+        assert isinstance(text, list)
+        text = [text_preprocessing(haosen) for haosen in text]
         caption_embs, emb_masks = self.t5.get_text_embeddings(text)
         caption_embs = caption_embs[:, None]
         return dict(y=caption_embs, mask=emb_masks)

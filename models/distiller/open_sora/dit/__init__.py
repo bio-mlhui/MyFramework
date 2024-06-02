@@ -1,2 +1,2 @@
-from .stdit import STDiT
-from .stdit2 import STDiT2
+from . import stdit
+from . import stdit2
