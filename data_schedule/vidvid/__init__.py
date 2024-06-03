@@ -1,4 +1,4 @@
-from . import register_videos_selfDataset
+from . import register_optimize
 from . import mapper
 from . import evaluator
 import os

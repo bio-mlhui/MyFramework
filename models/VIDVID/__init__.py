@@ -1,4 +1,5 @@
 
 
 import os
-from . import distillvideo_from_sora
+from . import generate_video
+from . import sora_denoise_video

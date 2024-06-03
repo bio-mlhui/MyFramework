@@ -63,14 +63,18 @@ class IDDPM(SpacedDiffusion):
         additional_args=None,
         mask=None,
     ):
-        n = len(prompts)
-        z = torch.cat([z, z], 0)
-        model_args = text_encoder.encode(prompts)
-        y_null = text_encoder.null(n)
-        model_args["y"] = torch.cat([model_args["y"], y_null], 0)
-        if additional_args is not None:
-            model_args.update(additional_args)
+        if text_encoder is not None:
+            n = len(prompts)
+            model_args = text_encoder.encode(prompts)
+            y_null = text_encoder.null(n)
+            model_args["y"] = torch.cat([model_args["y"], y_null], 0)
+            if additional_args is not None:
+                model_args.update(additional_args)
+        else:
+            assert 'y' in additional_args
+            model_args = additional_args
 
+        z = torch.cat([z, z], 0)
         forward = partial(forward_with_cfg, model, cfg_scale=self.cfg_scale, cfg_channel=self.cfg_channel)
         samples = self.p_sample_loop(
             forward,

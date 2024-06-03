@@ -12,12 +12,13 @@ from functools import partial
 import numpy as np
 from detectron2.modeling import META_ARCH_REGISTRY
 from detectron2.data import MetadataCatalog
+import os
 
 @META_ARCH_REGISTRY.register()
 class Sora_VideoDenoise(nn.Module):
-    def __init__(self, distiller_configs) -> None:
+    def __init__(self,  configs) -> None:
         super().__init__()
-        sora_config = distiller_configs
+        sora_config = configs['model']['distiller']
         self.vae = META_ARCH_REGISTRY.get(sora_config['vae']['name'])(sora_config['vae'])
         num_frames, image_size, fps, frame_interval = sora_config['num_frames'], sora_config['image_size'], \
             sora_config['fps'],sora_config['frame_interval']
@@ -52,42 +53,44 @@ class Sora_VideoDenoise(nn.Module):
                 'fps': fps
             }
 
-
-        # text encoder只用来获取text embedding, 获得text embedding之后就删除
-        text_encoder = META_ARCH_REGISTRY.get(sora_config['text_encoder']['name'])(sora_config['text_encoder'])
-        text_encoder_output_dim = text_encoder.output_dim
-        text_encoder_model_max_length = text_encoder.model_max_length
-
         sora_config['dit']['input_size'] = self.latent_size
         sora_config['dit']['in_channels'] = self.vae.out_channels
-        sora_config['dit']['caption_channels'] = text_encoder_output_dim
-        sora_config['dit']['model_max_length'] = text_encoder_model_max_length
+        sora_config['dit']['caption_channels'] = 4096
+        sora_config['dit']['model_max_length'] = 200
         sora_config['dit']['enable_sequence_parallelism'] = False
         self.dit =  META_ARCH_REGISTRY.get(sora_config['dit']['name'])(sora_config['dit'])
 
-        text_encoder.y_embedder = self.dit.y_embedder  # hack for classifier-free guidance
-        with torch.no_grad():
-            # 1 1 max_length 4096; 1 max_length
-            # pos_text, neg_text = distiller_configs['pos_text'], distiller_configs['neg_text']
-            pos_text = distiller_configs['pos_text']
-            pos_text_embed = text_encoder.encode([pos_text])
-            model_args['y'] = pos_text_embed['y'].to(torch.bfloat16)
-            model_args['mask'] = pos_text_embed['mask']
-            y_null = text_encoder.null(1).bfloat16().to(self.device) # classifier-free guidance
-            model_args["y"] = torch.cat([model_args["y"], y_null], 0)
-            del text_encoder
-            torch.cuda.empty_cache()
         self.model_args = model_args
         self.vae.to(self.device, torch.bfloat16).eval()
         self.dit.to(self.device, torch.bfloat16).eval()
 
         self.scheduler = META_ARCH_REGISTRY.get(sora_config['scheduler']['name'])(sora_config['scheduler'])
         
-        self.t_range = sora_config['optim']['t_range']
+        self.t_range = configs['optim']['t_range']
         self.num_train_timesteps = self.scheduler.num_timesteps
         self.min_step = int(self.num_train_timesteps * self.t_range[0])
         self.max_step = int(self.num_train_timesteps * self.t_range[1])
-
+    
+    def get_text_embed(self, prompt_key, pos_text, neg_text, out_dir, sora_config):
+        text_embed_file = os.path.join(out_dir, f'prompt_{prompt_key}.pth')
+        if os.path.exists(text_embed_file):
+            text_embed = torch.load(text_embed_file)
+            self.model_args['y'] = text_embed['y'].to(torch.bfloat16).to(self.device)
+            self.model_args['mask'] = text_embed['mask'].to(self.device)
+        else:
+            with torch.no_grad():
+                text_encoder = META_ARCH_REGISTRY.get(sora_config['text_encoder']['name'])(sora_config['text_encoder'])
+                text_encoder.y_embedder = self.dit.y_embedder  # hack for classifier-free guidance
+                pos_text_embed = text_encoder.encode([pos_text])
+                y = pos_text_embed['y']
+                self.model_args['mask'] = pos_text_embed['mask']
+                y_null = text_encoder.null(1).to(self.device) # classifier-free guidance
+                y = torch.cat([y, y_null], 0)
+                del text_encoder
+                torch.cuda.empty_cache()
+                torch.save({'y': y, 'mask': self.model_args['mask']}, text_embed_file)
+                self.model_args['y'] = y.bfloat16()
+                
     @property
     def device(self,):
         return torch.device('cuda') # current device

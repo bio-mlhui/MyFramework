@@ -4,37 +4,27 @@ import torch
 from torch.nn import functional as F
 from models.registry import register_model
 from models.registry import MODELITY_INPUT_MAPPER_REGISTRY
-from data_schedule.render.apis import Text_3D_Mapper
 
-
-class AuxMapper:
-    def __init__(self, aux_configs):
+class Optimize_AuxMapper:
+    def __init__(self, **kwargs):
         pass
-        # 假设:
-        # optimize的batch_size是1
-
-    def mapper(self, data_dict, mode,):      
-        Text_3D_Mapper     
+    
+    def mapper(self, data_dict, mode,):   
         data_dict['meta_idxs'] = [data_dict['meta_idx']]
         data_dict['visualize'] = [data_dict['visualize']]
         return data_dict
 
     def collate(self, batch_dict, mode):
-        # 因为batch_size就是1
         return batch_dict[0]
 
 
-
-
-
 import torch
-
 from torch.nn import functional as F
-from models.registry import register_model
 from models.registry import MODELITY_INPUT_MAPPER_REGISTRY
 from data_schedule.render.apis import Scene_Meta, Multiview3D_Optimize_Mapper
-# 3D视角, 3Dimage;
-class Image_3DGS_Optimize_AuxMapper:
+
+
+class TextMultiImage_Learn_AuxMapper:
     def __init__(self, aux_configs):
         view_auxes = aux_configs['3dview_auxes']
         view_auxes_names = [config['name'] for config in view_auxes]
@@ -58,3 +48,4 @@ class Image_3DGS_Optimize_AuxMapper:
     def collate(self, batch_dict, mode):
         # 因为batch_size就是1
         return batch_dict[0]
+

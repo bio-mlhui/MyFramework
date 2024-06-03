@@ -1,5 +1,9 @@
 
 """
+每个meta是一个scene (list[view, image])
+但是每个scene要有不同的scene_id, 有利于合并不同的scene
+
+
 一个metaset里有多个meta, 每个meta有id, 一个Meta就是一个scene, 所有任务的每个scene 必须有不同的 meta_id
 每个metaset有metaset_id, 通过metaset_id来组合train/test
 
@@ -42,22 +46,22 @@ class Scene_Meta:
         meta_idx, visualize
         """
 
-class Multiview3D_Optimize_Mapper:
-    """  
-    mapper: (view,rendering) -> view,rendering
-        'scene_dict':
-            scene_id
-            metalog_name
 
-        'view_dict':
-            view_camera
+# class Multiview3D_Optimize_Mapper:
+#     """  
+#     mapper: (view,rendering) -> view,rendering
+#         'scene_dict':
+#             scene_id
+#             metalog_name
 
-        'rendering_dict':
-            rendering: image, 0-1,float
+#         'view_dict':
+#             view_camera
 
-    contrastive mapper: 对于condense数据集
-    """
+#         'rendering_dict':
+#             rendering: image, 0-1,float
 
+#     contrastive mapper: 对于condense数据集
+#     """
 
 class SingleView_3D_Mapper:
     """
@@ -84,24 +88,18 @@ class SingleView_3D_Mapper:
 
     """  
 
-class Text_3D_Mapper:
+class TextImages_3D_Mapper:
     """
-    condense: 如果condense=False的话, 每个sample就是一个view; 如果condense=True的话, 每个sample就是(scene_text/scene_video, list[view, rendering])
-    get_rendering_fn: 根据(scene_id,  view_camera, scene_text, scene_video_id, ) 获得对应的rendering; 都可以是none, 只要满足一种方式就行
-    
-    
-    mapper: (view,rendering) -> view,rendering
-        'scene_dict':
-            scene_id:
-            scene_text:
-            metalog_name:
+    'metas':
+        dataset_id:
+        scene_id:
 
-        'text_dict':
-            text
+    'text_dict':
+        text
 
-        'outviews_dict':
-            intrin: list[Intrin obj] B V / Intrin obj (所有相机的内参都相同);
-            extrin: Extrin obj, B V (同一个)
+    'outviews_dict':
+        intrin: list[Intrin obj] B V / Intrin obj (所有相机的内参都相同);
+        extrin: Extrin obj, B V (同一个)
     """  
 
  

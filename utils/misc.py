@@ -687,3 +687,41 @@ def nested_tensor_from_videos_list_with_stride(videos_list, max_stride):
         vid_pad_m[:vid_frames.shape[0], :vid_frames.shape[2], :vid_frames.shape[3]] = False
     # b t c hp wp
     return NestedTensor(padded_videos, videos_pad_masks)
+
+
+import hashlib
+def generate_unique_key(*args):
+    # Convert all elements to string and concatenate them
+    concatenated_str = ''.join(map(str, args))
+    
+    # Create a SHA-256 hash object
+    sha256 = hashlib.sha256()
+    
+    # Update the hash object with the concatenated string
+    sha256.update(concatenated_str.encode('utf-8'))
+    
+    # Get the hexadecimal representation of the hash
+    unique_key = sha256.hexdigest()
+    
+    return unique_key
+
+
+def to_torch_dtype(dtype):
+    if isinstance(dtype, torch.dtype):
+        return dtype
+    elif isinstance(dtype, str):
+        dtype_mapping = {
+            "float64": torch.float64,
+            "float32": torch.float32,
+            "float16": torch.float16,
+            "fp32": torch.float32,
+            "fp16": torch.float16,
+            "half": torch.float16,
+            "bf16": torch.bfloat16,
+        }
+        if dtype not in dtype_mapping:
+            raise ValueError
+        dtype = dtype_mapping[dtype]
+        return dtype
+    else:
+        raise ValueError

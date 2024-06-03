@@ -6,12 +6,11 @@ import numpy as np
 import kiui
 from kiui.lpips import LPIPS
 from collections import defaultdict
-from models.Render.representation.gaussian_renderer import GaussianRender_SameIntrin
 from detectron2.modeling import META_ARCH_REGISTRY
 from models.registry import register_model
 from data_schedule import build_schedule
 from functools import partial
-from detectron2.data import MetadataCatalog
+from detectron2.data import MetadataCatalog, DatasetCatalog
 from detectron2.utils import comm
 import logging
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -32,10 +31,10 @@ from data_schedule.render.scene_utils.graphics_utils import BasicPointCloud
 from data_schedule.render.scene_utils.sh_utils import eval_sh, SH2RGB, RGB2SH
 from data_schedule.render.scene_utils.cameras import orbit_camera, OrbitCamera, MiniMiniMiniCam
 from plyfile import PlyData
-from models.Render.representation.GS3D import GaussianModel_meshfy
+from models.representation.GS3D import GaussianModel_meshfy
 from argparse import Namespace
 from models.optimization.gs_optimizer import get_expon_lr_func
-from models.Render.representation.gaussian_renderer import render_with_depth_alpha
+from models.representation.gaussian_renderer import render_with_depth_alpha
 from data_schedule.render.scene_utils.grid_put import mipmap_linear_grid_put_2d
 
 
@@ -658,31 +657,29 @@ class Distill3DGS_From_2DDM_mesh:
 
         scene_list = MetadataCatalog.get('global_dataset').get('subset_list')
         assert len(scene_list) == 1, '基于optimize的必须是一个scene'
-        scene_meta_id = scene_list[0]
-
-        input_view_file = MetadataCatalog.get(scene_meta_id).get('text_3d').get('image_prompt', None)
-        if input_view_file is not None:
-            self.load_input(input_view_file)
-
-        self.prompt = MetadataCatalog.get(scene_meta_id).get('text_3d').get('input_text', "")
-        self.negative_prompt = MetadataCatalog.get(scene_meta_id).get('text_3d').get('input_negative_text', "")
+        scene_info = DatasetCatalog.get(scene_list[0])
+        assert len(scene_info) == 1
+        scene_info = scene_info[0]
+        get_view_image_fn = MetadataCatalog.get(scene_list[0]).get('get_view_image_fn')
+        self.prompt, self.negative_prompt, views_images_prompt = scene_info['prompt'], scene_info['negative_prompt'], \
+                                                                 scene_info['views_images_prompt']
+        if views_images_prompt is not None:
+            assert len(views_images_prompt) == 1, '只接受单图生成3D'
+            self.load_image(views_images_prompt[0], get_view_image_fn)
 
         self.optimize_setup(configs=configs)
         self.mesh_format = 'obj'
         
-    def load_input(self, file):
-        # load image
-        logging.debug(f'[INFO] load image from {file}...')
-        img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
+    def load_image(self, image_prompt, view_image_fn):
+        view, img, mask = view_image_fn(**image_prompt)
+        # img = cv2.imread(file, cv2.IMREAD_UNCHANGED)
         self.bg_remover = None
         if img.shape[-1] == 3:
             if self.bg_remover is None:
                 self.bg_remover = rembg.new_session()
             img = rembg.remove(img, session=self.bg_remover)
-
         img = cv2.resize(img, (self.cam.W, self.cam.H), interpolation=cv2.INTER_AREA)
         img = img.astype(np.float32) / 255.0
-
         self.input_mask = img[..., 3:]
         # white bg
         self.input_img = img[..., :3] * self.input_mask + (1 - self.input_mask)
@@ -1077,14 +1074,12 @@ class Distill3DGS_From_2DDM_mesh:
     def eval(self):
         pass
 
+
 @register_model
 def distill3dgs_from_2ddm(configs, device):
-    from .aux_mapper import AuxMapper
-    model_input_mapper = AuxMapper(configs['model']['input_aux'])
-    
-    train_samplers, train_loaders, eval_function = build_schedule(configs, 
-                                                                  model_input_mapper.mapper, 
-                                                                  partial(model_input_mapper.collate,))
+    from ..aux_mapper import Optimize_AuxMapper
+    model_input_mapper = Optimize_AuxMapper()
+    train_samplers, train_loaders, eval_function = build_schedule(configs,  model_input_mapper.mapper, model_input_mapper.collate,)
 
     if configs['model']['mesh'] is not None:
         model = Distill3DGS_From_2DDM_mesh(configs)

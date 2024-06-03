@@ -53,9 +53,7 @@ class VIDenoiseOptimize_Evaluator:
         metrics_by_video_id_frame_id = defaultdict(dict)
         assert len(self.loader) == 1, '对于optimize模型来说, video在model里'
         for batch_dict in tqdm(self.loader):
-            eval_metas = batch_dict.pop('metas')
-            frame_strs = eval_metas['frames'] # t', list[str]
-            video_id = eval_metas['video_id'] # str
+            video_id, frame_strs = model.get_video_meta()
             visualize_path = self.visualize_path(meta_idxs=batch_dict['meta_idxs'], visualize=batch_dict['visualize'], 
                                                  evaluator_path=os.path.join(evaluator_path, 'visualize_model')) # 模型的可视化
             batch_dict['visualize_paths'] = visualize_path
@@ -112,6 +110,45 @@ class VIDenoiseOptimize_Evaluator:
         return eval_metrics
 
     
+@EVALUATOR_REGISTRY.register()
+class VIDGenerate_Evaluator:
+    def __init__(self,
+                 dataset_name,
+                 data_loader,
+                 configs) -> None:
+        self.dataset_name = dataset_name
+        self.loader = data_loader
+        dataset_meta = MetadataCatalog.get(dataset_name)
+
+        video_metrics = configs['data']['evaluate'][dataset_name]['evaluator']['video_metrics']
+        self.video_metric_fns = []
+        for metric_name, metric_config in video_metrics:
+            metric_fn = videnoise_metric_entrypoint(metric_name)
+            metric_fn = partial(metric_fn, dataset_meta=dataset_meta, **metric_config)
+            self.video_metric_fns.append(metric_fn)    
+
+    def visualize_path(self, meta_idxs, visualize, evaluator_path):
+        return [os.path.join(evaluator_path, f'meta_{meta_idx}') if vis else None for (meta_idx, vis) in zip(meta_idxs, visualize)]
+    
+    @torch.no_grad()
+    def __call__(self, model, output_dir):
+        evaluator_path = os.path.join(output_dir, f'eval_{self.dataset_name}')
+        assert len(self.loader) == 1, '对于optimize模型来说, video在model里'
+        for batch_dict in tqdm(self.loader):
+            video_id, frame_strs = model.get_video_meta()
+            visualize_path = self.visualize_path(meta_idxs=batch_dict['meta_idxs'], visualize=batch_dict['visualize'], 
+                                                 evaluator_path=os.path.join(evaluator_path, 'visualize_model')) # 模型的可视化
+            batch_dict['visualize_paths'] = visualize_path
+            batch_dict = to_device(batch_dict, device=model.device)
+
+            video_metrics = {}
+            for metric_fn in self.video_metric_fns:
+                metric_values = metric_fn(video_model=model,
+                                          output_dir=evaluator_path,
+                                          video_id=video_id,
+                                          frames=frame_strs)
+        eval_metrics = {}
+        return eval_metrics
 
 
 @EVALUATOR_REGISTRY.register()

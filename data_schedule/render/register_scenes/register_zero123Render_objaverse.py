@@ -179,11 +179,3 @@ MetadataCatalog.get('objaverse_zero123_kiuiv1_test').set(white_background=False,
                                                     get_rendering_fn=partial(get_rendering_fn, scene_path=dataset_root),
                                                     get_camera_fn=partial(get_camera_fn, scene_path=dataset_root,),
                                                     visualize_meta_idxs=[])
-
-# root/objaverse
-#   original
-#   zeros123_rendered:
-#       views_release/scene_uid/0.npy, 0.png, 11.npy, 11.pn
-#       camera_intrin
-#   kiuiv1.txt
-#   kiuiv2.txt

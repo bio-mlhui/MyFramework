@@ -11,7 +11,7 @@ import torch.nn as nn
 class Render_Mapper(Mapper):
     def __init__(self, 
                  meta_idx_shift,
-                 dataset_meta,) -> None:
+                 dataset_meta, **kwargs) -> None:
         Scene_Meta
         super().__init__(meta_idx_shift=meta_idx_shift, dataset_meta=dataset_meta)
         self.get_rendering_fn = dataset_meta.get('get_rendering_fn')

@@ -6,7 +6,7 @@ from models.registry import register_model
 from models.registry import MODELITY_INPUT_MAPPER_REGISTRY
 
 
-class AuxMapper:
+class Optimize_AuxMapper:
     def __init__(self, aux_configs):
         pass
     def mapper(self, data_dict, mode,):           

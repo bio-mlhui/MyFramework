@@ -1,5 +1,6 @@
 
 from . import dreamgaussian
-from . import align_gaussian
+from . import multiview_optimize
+# from . import align_gaussian
 
 
