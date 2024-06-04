@@ -14,177 +14,177 @@ from detectron2.modeling import META_ARCH_REGISTRY
 from detectron2.data import MetadataCatalog
 import os
 
-@META_ARCH_REGISTRY.register()
-class Sora_VideoDenoise(nn.Module):
-    def __init__(self,  configs) -> None:
-        super().__init__()
-        sora_config = configs['model']['distiller']
-        self.vae = META_ARCH_REGISTRY.get(sora_config['vae']['name'])(sora_config['vae'])
-        num_frames, image_size, fps, frame_interval = sora_config['num_frames'], sora_config['image_size'], \
-            sora_config['fps'],sora_config['frame_interval']
-        input_size = (num_frames, *image_size) # t h w
-        # t/patch_t, h/patch_h, w/patch_w
-        self.latent_size = self.vae.get_latent_size(input_size)
+# @META_ARCH_REGISTRY.register()
+# class Sora_VideoDenoise(nn.Module):
+#     def __init__(self,  configs) -> None:
+#         super().__init__()
+#         sora_config = configs['model']['distiller']
+#         self.vae = META_ARCH_REGISTRY.get(sora_config['vae']['name'])(sora_config['vae'])
+#         num_frames, image_size, fps, frame_interval = sora_config['num_frames'], sora_config['image_size'], \
+#             sora_config['fps'],sora_config['frame_interval']
+#         input_size = (num_frames, *image_size) # t h w
+#         # t/patch_t, h/patch_h, w/patch_w
+#         self.latent_size = self.vae.get_latent_size(input_size)
         
-        if sora_config['multi_resolution'] == "PixArtMS":
-            image_size = image_size
-            # 1 2
-            hw = torch.tensor([image_size], dtype=torch.float).to(self.device)
-            # 1 1
-            ar = torch.tensor([[image_size[0] / image_size[1]]], dtype=torch.float).to(self.device)
-            model_args = {
-                'data_info': {'ar': ar, 'hw': hw}
-            }
+#         if sora_config['multi_resolution'] == "PixArtMS":
+#             image_size = image_size
+#             # 1 2
+#             hw = torch.tensor([image_size], dtype=torch.float).to(self.device)
+#             # 1 1
+#             ar = torch.tensor([[image_size[0] / image_size[1]]], dtype=torch.float).to(self.device)
+#             model_args = {
+#                 'data_info': {'ar': ar, 'hw': hw}
+#             }
 
-        elif sora_config['multi_resolution'] == "STDiT2":
-            image_size = image_size
-            height = torch.tensor([image_size[0]], dtype=torch.bfloat16).to(self.device) # 1
-            width = torch.tensor([image_size[1]], dtype=torch.bfloat16).to(self.device) # 1
-            num_frames = torch.tensor([num_frames], dtype=torch.bfloat16).to(self.device) # 1
-            ar = torch.tensor([image_size[0] / image_size[1]], dtype=torch.bfloat16).to(self.device) # 1
-            if num_frames == 1:
-                fps = 120
-            fps = torch.tensor([fps], dtype=torch.bfloat16).to(self.device) # 1
-            model_args = {
-                'height': height,
-                'width': width,
-                'num_frames': num_frames,
-                'ar': ar,
-                'fps': fps
-            }
+#         elif sora_config['multi_resolution'] == "STDiT2":
+#             image_size = image_size
+#             height = torch.tensor([image_size[0]], dtype=torch.bfloat16).to(self.device) # 1
+#             width = torch.tensor([image_size[1]], dtype=torch.bfloat16).to(self.device) # 1
+#             num_frames = torch.tensor([num_frames], dtype=torch.bfloat16).to(self.device) # 1
+#             ar = torch.tensor([image_size[0] / image_size[1]], dtype=torch.bfloat16).to(self.device) # 1
+#             if num_frames == 1:
+#                 fps = 120
+#             fps = torch.tensor([fps], dtype=torch.bfloat16).to(self.device) # 1
+#             model_args = {
+#                 'height': height,
+#                 'width': width,
+#                 'num_frames': num_frames,
+#                 'ar': ar,
+#                 'fps': fps
+#             }
 
-        sora_config['dit']['input_size'] = self.latent_size
-        sora_config['dit']['in_channels'] = self.vae.out_channels
-        sora_config['dit']['caption_channels'] = 4096
-        sora_config['dit']['model_max_length'] = 200
-        sora_config['dit']['enable_sequence_parallelism'] = False
-        self.dit =  META_ARCH_REGISTRY.get(sora_config['dit']['name'])(sora_config['dit'])
+#         sora_config['dit']['input_size'] = self.latent_size
+#         sora_config['dit']['in_channels'] = self.vae.out_channels
+#         sora_config['dit']['caption_channels'] = 4096
+#         sora_config['dit']['model_max_length'] = 200
+#         sora_config['dit']['enable_sequence_parallelism'] = False
+#         self.dit =  META_ARCH_REGISTRY.get(sora_config['dit']['name'])(sora_config['dit'])
 
-        self.model_args = model_args
-        self.vae.to(self.device, torch.bfloat16).eval()
-        self.dit.to(self.device, torch.bfloat16).eval()
+#         self.model_args = model_args
+#         self.vae.to(self.device, torch.bfloat16).eval()
+#         self.dit.to(self.device, torch.bfloat16).eval()
 
-        self.scheduler = META_ARCH_REGISTRY.get(sora_config['scheduler']['name'])(sora_config['scheduler'])
+#         self.scheduler = META_ARCH_REGISTRY.get(sora_config['scheduler']['name'])(sora_config['scheduler'])
         
-        self.t_range = configs['optim']['t_range']
-        self.num_train_timesteps = self.scheduler.num_timesteps
-        self.min_step = int(self.num_train_timesteps * self.t_range[0])
-        self.max_step = int(self.num_train_timesteps * self.t_range[1])
+#         self.t_range = configs['optim']['t_range']
+#         self.num_train_timesteps = self.scheduler.num_timesteps
+#         self.min_step = int(self.num_train_timesteps * self.t_range[0])
+#         self.max_step = int(self.num_train_timesteps * self.t_range[1])
     
-    def get_text_embed(self, prompt_key, pos_text, neg_text, out_dir, sora_config):
-        text_embed_file = os.path.join(out_dir, f'prompt_{prompt_key}.pth')
-        if os.path.exists(text_embed_file):
-            text_embed = torch.load(text_embed_file)
-            self.model_args['y'] = text_embed['y'].to(torch.bfloat16).to(self.device)
-            self.model_args['mask'] = text_embed['mask'].to(self.device)
-        else:
-            with torch.no_grad():
-                text_encoder = META_ARCH_REGISTRY.get(sora_config['text_encoder']['name'])(sora_config['text_encoder'])
-                text_encoder.y_embedder = self.dit.y_embedder  # hack for classifier-free guidance
-                pos_text_embed = text_encoder.encode([pos_text])
-                y = pos_text_embed['y']
-                self.model_args['mask'] = pos_text_embed['mask']
-                y_null = text_encoder.null(1).to(self.device) # classifier-free guidance
-                y = torch.cat([y, y_null], 0)
-                del text_encoder
-                torch.cuda.empty_cache()
-                torch.save({'y': y, 'mask': self.model_args['mask']}, text_embed_file)
-                self.model_args['y'] = y.bfloat16()
+#     def get_text_embed(self, prompt_key, pos_text, neg_text, out_dir, sora_config):
+#         text_embed_file = os.path.join(out_dir, f'prompt_{prompt_key}.pth')
+#         if os.path.exists(text_embed_file):
+#             text_embed = torch.load(text_embed_file)
+#             self.model_args['y'] = text_embed['y'].to(torch.bfloat16).to(self.device)
+#             self.model_args['mask'] = text_embed['mask'].to(self.device)
+#         else:
+#             with torch.no_grad():
+#                 text_encoder = META_ARCH_REGISTRY.get(sora_config['text_encoder']['name'])(sora_config['text_encoder'])
+#                 text_encoder.y_embedder = self.dit.y_embedder  # hack for classifier-free guidance
+#                 pos_text_embed = text_encoder.encode([pos_text])
+#                 y = pos_text_embed['y']
+#                 self.model_args['mask'] = pos_text_embed['mask']
+#                 y_null = text_encoder.null(1).to(self.device) # classifier-free guidance
+#                 y = torch.cat([y, y_null], 0)
+#                 del text_encoder
+#                 torch.cuda.empty_cache()
+#                 torch.save({'y': y, 'mask': self.model_args['mask']}, text_embed_file)
+#                 self.model_args['y'] = y.bfloat16()
                 
-    @property
-    def device(self,):
-        return torch.device('cuda') # current device
+#     @property
+#     def device(self,):
+#         return torch.device('cuda') # current device
 
 
-    def forward(
-        self,
-        latents, # b 4 t h w
-        guidance_scale=5,
-        step_ratio=None
-    ):  
-        batch_size, _, nf, _, _ = latents.shape
-        img = latents 
-        img = torch.cat([img, img], 0)
-        forward = partial(forward_with_cfg, self.dit, cfg_scale=self.scheduler.cfg_scale, cfg_channel=self.scheduler.cfg_channel)
-        with torch.no_grad():
-            if step_ratio is not None:
-                # t = self.max_step - (self.max_step - self.min_step) * np.sqrt(step_ratio)
-                t = np.round((1 - step_ratio) * self.num_train_timesteps).clip(self.min_step, self.max_step)
-                t = torch.full((batch_size,), t, dtype=torch.long, device=self.device)
-                # t = torch.full((batch_size,), 1, dtype=torch.long, device=self.device)
-            else:
-                t = torch.randint(self.min_step, self.max_step + 1, (batch_size,), dtype=torch.long, device=self.device)
+#     def forward(
+#         self,
+#         latents, # b 4 t h w
+#         guidance_scale=5,
+#         step_ratio=None
+#     ):  
+#         batch_size, _, nf, _, _ = latents.shape
+#         img = latents 
+#         img = torch.cat([img, img], 0)
+#         forward = partial(forward_with_cfg, self.dit, cfg_scale=self.scheduler.cfg_scale, cfg_channel=self.scheduler.cfg_channel)
+#         with torch.no_grad():
+#             if step_ratio is not None:
+#                 # t = self.max_step - (self.max_step - self.min_step) * np.sqrt(step_ratio)
+#                 t = np.round((1 - step_ratio) * self.num_train_timesteps).clip(self.min_step, self.max_step)
+#                 t = torch.full((batch_size,), t, dtype=torch.long, device=self.device)
+#                 # t = torch.full((batch_size,), 1, dtype=torch.long, device=self.device)
+#             else:
+#                 t = torch.randint(self.min_step, self.max_step + 1, (batch_size,), dtype=torch.long, device=self.device)
 
-            t = torch.cat([t, t]) # 2b
-            samples = self.scheduler.p_sample(forward, 
-                                              img, t,                    
-                                            clip_denoised=False,
-                                            denoised_fn=None,
-                                            cond_fn=None,
-                                            model_kwargs=self.model_args,
-                                            mask=None,)['sample']
-            samples, _ = samples.chunk(2, dim=0)
-        return samples
+#             t = torch.cat([t, t]) # 2b
+#             samples = self.scheduler.p_sample(forward, 
+#                                               img, t,                    
+#                                             clip_denoised=False,
+#                                             denoised_fn=None,
+#                                             cond_fn=None,
+#                                             model_kwargs=self.model_args,
+#                                             mask=None,)['sample']
+#             samples, _ = samples.chunk(2, dim=0)
+#         return samples
 
 
-    # # 输入有噪声的video, 输出没有噪声的video
-    # def forward(
-    #     self,
-    #     pred_rgb, # b t 3 h w, float, 0-1
-    #     guidance_scale=5,
-    #     step_ratio=None
-    # ):  
-    #     batch_size, nf, _, H, W = pred_rgb.shape
+#     # # 输入有噪声的video, 输出没有噪声的video
+#     # def forward(
+#     #     self,
+#     #     pred_rgb, # b t 3 h w, float, 0-1
+#     #     guidance_scale=5,
+#     #     step_ratio=None
+#     # ):  
+#     #     batch_size, nf, _, H, W = pred_rgb.shape
 
         
-    #     # assert nf == self.latent_size[0]
-    #     # if (pred_rgb.shape[3] != self.latent_size[1]) or (pred_rgb.shape[4] != self.latent_size[2]):
-    #     #     pred_rgb = F.interpolate(pred_rgb.flatten(0, 1), size=self.latent_size[-2:], mode='bilinear', align_corners=False)
-    #     pred_rgb = (pred_rgb - self.image_mean) / self.image_var
-    #     pred_rgb = rearrange(pred_rgb, 'b t c h w -> b c t h w',b=batch_size, t=nf)
-    #     latents = self.vae.encode(pred_rgb) # b 4 t h/8 w/8
+#     #     # assert nf == self.latent_size[0]
+#     #     # if (pred_rgb.shape[3] != self.latent_size[1]) or (pred_rgb.shape[4] != self.latent_size[2]):
+#     #     #     pred_rgb = F.interpolate(pred_rgb.flatten(0, 1), size=self.latent_size[-2:], mode='bilinear', align_corners=False)
+#     #     pred_rgb = (pred_rgb - self.image_mean) / self.image_var
+#     #     pred_rgb = rearrange(pred_rgb, 'b t c h w -> b c t h w',b=batch_size, t=nf)
+#     #     latents = self.vae.encode(pred_rgb) # b 4 t h/8 w/8
 
-    #     with torch.no_grad():
-    #         if step_ratio is not None:
-    #             # dreamtime-like
-    #             # t = self.max_step - (self.max_step - self.min_step) * np.sqrt(step_ratio)
-    #             t = np.round((1 - step_ratio) * self.num_train_timesteps).clip(self.min_step, self.max_step)
-    #             t = torch.full((batch_size,), t, dtype=torch.long, device=self.device)
-    #         else:
-    #             t = torch.randint(self.min_step, self.max_step + 1, (batch_size,), dtype=torch.long, device=self.device)
+#     #     with torch.no_grad():
+#     #         if step_ratio is not None:
+#     #             # dreamtime-like
+#     #             # t = self.max_step - (self.max_step - self.min_step) * np.sqrt(step_ratio)
+#     #             t = np.round((1 - step_ratio) * self.num_train_timesteps).clip(self.min_step, self.max_step)
+#     #             t = torch.full((batch_size,), t, dtype=torch.long, device=self.device)
+#     #         else:
+#     #             t = torch.randint(self.min_step, self.max_step + 1, (batch_size,), dtype=torch.long, device=self.device)
 
-    #         # w(t), sigma_t^2
-    #         w = (1 - self.scheduler.alphas_cumprod[t]).view(batch_size, 1, 1, 1)
+#     #         # w(t), sigma_t^2
+#     #         w = (1 - self.scheduler.alphas_cumprod[t]).view(batch_size, 1, 1, 1)
 
-    #         # predict the noise residual with unet, NO grad!
-    #         # add noise
-    #         noise = torch.randn_like(latents)
-    #         latents_noisy = self.scheduler.q_sample(latents, t, noise)
-    #         # pred noise
-    #         latent_model_input = torch.cat([latents_noisy] * 2)
-    #         tt = torch.cat([t] * 2)
+#     #         # predict the noise residual with unet, NO grad!
+#     #         # add noise
+#     #         noise = torch.randn_like(latents)
+#     #         latents_noisy = self.scheduler.q_sample(latents, t, noise)
+#     #         # pred noise
+#     #         latent_model_input = torch.cat([latents_noisy] * 2)
+#     #         tt = torch.cat([t] * 2)
 
-    #         embeddings = torch.cat([self.embeddings['pos'].expand(batch_size, -1, -1), 
-    #                                 self.embeddings['neg'].expand(batch_size, -1, -1)])
+#     #         embeddings = torch.cat([self.embeddings['pos'].expand(batch_size, -1, -1), 
+#     #                                 self.embeddings['neg'].expand(batch_size, -1, -1)])
    
-    #         noise_pred = self.dit(latent_model_input, tt, encoder_hidden_states=embeddings).sample
+#     #         noise_pred = self.dit(latent_model_input, tt, encoder_hidden_states=embeddings).sample
 
-    #         # perform guidance (high scale from paper!)
-    #         noise_pred_cond, noise_pred_uncond = noise_pred.chunk(2)
-    #         noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
-    #         grad = w * (noise_pred - noise)
-    #         grad = torch.nan_to_num(grad)
+#     #         # perform guidance (high scale from paper!)
+#     #         noise_pred_cond, noise_pred_uncond = noise_pred.chunk(2)
+#     #         noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
+#     #         grad = w * (noise_pred - noise)
+#     #         grad = torch.nan_to_num(grad)
 
-    #         # seems important to avoid NaN...
-    #         # grad = grad.clamp(-1, 1)
+#     #         # seems important to avoid NaN...
+#     #         # grad = grad.clamp(-1, 1)
 
-    #     target = (latents - grad).detach()
-    #     denoised_video = self.vae.decode(target) # b 3 t h w
+#     #     target = (latents - grad).detach()
+#     #     denoised_video = self.vae.decode(target) # b 3 t h w
 
-    #     denoised_video = F.interpolate(rearrange(denoised_video, 'b c t h w -> (b t) c h w'), size=(H, W), mode='blinear', align_corners=False)
-    #     denoised_video = rearrange(denoised_video, '(b t) c h w -> b t c h w', b=batch_size, t=nf)
+#     #     denoised_video = F.interpolate(rearrange(denoised_video, 'b c t h w -> (b t) c h w'), size=(H, W), mode='blinear', align_corners=False)
+#     #     denoised_video = rearrange(denoised_video, '(b t) c h w -> b t c h w', b=batch_size, t=nf)
 
-    #     return denoised_video
+#     #     return denoised_video
 
 
 

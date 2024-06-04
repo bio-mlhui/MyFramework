@@ -13,7 +13,8 @@ import torch
 from utils.misc import setup_for_distributed
 import torch.distributed as dist
 from detectron2.utils.logger import setup_logger
-
+# laze import
+from trainers import task_to_trainer
 def _highlight(code, filename):
     try:
         import pygments
@@ -180,9 +181,6 @@ if __name__=="__main__":
         if task_environs is not None:
             for key, value in task_environs.items():
                 os.environ[key] = value
-
-    # laze import
-    from trainers import task_to_trainer
     wandb_id = f'{task}_{group}_{config}'
     if args.append_wandb_id != '':
         wandb_id = wandb_id + '_' + args.append_wandb_id

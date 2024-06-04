@@ -97,7 +97,7 @@ class Video_SetMatchingLoss(nn.Module):
             'boxMask_dice':0., 'boxMask_ce':0.,
         }
         
-        if ('mask_ce_dice' in self.matching_metrics) or ('mask_ce_dice' in self.losses):
+        if ('mask_dice_ce' in self.matching_metrics) or ('mask_dice_ce' in self.losses):
             # mask interpolate
             tgt_mask_shape = targets['masks'][0].shape[-2:] # list[n t H W], b
             for layer_idx in range(len(model_outs)):

@@ -36,5 +36,6 @@ from .segformer import (
 )
 
 from . import metaformer
+from . import meta_timesMamba
 
 from . import vmamba_new

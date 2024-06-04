@@ -71,7 +71,6 @@ class VIS_EvalMapper(VIS_Mapper):
                  dataset_meta,
                  mapper_config) -> None:
         super().__init__(meta_idx_shift, dataset_meta)
-        assert mapper_config['augmentation']['name'] in ['WeakPolyP_EvalAug', 'Visha_EvalAug']
         self.augmentation = VIS_EVAL_AUG_REGISTRY.get(mapper_config['augmentation']['name'])(mapper_config['augmentation'])
         
 

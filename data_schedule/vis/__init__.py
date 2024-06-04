@@ -2,7 +2,7 @@
 # 多个数据集公用的metric可以写到evaluator_utils里
 from . import polyp
 # from . import fibroid
-from . import visha
+# from . import visha
 
 from . import mapper # 注册vis mappers
 from . import evaluator # 注册vis evaluator

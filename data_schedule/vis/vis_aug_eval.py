@@ -175,6 +175,20 @@ class WeakPolyP_EvalAug:
         return ret
 
 @VIS_EVAL_AUG_REGISTRY.register()
+class TimeSMamba_EvalAug:
+    def __init__(self, configs) -> None:
+        self.resize = RandomResize(
+            sizes=[[384, 384]],
+        )
+        self.tensor_video = VideoToTensor() # 先进行tensor
+
+    def __call__(self, ret):
+        VIS_Aug_CallbackAPI
+        ret = self.resize(ret)
+        ret = self.tensor_video(ret)        
+        return ret
+
+@VIS_EVAL_AUG_REGISTRY.register()
 class Visha_EvalAug:
     def __init__(self, configs) -> None:
         sizes = configs['sizes'] if 'max_size' in configs else [[512,512]]

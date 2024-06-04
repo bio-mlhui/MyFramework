@@ -99,7 +99,7 @@ class BackboneEncoderDecoder_WithScaleConsistency(OptimizeModel):
           
         same_dim_multiscale_shapes = VideoMultiscale_Shape.set_multiscale_same_dim(shape_by_dim=self.video_backbone.multiscale_shapes,
                                                                                    same_dim=configs['model']['fusion']['d_model'])  
-         
+        self.train_change_scale = configs['model'].pop('train_change_scale', True)
         self.decoder = META_ARCH_REGISTRY.get(configs['model']['decoder']['name'])(configs['model']['decoder'],
                                                                                    multiscale_shapes=same_dim_multiscale_shapes)
         if configs['model']['fusion']['name'] == 'Video_Deform2D_DividedTemporal_MultiscaleEncoder_v2':
@@ -136,9 +136,12 @@ class BackboneEncoderDecoder_WithScaleConsistency(OptimizeModel):
         # plt.imsave('./frame.png', videos[0][0].permute(1,2,0).cpu().numpy())
         videos = (videos - self.pixel_mean) / self.pixel_std
         # plt.imsave('./mask.png', mask[0][0].cpu().numpy())
-        size1          = np.random.choice([256, 288, 320, 352, 384, 416, 448])
-        vid_1         = F.interpolate(videos.flatten(0, 1), size=size1, mode='bilinear')
-        vid_1          = rearrange(vid_1, '(b T) c h w -> b c T h w',b=batch_size, T=nf)
+        if self.train_change_scale:
+            size1          = np.random.choice([256, 288, 320, 352, 384, 416, 448])
+            vid_1         = F.interpolate(videos.flatten(0, 1), size=size1, mode='bilinear')
+            vid_1          = rearrange(vid_1, '(b T) c h w -> b c T h w',b=batch_size, T=nf)
+        else:
+            vid_1          = rearrange(videos, 'b t c h w -> b c t h w',b=batch_size, t=nf).contiguous()
         pred1          = self.model_preds(vid_1, video_aux_dict=batch_dict['video_dict']) # {pred_masks: b 1 t h w}
         pred1_loss = self.decoder.compute_loss(pred1, targets=targets, frame_targets=batch_dict['frame_targets'],
                                                video_aux_dict=batch_dict['video_dict'])

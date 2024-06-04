@@ -217,7 +217,45 @@ class WeakPolyP_TrainAug:
 
         return ret
 
+@VIS_TRAIN_AUG_REGISTRY.register()
+class TimeSMamba_TrainAug:
+    def __init__(self, configs) -> None:
+        self.transform = A.ReplayCompose([
+            A.Resize(384, 384),
+            A.HorizontalFlip(p=0.5),
+            A.VerticalFlip(p=0.5),
+            A.RandomRotate90(p=0.5),
+        ])
 
+        self.tensor_video = VideoToTensor()
+        self.add_box = ComputeBox()
+
+    def __call__(self, ret):
+        VIS_Aug_CallbackAPI
+        video = ret['video'] 
+        masks = ret['masks']  # n t' h w
+        has_ann = ret['has_ann'] # t
+        # list[PIL] -> list[h w 3, 0-1float], t
+        # n t' h w -> list[list[h w, 01uint8], 没有annotation的帧box是空] t
+        video, masks = pil_torch_to_numpy(video=video, masks=masks, has_ann=has_ann)
+
+        replay = self.transform(image=video[0], masks=[masks[0][0]])['replay']
+        auged_video = []
+        auged_mask = []
+        for vid, mk in zip(video, masks):
+            auged_each_frame = self.transform.replay(replay, image=vid, masks=mk)
+            auged_video.append(auged_each_frame['image'])
+            auged_mask.append(auged_each_frame['masks']) # list[h w, 01uint8]
+        
+        auged_video, auged_mask = numpy_to_pil_torch(video=auged_video, masks=auged_mask, has_ann=has_ann)
+
+        ret['video'] = auged_video
+        ret['masks'] = auged_mask
+        
+        ret = self.add_box(ret)
+        ret = self.tensor_video(ret)
+
+        return ret
 
 @VIS_TRAIN_AUG_REGISTRY.register()
 class Visha_TrainAug:
