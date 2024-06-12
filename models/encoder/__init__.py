@@ -36,8 +36,4 @@ from . import query_scan
 #     NA_qk_Layer_v2
 # )
 
-
-# shadow
-from .msdeformattn_temporal_deformss import (
-    Video_DeformSS2D_TemporalSS1D_MultiscaleEncoder
-)
+from . import ms_mamba

@@ -64,6 +64,7 @@ model:
           is_trainable: False
           target: sgm.modules.encoders.modules.VideoPredictionEmbedderWithEncoder
           params:
+            en_and_decode_n_samples_a_time: 4
             disable_encoder_autocast: True
             n_cond_frames: 1
             n_copies: 1

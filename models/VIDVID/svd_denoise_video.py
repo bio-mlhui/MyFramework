@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-
+import imageio
+from sgm.inference.helpers import embed_watermark
 from collections import defaultdict
 from models.registry import register_model
 from data_schedule import build_schedule
@@ -34,11 +35,13 @@ def load_model(
     num_frames: int,
     num_steps: int,
     verbose: bool = False,
-    pt_path=None
+    pt_path=None,
+    sampler_num_steps = None,
+    sampler_sigma_minmax = None
 ):
     config = OmegaConf.load(config)
     transform_local_pt_path(config, pt_path)
-    transform_sampler(config)
+    transform_sampler(config, sigma_minmax=sampler_sigma_minmax, num_steps=sampler_num_steps)
     if device == "cuda":
         config.model.params.conditioner_config.params.emb_models[
             0
@@ -81,8 +84,8 @@ def get_batch(keys, value_dict, N, T, device):
                 "1 -> b",
                 b=math.prod(N),
             )
-        elif key == "cond_frames" or key == "cond_frames_without_noise": # b 3 h w
-            batch[key] = repeat(value_dict[key], "1 ... -> b ...", b=N[0])
+        elif key == "cond_frames" or key == "cond_frames_without_noise": # t 3 h w
+            batch[key] = repeat(value_dict[key], "t ... -> (b t) ...", b=N[0])
         elif key == "polars_rad" or key == "azimuths_rad": # b
             batch[key] = torch.tensor(value_dict[key]).to(device).repeat(N[0])
         else:
@@ -108,64 +111,59 @@ def transform_local_pt_path(config, pt_path):
 from sgm.util import get_obj_from_str
 
 import models.VIDVID.svd_denoise_video
-
-def transform_sampler(config):
+import sgm.modules.diffusionmodules.sampling
+def transform_sampler(config, sigma_minmax, num_steps):
     sampler_target = config.model.params.sampler_config.target
     obj_cls = get_obj_from_str(sampler_target)
 
     class Distill_Sampler_Class(obj_cls):  # 0 到 最大
-        def prepare_sampling_loop(self, x, cond, uc=None, num_steps=None):
-            sigmas = self.discretization(
+        def __init__(self,  **kwargs):
+            super().__init__(**kwargs)
+            self.discretization.sigma_min = sigma_minmax[0]
+            self.discretization.sigma_max = sigma_minmax[1]
+            self.num_steps = num_steps
+            self.sigmas = self.discretization(
                 self.num_steps if num_steps is None else num_steps, device=self.device
             )
+            # let x times the initial sigma
+            pass
+            
+        # def prepare_sampling_loop(self, x, cond, uc=None, num_steps=None):
+        #     sigmas = self.discretization(
+        #         self.num_steps if num_steps is None else num_steps, device=self.device
+        #     )
+        #     uc = default(uc, cond)
+
+        #     x *= torch.sqrt(1.0 + sigmas[0] ** 2.0)
+        #     num_sigmas = len(sigmas)
+
+        #     s_in = x.new_ones([x.shape[0]])
+
+        #     return x, s_in, sigmas, num_sigmas, cond, uc
+
+        def __call__(self, denoiser, x, cond, uc=None, num_steps=None, step_ratio=None,):
             uc = default(uc, cond)
-
-            x *= torch.sqrt(1.0 + sigmas[0] ** 2.0) # 保证起始的noise的方差是sigma[0]
-            num_sigmas = len(sigmas)  
-
             s_in = x.new_ones([x.shape[0]])
-
-            return x, s_in, sigmas, num_sigmas, cond, uc
-
-        def __call__(self, denoiser, x, cond, uc=None, num_steps=None):
-            x, s_in, sigmas, num_sigmas, cond, uc = self.prepare_sampling_loop(
-                x, cond, uc, num_steps
+            if step_ratio is not None:
+                sigma_idx = int(np.round(step_ratio * self.num_steps).clip(0, len(self.sigmas) - 2))
+            else:
+                sigma_idx = int(torch.randint(0, len(self.sigmas) - 1))
+            step_sigma, next_sigma = self.sigmas[sigma_idx], self.sigmas[sigma_idx + 1]
+            gamma = (
+                min(self.s_churn / (len(self.sigmas) - 1), 2**0.5 - 1)
+                if self.s_tmin <= step_sigma <= self.s_tmax
+                else 0.0
             )
-
-            for i in self.get_sigma_gen(num_sigmas):
-                gamma = (
-                    min(self.s_churn / (num_sigmas - 1), 2**0.5 - 1)
-                    if self.s_tmin <= sigmas[i] <= self.s_tmax
-                    else 0.0
-                )
-                x = self.sampler_step(
-                    s_in * sigmas[i],
-                    s_in * sigmas[i + 1],
-                    denoiser,
-                    x,
-                    cond,
-                    uc,
-                    gamma,
-                )
-
-            return x
-
-        def sampler_step(self, sigma, next_sigma, denoiser, x, cond, uc=None, gamma=0.0):
-            sigma_hat = sigma * (gamma + 1.0)
-            if gamma > 0:
-                eps = torch.randn_like(x) * self.s_noise
-                x = x + eps * append_dims(sigma_hat**2 - sigma**2, x.ndim) ** 0.5
-
-            denoised = self.denoise(x, denoiser, sigma_hat, cond, uc)
-            d = to_d(x, sigma_hat, denoised)
-            dt = append_dims(next_sigma - sigma_hat, x.ndim)
-
-            euler_step = self.euler_step(x, d, dt)
-            x = self.possible_correction_step(
-                euler_step, x, d, dt, next_sigma, denoiser, cond, uc
+            x = self.sampler_step(
+                s_in * step_sigma,
+                s_in * next_sigma,
+                denoiser,
+                x,
+                cond,
+                uc,
+                gamma,
             )
             return x
-    
     setattr(models.VIDVID.svd_denoise_video, 'Distill_Sampler_Class', Distill_Sampler_Class)
     config.model.params.sampler_config.target = 'models.VIDVID.svd_denoise_video.Distill_Sampler_Class'
 
@@ -186,6 +184,7 @@ class DenoiseVideo_SVD_NoText_ReferenceImage:
         self.motion_bucket_id = configs['model']['motion_bucket_id']
         self.cond_aug = configs['model']['cond_aug']
         self.decoding_t = configs['model']['decoding_t']
+        self.encoding_t = configs['model']['encoding_t']
         self.elevations_deg = configs['model']['elevations_deg']
         self.azimuths_deg = configs['model']['elevations_deg']
         self.image_frame_ratio = configs['model']['image_frame_ratio']
@@ -219,7 +218,9 @@ class DenoiseVideo_SVD_NoText_ReferenceImage:
             self.num_frames,
             self.num_steps,
             True,
-            pt_path=pt_path
+            pt_path=pt_path,
+            sampler_num_steps = configs['optim']['sampler_num_steps'],
+            sampler_sigma_minmax = configs['optim']['sampler_sigma_minmax']
         )
         
         input_video = configs['model']['input_video']
@@ -251,20 +252,70 @@ class DenoiseVideo_SVD_NoText_ReferenceImage:
         _F = 8
         C = 4
         self.input_video = self.input_video * 2 - 1 # t 3 h w
-        reference_frame = self.input_video[0].unsqueeze(0) # 1 3 h w TODO: 第一帧是reference frame
+
+        latent_save_file = os.path.join(configs['out_dir'], generate_unique_key('latent', self.image_size, video_key, self.num_frames, self.encoding_t))
+        if os.path.exists(latent_save_file):
+            saved_pth = torch.load(latent_save_file)
+            noisy_latents = saved_pth['noisy_latents']
+        else:
+            with torch.no_grad():
+                self.model.to('cpu')
+                torch.cuda.empty_cache()
+                self.model.first_stage_model.to(self.device)
+                en_and_decode_n_samples_a_time = self.model.en_and_decode_n_samples_a_time
+                self.model.en_and_decode_n_samples_a_time = self.encoding_t
+                noisy_latents = self.model.encode_first_stage(self.input_video)
+                self.model.en_and_decode_n_samples_a_time = en_and_decode_n_samples_a_time
+                self.model.first_stage_model.to('cpu')
+                torch.cuda.empty_cache()
+                self.model.to(self.device)
+            torch.save({'noisy_latents': noisy_latents, }, latent_save_file)
+        
+        
+        self.noisy_latents = noisy_latents   
+        # times the initial sigma       
+
+        reference_video = self.input_video # t 3 h w TODO: 第一帧是reference frame
         self.shape = (num_frames, C, H // _F, W // _F)
+        # self.noisy_latents = torch.randn(self.shape, device=self.device)
+        self.noisy_latents *= torch.sqrt(1.0 + self.model.sampler.sigmas[0] ** 2.0) 
+        
         value_dict = {}
-        value_dict["cond_frames_without_noise"] = reference_frame # 1 3 h w
+        value_dict["cond_frames_without_noise"] = reference_video # 1 t 3 h w
         value_dict["motion_bucket_id"] = self.motion_bucket_id
         value_dict["fps_id"] = self.fps_id
         value_dict["cond_aug"] = self.cond_aug
-        value_dict["cond_frames"] = reference_frame + self.cond_aug * torch.randn_like(reference_frame)
+        value_dict["cond_frames"] = reference_video + self.cond_aug * torch.randn_like(reference_video)
         self.value_dict = value_dict
-
+        self.log_lr_group_idx = {}
         # self.prompt = configs['model']['prompt']
         # self.negative_prompt = configs['model']['negative_prompt']
         # self.prompt_key = generate_unique_key(self.prompt, self.negative_prompt)
         # self.get_text_embed(self.prompt, self.negative_prompt, out_dir=configs['out_dir'], sora_config=sora_config)
+        
+        # ['cond_frames_without_noise', 'fps_id', 'motion_bucket_id', 'cond_frames', 'cond_aug']
+        
+        
+        with torch.no_grad():
+            with torch.autocast('cuda'):
+                batch, batch_uc = get_batch(
+                    get_unique_embedder_keys_from_conditioner(self.model.conditioner),
+                    self.value_dict,
+                    [1, self.num_frames],
+                    T=self.num_frames,
+                    device=self.device,
+                )  # frames_without_noise: bt 3 h w, frames: bt 3 h w(cond_aug), fps_id: 1t, motion_bucket_id:1t, cond_aug:1t
+                # cond_frames = batch.pop('cond_frames') # bt 3 h w
+                # cond_frames_without_noise = batch.pop('cond_frames_without_noise') # bt 3 h w                
+                self.c, self.uc = self.model.conditioner.get_unconditional_conditioning( # CLIP encode
+                    batch,
+                    None,
+                    force_uc_zero_embeddings=[
+                        "cond_frames",
+                        "cond_frames_without_noise",
+                    ],
+                )    
+        
 
 
     def get_text_embed(self, pos_text, neg_text, out_dir, sora_config):
@@ -296,83 +347,58 @@ class DenoiseVideo_SVD_NoText_ReferenceImage:
         return torch.device('cuda')
     
     @torch.no_grad()
-    def __call__(self, data,):      
+    def __call__(self, data,):    
+        num_iterations = data['num_iterations'] + 1
+        step_ratio = min(1, math.floor(float(num_iterations) / self.model.sampler.num_steps))
+
         with torch.autocast('cuda'):
-            batch, batch_uc = get_batch(
-                get_unique_embedder_keys_from_conditioner(self.model.conditioner),
-                self.value_dict,
-                [1, self.num_frames],
-                T=self.num_frames,
-                device=self.device,
-            )  # frames_without_noise: 1 3 h w, frames: 1 3 h w(cond_aug), fps_id: 1t, motion_bucket_id:1t, cond_aug:1t
-            c, uc = self.model.conditioner.get_unconditional_conditioning( # CLIP encode
-                batch,
-                batch_uc=batch_uc,
-                force_uc_zero_embeddings=[
-                    "cond_frames",
-                    "cond_frames_without_noise",
-                ],
-            )         
-            # frames_without_noise: b 3 h w -> b 1 1024  -> bt 1 1024
-            # frames:               b 3 h w -> b 4 h/8 w/8  -> bt 4 h/8 w/8
-            # fps_id/motion_bucket_id/cond_aug: bt -> bt c -> bt 3c = bt 768
-            # 2: 'vector'  3: 'crossattn'  4: 'concat' 5: 'concat'       
-            # 多个相同key的condition在特征维度上concate
-            for k in ["crossattn", "concat"]:
-                uc[k] = repeat(uc[k], "b ... -> b t ...", t=self.num_frames)
-                uc[k] = rearrange(uc[k], "b t ... -> (b t) ...", t=self.num_frames)
-                c[k] = repeat(c[k], "b ... -> b t ...", t=self.num_frames)
-                c[k] = rearrange(c[k], "b t ... -> (b t) ...", t=self.num_frames)
-
-            randn = torch.randn(self.shape, device=self.device)
-
+            # randn = torch.randn(self.shape, device=self.device)
+            randn = self.noisy_latents
             additional_model_inputs = {}
             additional_model_inputs["image_only_indicator"] = torch.zeros(
                 2, self.num_frames
             ).to(self.device)
-            additional_model_inputs["num_video_frames"] = batch["num_video_frames"]
+            additional_model_inputs["num_video_frames"] = self.num_frames
 
             def denoiser(input, sigma, c):
                 return self.model.denoiser(
                     self.model.model, input, sigma, c, **additional_model_inputs
                 )
 
-            samples_z = self.model.sampler(denoiser, randn, cond=c, uc=uc)
-            self.model.en_and_decode_n_samples_a_time = self.decoding_t
-            samples_x = self.model.decode_first_stage(samples_z)
-            samples = torch.clamp((samples_x + 1.0) / 2.0, min=0.0, max=1.0)
-
-            # os.makedirs(self.output_folder, exist_ok=True)
-            # base_count = len(glob(os.path.join(self.output_folder, "*.mp4")))
-
-            # imageio.imwrite(
-            #     os.path.join(selfoutput_folder, f"{base_count:06d}.jpg"), input_image
-            # )
-
-            # samples = embed_watermark(samples)
-            # samples = filter(samples)
-            # vid = (
-            #     (rearrange(samples, "t c h w -> t h w c") * 255)
-            #     .cpu()
-            #     .numpy()
-            #     .astype(np.uint8)
-            # )
-            # video_path = os.path.join(output_folder, f"{base_count:06d}.mp4")
-            # imageio.mimwrite(video_path, vid)
-
+            self.noisy_latents = self.model.sampler(denoiser, randn, cond=self.c, uc=self.uc, step_ratio=step_ratio)
 
         return {}, self.loss_weight, {}
 
-
+    @torch.no_grad()
     def save_video_frames(self, frames, video_id, output_dir):
-        x = self.vae.decode(self.input_latents).float().permute(0, 2, 1, 3, 4).squeeze(0) # b 3 t h w -> t 3 h w
-        x = F.interpolate(x, size=self.original_image_size, mode='bilinear', align_corners=False)
-        save_path = os.path.join(output_dir, f'{self.get_video_meta()[0]}.mp4')
-        low, high = (-1, 1)
-        x.clamp_(min=low, max=high)
-        x.sub_(low).div_(max(high - low, 1e-5))
-        x = x.mul(255).add_(0.5).clamp_(0, 255).to("cpu", torch.uint8).permute(0, 2, 3, 1)
-        write_video(save_path, x, fps=self.fps // self.frame_interval, video_codec="h264")
+        # only uses the first_stage_model in gpu
+        with torch.autocast('cuda'):
+            self.model.to('cpu')
+            torch.cuda.empty_cache()
+            self.model.first_stage_model.to(self.device)
+            en_and_decode_n_samples_a_time = self.model.en_and_decode_n_samples_a_time
+            self.model.en_and_decode_n_samples_a_time = self.decoding_t
+            samples_x = self.model.decode_first_stage(self.noisy_latents)
+            self.model.en_and_decode_n_samples_a_time = en_and_decode_n_samples_a_time
+
+            self.model.first_stage_model.to('cpu')
+            torch.cuda.empty_cache()
+            self.model.to(self.device)
+
+        samples = torch.clamp((samples_x + 1.0) / 2.0, min=0.0, max=1.0)
+
+        os.makedirs(output_dir, exist_ok=True)
+        samples = embed_watermark(samples)
+        samples = self.filter(samples)
+        vid = (
+            (rearrange(samples, "t c h w -> t h w c") * 255)
+            .cpu()
+            .numpy()
+            .astype(np.uint8)
+        )
+        video_path = os.path.join(output_dir, f"{self.video_id}.mp4")
+        imageio.mimwrite(video_path, vid)
+
 
     def optimize(self, 
                  loss_weight=None,

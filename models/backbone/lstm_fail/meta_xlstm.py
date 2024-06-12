@@ -23,7 +23,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from timm.models.layers import trunc_normal_, DropPath
-
+from timm.models.registry import register_model
 from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from timm.models.layers import to_2tuple
 from detectron2.modeling import BACKBONE_REGISTRY
@@ -206,18 +206,13 @@ class Downsampling(nn.Module):
         self.post_norm = post_norm(out_channels) if post_norm else nn.Identity()
 
     def forward(self, x):
-        batch_size, _, nf, H, W = x.shape
-        if isinstance(self.pre_norm, nn.LayerNorm) or isinstance(self.pre_norm, LayerNormGeneral) or isinstance(self.pre_norm, LayerNormWithoutBias):
-            x = self.pre_norm(x.permute(0, 2, 3, 4, 1)) # b c t h w -> b t h w c
-            x = rearrange(x, 'b t h w c -> (b t) c h w')
-        else:
-            x = rearrange(x, 'b c t h w -> (b t) c h w').contiguous()
+        x = self.pre_norm(x)
+        if self.pre_permute:
+            # if take [B, H, W, C] as input, permute it to [B, C, H, W]
+            x = x.permute(0, 3, 1, 2)
         x = self.conv(x)
-        if isinstance(self.post_norm, nn.LayerNorm) or isinstance(self.post_norm, LayerNormGeneral) or isinstance(self.post_norm, LayerNormWithoutBias):
-            x = self.post_norm(x.permute(0, 2, 3, 1).contiguous()) # bt h w c
-            x = rearrange(x, '(b t) h w c -> b c t h w',b=batch_size, t=nf)
-        else:
-            x = rearrange(x, '(b t) c h w -> b c t h w',b=batch_size, t=nf).contiguous()       
+        x = x.permute(0, 2, 3, 1) # [B, C, H, W] -> [B, H, W, C]
+        x = self.post_norm(x)
         return x
 
 
@@ -230,14 +225,7 @@ class Scale(nn.Module):
         self.scale = nn.Parameter(init_value * torch.ones(dim), requires_grad=trainable)
 
     def forward(self, x):
-        if x.dim() == 4: # b h w c
-            return x * self.scale
-        elif x.dim() == 5:
-            # b c t h w
-            # c
-            return x * (self.scale[:, None, None, None].contiguous())
-        else:
-            raise ValueError()
+        return x * self.scale
         
 
 class SquaredReLU(nn.Module):
@@ -308,120 +296,82 @@ class OldAttention(nn.Module):
         x = self.proj_drop(x)
         return x
 
-from typing import Any
-
 class Attention(nn.Module):
     """
     Vanilla self-attention from Transformer: https://arxiv.org/abs/1706.03762.
     Modified from timm.
     """
-    def __init__(self, dim, head_dim=32, num_heads=None, qkv_bias=False,
-        attn_drop=0., proj_drop=0., proj_bias=False, **kwargs):
-        super().__init__()
-
-        self.head_dim = head_dim
-        self.scale = head_dim ** -0.5
-
-        self.num_heads = num_heads if num_heads else dim // head_dim
-        if self.num_heads == 0:
-            self.num_heads = 1
-        
-        self.attention_dim = self.num_heads * self.head_dim
-
-        self.qkv = nn.Linear(dim, self.attention_dim * 3, bias=qkv_bias)
-        self.attn_drop = nn.Dropout(attn_drop)
-        self.proj = nn.Linear(self.attention_dim, dim, bias=proj_bias)
-        self.proj_drop = nn.Dropout(proj_drop)
-
-        
-    def forward(self, x):
-        B, H, W, C = x.shape
-        N = H * W
-        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv.unbind(0)   # make torchscript happy (cannot use tensor as tuple)
-
-        attn = (q @ k.transpose(-2, -1)) * self.scale
-        attn = attn.softmax(dim=-1)
-        attn = self.attn_drop(attn)
-
-        x = (attn @ v).transpose(1, 2).reshape(B, H, W, self.attention_dim)
-        x = self.proj(x)
-        x = self.proj_drop(x)
-        return x
-
-from mamba_ssm import Mamba2
-
-from mamba_ssm import Mamba as Mamba1
-
-class Mamba(nn.Module):
-    """
-    Vanilla self-attention from Transformer: https://arxiv.org/abs/1706.03762.
-    Modified from timm.
-    """
     def __init__(self, 
-                d_state: int = 128,
-                d_conv: int = 4,
-                conv_init: Any | None = None,
-                expand: int = 2,
-                d_ssm: Any | None = None,
-                ngroups: int = 1,
-                A_init_range: Any = (1, 16),
-                D_has_hdim: bool = False,
-                rmsnorm: bool = True,
-                norm_before_gate: bool = False,
-                dt_min: float = 0.001,
-                dt_max: float = 0.1,
-                dt_init_floor: float = 0.0001,
-                dt_limit: Any = (0, float("inf")),
-                conv_bias: bool = True,
-                chunk_size: int = 256,
-                use_mem_eff_path = False,
-                mamba_headdim = 32,
-                # mamba1
-                dt_rank = "auto",
-                dt_init = 'random',
-                dt_scale = 1,
-                dim=None, head_dim=32, num_heads=None, qkv_bias=False,
-                attn_drop=0., proj_drop=0., proj_bias=False, 
-                  **kwargs):
-        assert attn_drop == 0 and proj_drop == 0
-        super().__init__()
+                 # lstm
+                 dim,
+                head_dim=32, num_heads=None,
+                qkv_bias=False, attn_drop=0., proj_drop=0., proj_bias=False,            
 
-        self.layer = Mamba2(d_model=dim,
-                            d_state=d_state,
-                            d_conv=d_conv,
-                            conv_init=conv_init,
-                            expand=expand,
-                            headdim=mamba_headdim,
-                            d_ssm=d_ssm,
-                            ngroups=ngroups,
-                            A_init_range=A_init_range,
-                            D_has_hdim=D_has_hdim,
-                            rmsnorm=rmsnorm,
-                            norm_before_gate=norm_before_gate,
-                            dt_min=dt_min,
-                            dt_max=dt_max,
-                            dt_init_floor=dt_init_floor,
-                            dt_limit=dt_limit,
-                            bias=proj_bias,
-                            conv_bias=conv_bias,
-                            chunk_size=chunk_size,use_mem_eff_path=use_mem_eff_path
-                            
-                            )  
-        # self.layer = Mamba1(d_model=dim,
-        #                     d_state=d_state,
-        #                     d_conv=d_conv,
-        #                     expand=expand,
-        #                     dt_rank = dt_rank, 
-        #                     dt_min = dt_min, 
-        #                     dt_max = dt_max, 
-        #                     dt_init = dt_init, 
-        #                     dt_scale = dt_scale,
-        #                     dt_init_floor = dt_init_floor, 
-        #                     conv_bias = conv_bias, 
-        #                     bias = proj_bias, 
-        #                     use_fast_path = True,
-        #                     )
+                num_states: int = 4,
+                backend = "cuda",
+                function: str = "slstm",
+                bias_init= "powerlaw_blockdependent",
+                recurrent_weight_init= "zeros",
+                _block_idx: int = 0,
+                _num_blocks: int = 1,
+                num_gates: int = 4,
+                gradient_recurrent_cut: bool = False,
+                gradient_recurrent_clipval: float | None = None,
+                forward_clipval: float | None = None,
+                batch_size: int = 8,
+                input_shape= "BSGNH",
+                internal_input_shape= "SBNGH",
+                output_shape="BNSH",
+                constants: dict = dict,
+                dtype = "bfloat16",dtype_b = "float32",dtype_r = None,
+                dtype_w= None,dtype_g = None,dtype_s = None,dtype_a = None,
+                enable_automatic_mixed_precision: bool = True,
+                initial_val = 0,
+                embedding_dim: int = -1,
+                conv1d_kernel_size: int = 4,
+                group_norm_weight: bool = True,
+                dropout: float = 0,
+                    **kwargs):
+        super().__init__()
+        from xlstm import sLSTMLayer, sLSTMLayerConfig
+        num_heads = num_heads if num_heads else dim // head_dim 
+        hidden_size = dim
+
+        slstm_config =sLSTMLayerConfig(
+            hidden_size=hidden_size,
+            num_heads=num_heads,
+            num_states=num_states,   
+            backend=backend,
+            function=function,
+            bias_init=bias_init,
+            recurrent_weight_init=recurrent_weight_init,
+            _block_idx=_block_idx,
+            _num_blocks=_num_blocks,
+            num_gates=num_gates,
+            gradient_recurrent_cut=gradient_recurrent_cut,
+            gradient_recurrent_clipval=gradient_recurrent_clipval,
+            forward_clipval=forward_clipval,
+            batch_size=batch_size,
+            internal_input_shape=internal_input_shape,
+            output_shape=output_shape,
+            constants=constants,
+            dtype=dtype,
+            dtype_b=dtype_b,
+            dtype_r=dtype_r,
+            dtype_w=dtype_w,
+            dtype_g=dtype_g,
+            dtype_s=dtype_s,
+            dtype_a=dtype_a,
+            enable_automatic_mixed_precision=enable_automatic_mixed_precision,
+            initial_val=initial_val,
+            embedding_dim=embedding_dim,
+            conv1d_kernel_size=conv1d_kernel_size,
+            group_norm_weight=group_norm_weight,
+            dropout=dropout,
+        )
+        self.layer = sLSTMLayer(slstm_config)
+
+        
     def forward(self, x):
         b_nf, H, W, c = x.shape
         x = rearrange(x, 'bt h w c -> bt (h w) c')
@@ -430,79 +380,18 @@ class Mamba(nn.Module):
         return x
 
 
-class Temporal_Mamba(nn.Module):
-    """
-    Vanilla self-attention from Transformer: https://arxiv.org/abs/1706.03762.
-    Modified from timm.
-    """
-    def __init__(self, 
-                d_state: int = 128,
-                d_conv: int = 4,
-                conv_init: Any | None = None,
-                expand: int = 2,
-                d_ssm: Any | None = None,
-                ngroups: int = 1,
-                A_init_range: Any = (1, 16),
-                D_has_hdim: bool = False,
-                rmsnorm: bool = True,
-                norm_before_gate: bool = False,
-                dt_min: float = 0.001,
-                dt_max: float = 0.1,
-                dt_init_floor: float = 0.0001,
-                dt_limit: Any = (0, float("inf")),
-                conv_bias: bool = True,
-                chunk_size: int = 256,
-                use_mem_eff_path = False,
-                dt_rank = "auto",
-                dt_init = 'random',
-                dt_scale = 1,
-                mamba_headdim = 32,
-                dim=None, head_dim=32, num_heads=None, qkv_bias=False,
-                attn_drop=0., proj_drop=0., proj_bias=False, 
-                  **kwargs):
-        assert attn_drop == 0 and proj_drop == 0
+
+class RandomMixing(nn.Module):
+    def __init__(self, num_tokens=196, **kwargs):
         super().__init__()
-        self.layer = Mamba2(d_model=dim,
-                            d_state=d_state,
-                            d_conv=d_conv,
-                            conv_init=conv_init,
-                            expand=expand,
-                            headdim=mamba_headdim,
-                            d_ssm=d_ssm,
-                            ngroups=ngroups,
-                            A_init_range=A_init_range,
-                            D_has_hdim=D_has_hdim,
-                            rmsnorm=rmsnorm,
-                            norm_before_gate=norm_before_gate,
-                            dt_min=dt_min,
-                            dt_max=dt_max,
-                            dt_init_floor=dt_init_floor,
-                            dt_limit=dt_limit,
-                            bias=proj_bias,
-                            conv_bias=conv_bias,
-                            chunk_size=chunk_size,
-                            use_mem_eff_path=use_mem_eff_path
-                            )  
-        # self.layer = Mamba1(d_model=dim,
-        #                     d_state=d_state,
-        #                     d_conv=d_conv,
-        #                     expand=expand,
-        #                     dt_rank = dt_rank, 
-        #                     dt_min = dt_min, 
-        #                     dt_max = dt_max, 
-        #                     dt_init = dt_init, 
-        #                     dt_scale = dt_scale,
-        #                     dt_init_floor = dt_init_floor, 
-        #                     conv_bias = conv_bias, 
-        #                     bias = proj_bias, 
-        #                     use_fast_path = True,
-        #                     )
+        self.random_matrix = nn.parameter.Parameter(
+            data=torch.softmax(torch.rand(num_tokens, num_tokens), dim=-1), 
+            requires_grad=False)
     def forward(self, x):
-        batch_size, _, nf, H, W = x.shape
-        assert nf > 1
-        x = rearrange(x, 'b c t h w -> (b h w) t c')
-        x = self.layer(x)
-        x = rearrange(x.contiguous(), '(b h w) t c -> b c t h w',b=batch_size, h=H, w=W)
+        B, H, W, C = x.shape
+        x = x.reshape(B, H*W, C)
+        x = torch.einsum('mn, bnc -> bmc', self.random_matrix, x)
+        x = x.reshape(B, H, W, C)
         return x
 
 
@@ -574,13 +463,7 @@ class LayerNormWithoutBias(nn.Module):
         self.weight = nn.Parameter(torch.ones(normalized_shape))
         self.normalized_shape = normalized_shape
     def forward(self, x):
-        if x.dim() == 4: # b h w c
-            return F.layer_norm(x, self.normalized_shape, weight=self.weight, bias=self.bias, eps=self.eps)
-        elif x.dim() == 5: # b c t h w
-            x = F.layer_norm(x.permute(0, 2, 3, 4, 1).contiguous(), self.normalized_shape, weight=self.weight, bias=self.bias, eps=self.eps)
-            return rearrange(x, 'b t h w c -> b c t h w')
-        else:
-            raise ValueError()
+        return F.layer_norm(x, self.normalized_shape, weight=self.weight, bias=self.bias, eps=self.eps)
 
 
 class SepConv(nn.Module):
@@ -683,29 +566,16 @@ class MetaFormerBlock(nn.Module):
     Implementation of one MetaFormer block.
     """
     def __init__(self, dim,
-                 temporal_token_mixer=nn.Identity,
                  token_mixer=nn.Identity, mlp=Mlp,
                  norm_layer=nn.LayerNorm,
                  drop=0., drop_path=0.,
-                 mamba_kwargs=None,
                  layer_scale_init_value=None, res_scale_init_value=None
                  ):
 
         super().__init__()
-        assert drop == 0 and drop_path ==0
-        if temporal_token_mixer is not None:
-            self.norm_t = norm_layer(dim)
-            self.token_mixer_t = temporal_token_mixer(dim=dim, drop=drop, **mamba_kwargs)
-            self.drop_path_t = DropPath(drop_path) if drop_path > 0. else nn.Identity()
-            self.layer_scale_t = Scale(dim=dim, init_value=layer_scale_init_value) \
-                if layer_scale_init_value else nn.Identity()
-            self.res_scale_t = Scale(dim=dim, init_value=res_scale_init_value) \
-                if res_scale_init_value else nn.Identity()
-        else:
-            self.norm_t = None
 
         self.norm1 = norm_layer(dim)
-        self.token_mixer = token_mixer(dim=dim, drop=drop, **mamba_kwargs)
+        self.token_mixer = token_mixer(dim=dim, drop=drop)
         self.drop_path1 = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.layer_scale1 = Scale(dim=dim, init_value=layer_scale_init_value) \
             if layer_scale_init_value else nn.Identity()
@@ -721,31 +591,18 @@ class MetaFormerBlock(nn.Module):
             if res_scale_init_value else nn.Identity()
         
     def forward(self, x):
-        batch_size, _, nf, H, W = x.shape
-        # temporal
-        if (self.norm_t is not None) and (nf > 1):
-            x = self.res_scale_t(x) + \
-                self.layer_scale_t(
-                self.drop_path_t(
-                    self.token_mixer_t(self.norm_t(x))
-                )
-            )
-        # spatial
-        x = rearrange(x, 'b c t h w -> (b t) h w c')
         x = self.res_scale1(x) + \
             self.layer_scale1(
                 self.drop_path1(
                     self.token_mixer(self.norm1(x))
                 )
             )
-        # 
         x = self.res_scale2(x) + \
             self.layer_scale2(
                 self.drop_path2(
                     self.mlp(self.norm2(x))
                 )
             )
-        x = rearrange(x, '(b t) h w c -> b c t h w',b=batch_size, t=nf)
         return x
 
 
@@ -794,14 +651,13 @@ class MetaFormer(nn.Module):
                  downsample_layers=DOWNSAMPLE_LAYERS_FOUR_STAGES,
                  token_mixers=nn.Identity,
                  mlps=Mlp,
-                 norm_layers=partial(LayerNormWithoutBias, eps=1e-6, ), # partial(LayerNormGeneral, eps=1e-6, bias=False),
+                 norm_layers=partial(LayerNormWithoutBias, eps=1e-6), # partial(LayerNormGeneral, eps=1e-6, bias=False),
                  drop_path_rate=0.,
                  head_dropout=0.0, 
                  layer_scale_init_values=None,
                  res_scale_init_values=[None, None, 1.0, 1.0],
                  output_norm=partial(nn.LayerNorm, eps=1e-6), 
                  head_fn=nn.Linear,
-                 mamba_kwargs=None,
                  **kwargs,
                  ):
         super().__init__()
@@ -843,9 +699,7 @@ class MetaFormer(nn.Module):
         for i in range(num_stage):
             stage = nn.Sequential(
                 *[MetaFormerBlock(dim=dims[i],
-                mamba_kwargs=mamba_kwargs,
-                temporal_token_mixer=token_mixers[i][0],
-                token_mixer=token_mixers[i][1],
+                token_mixer=token_mixers[i],
                 mlp=mlps[i],
                 norm_layer=norm_layers[i],
                 drop_path=dp_rates[cur + j],
@@ -887,14 +741,13 @@ class MetaFormer(nn.Module):
         x = self.head(x)
         return x
 
-
-def caformer_s18(pretrained=False,mamba_kwargs=None, **kwargs):
+@register_model
+def caformer_s18_slstm(pretrained=False, **kwargs):
     model = MetaFormer(
         depths=[3, 3, 9, 3],
         dims=[64, 128, 320, 512],
-        token_mixers=[(None, SepConv), (None, SepConv), (Temporal_Mamba, Mamba), (Temporal_Mamba, Mamba)],
+        token_mixers=[SepConv, SepConv, Attention, Attention],
         head_fn=MlpHead,
-        mamba_kwargs=mamba_kwargs,
         **kwargs)
     model.default_cfg = default_cfgs['caformer_s18']
     if pretrained:
@@ -904,13 +757,13 @@ def caformer_s18(pretrained=False,mamba_kwargs=None, **kwargs):
     return model
 
 
-def caformer_s18_384(pretrained=False,mamba_kwargs=None, **kwargs):
+@register_model
+def caformer_s18_384_slstm(pretrained=False, **kwargs):
     model = MetaFormer(
         depths=[3, 3, 9, 3],
         dims=[64, 128, 320, 512],
-        token_mixers=[(None, SepConv), (None, SepConv), (Temporal_Mamba, Mamba), (Temporal_Mamba, Mamba)],
+        token_mixers=[SepConv, SepConv, Attention, Attention],
         head_fn=MlpHead,
-        mamba_kwargs=mamba_kwargs,
         **kwargs)
     model.default_cfg = default_cfgs['caformer_s18_384']
     if pretrained:
@@ -920,13 +773,61 @@ def caformer_s18_384(pretrained=False,mamba_kwargs=None, **kwargs):
     return model
 
 
-def caformer_s36(pretrained=False,mamba_kwargs=None,  **kwargs):
+@register_model
+def caformer_s18_in21ft1k_slstm(pretrained=False, **kwargs):
+    model = MetaFormer(
+        depths=[3, 3, 9, 3],
+        dims=[64, 128, 320, 512],
+        token_mixers=[SepConv, SepConv, Attention, Attention],
+        head_fn=MlpHead,
+        **kwargs)
+    model.default_cfg = default_cfgs['caformer_s18_in21ft1k']
+    if pretrained:
+        state_dict = torch.hub.load_state_dict_from_url(
+            url= model.default_cfg['url'], map_location="cpu", check_hash=True)
+        model.load_state_dict(state_dict)
+    return model
+
+
+@register_model
+def caformer_s18_384_in21ft1k_slstm(pretrained=False, **kwargs):
+    model = MetaFormer(
+        depths=[3, 3, 9, 3],
+        dims=[64, 128, 320, 512],
+        token_mixers=[SepConv, SepConv, Attention, Attention],
+        head_fn=MlpHead,
+        **kwargs)
+    model.default_cfg = default_cfgs['caformer_s18_384_in21ft1k']
+    if pretrained:
+        state_dict = torch.hub.load_state_dict_from_url(
+            url= model.default_cfg['url'], map_location="cpu", check_hash=True)
+        model.load_state_dict(state_dict)
+    return model
+
+
+@register_model
+def caformer_s18_in21k_slstm(pretrained=False, **kwargs):
+    model = MetaFormer(
+        depths=[3, 3, 9, 3],
+        dims=[64, 128, 320, 512],
+        token_mixers=[SepConv, SepConv, Attention, Attention],
+        head_fn=MlpHead,
+        **kwargs)
+    model.default_cfg = default_cfgs['caformer_s18_in21k']
+    if pretrained:
+        state_dict = torch.hub.load_state_dict_from_url(
+            url= model.default_cfg['url'], map_location="cpu", check_hash=True)
+        model.load_state_dict(state_dict)
+    return model
+
+
+@register_model
+def caformer_s36_slstm(pretrained=False, **kwargs):
     model = MetaFormer(
         depths=[3, 12, 18, 3],
         dims=[64, 128, 320, 512],
-        token_mixers=[(None, SepConv), (None, SepConv), (Temporal_Mamba, Mamba), (Temporal_Mamba, Mamba)],
+        token_mixers=[SepConv, SepConv, Attention, Attention],
         head_fn=MlpHead,
-        mamba_kwargs=mamba_kwargs,
         **kwargs)
     model.default_cfg = default_cfgs['caformer_s36']
     if pretrained:
@@ -936,14 +837,13 @@ def caformer_s36(pretrained=False,mamba_kwargs=None,  **kwargs):
     return model
 
 
-def caformer_s36_384(pretrained=False, mamba_kwargs=None,  **kwargs):
+@register_model
+def caformer_s36_384_slstm(pretrained=False, **kwargs):
     model = MetaFormer(
         depths=[3, 12, 18, 3],
         dims=[64, 128, 320, 512],
-        token_mixers=[(None, SepConv), (None, SepConv), (Temporal_Mamba, Mamba), (Temporal_Mamba, Mamba)],
-        # token_mixers=[(None, SepConv), (None, SepConv), (None, Attention), (None, Attention)],
+        token_mixers=[SepConv, SepConv, Attention, Attention],
         head_fn=MlpHead,
-        mamba_kwargs=mamba_kwargs,
         **kwargs)
     model.default_cfg = default_cfgs['caformer_s36_384']
     if pretrained:
@@ -953,13 +853,61 @@ def caformer_s36_384(pretrained=False, mamba_kwargs=None,  **kwargs):
     return model
 
 
-def caformer_m36(pretrained=False, mamba_kwargs=None, **kwargs):
+@register_model
+def caformer_s36_in21ft1k_slstm(pretrained=False, **kwargs):
+    model = MetaFormer(
+        depths=[3, 12, 18, 3],
+        dims=[64, 128, 320, 512],
+        token_mixers=[SepConv, SepConv, Attention, Attention],
+        head_fn=MlpHead,
+        **kwargs)
+    model.default_cfg = default_cfgs['caformer_s36_in21ft1k']
+    if pretrained:
+        state_dict = torch.hub.load_state_dict_from_url(
+            url= model.default_cfg['url'], map_location="cpu", check_hash=True)
+        model.load_state_dict(state_dict)
+    return model
+
+
+@register_model
+def caformer_s36_384_in21ft1k_slstm(pretrained=False, **kwargs):
+    model = MetaFormer(
+        depths=[3, 12, 18, 3],
+        dims=[64, 128, 320, 512],
+        token_mixers=[SepConv, SepConv, Attention, Attention],
+        head_fn=MlpHead,
+        **kwargs)
+    model.default_cfg = default_cfgs['caformer_s36_384_in21ft1k']
+    if pretrained:
+        state_dict = torch.hub.load_state_dict_from_url(
+            url= model.default_cfg['url'], map_location="cpu", check_hash=True)
+        model.load_state_dict(state_dict)
+    return model
+
+
+@register_model
+def caformer_s36_in21k_slstm(pretrained=False, **kwargs):
+    model = MetaFormer(
+        depths=[3, 12, 18, 3],
+        dims=[64, 128, 320, 512],
+        token_mixers=[SepConv, SepConv, Attention, Attention],
+        head_fn=MlpHead,
+        **kwargs)
+    model.default_cfg = default_cfgs['caformer_s36_in21k']
+    if pretrained:
+        state_dict = torch.hub.load_state_dict_from_url(
+            url= model.default_cfg['url'], map_location="cpu", check_hash=True)
+        model.load_state_dict(state_dict)
+    return model
+
+
+@register_model
+def caformer_m36_slstm(pretrained=False, **kwargs):
     model = MetaFormer(
         depths=[3, 12, 18, 3],
         dims=[96, 192, 384, 576],
-        token_mixers=[(None, SepConv), (None, SepConv), (Temporal_Mamba, Mamba), (Temporal_Mamba, Mamba)],
+        token_mixers=[SepConv, SepConv, Attention, Attention],
         head_fn=MlpHead,
-        mamba_kwargs=mamba_kwargs,
         **kwargs)
     model.default_cfg = default_cfgs['caformer_m36']
     if pretrained:
@@ -969,13 +917,13 @@ def caformer_m36(pretrained=False, mamba_kwargs=None, **kwargs):
     return model
 
 
-def caformer_m36_384(pretrained=False, mamba_kwargs=None, **kwargs):
+@register_model
+def caformer_m36_384_slstm(pretrained=False, **kwargs):
     model = MetaFormer(
         depths=[3, 12, 18, 3],
         dims=[96, 192, 384, 576],
-        token_mixers=[(None, SepConv), (None, SepConv), (Temporal_Mamba, Mamba), (Temporal_Mamba, Mamba)],
+        token_mixers=[SepConv, SepConv, Attention, Attention],
         head_fn=MlpHead,
-        mamba_kwargs=mamba_kwargs,
         **kwargs)
     model.default_cfg = default_cfgs['caformer_m36_384']
     if pretrained:
@@ -985,7 +933,56 @@ def caformer_m36_384(pretrained=False, mamba_kwargs=None, **kwargs):
     return model
 
 
-def caformer_b36(pretrained=False, **kwargs):
+@register_model
+def caformer_m36_in21ft1k_slstm(pretrained=False, **kwargs):
+    model = MetaFormer(
+        depths=[3, 12, 18, 3],
+        dims=[96, 192, 384, 576],
+        token_mixers=[SepConv, SepConv, Attention, Attention],
+        head_fn=MlpHead,
+        **kwargs)
+    model.default_cfg = default_cfgs['caformer_m36_in21ft1k']
+    if pretrained:
+        state_dict = torch.hub.load_state_dict_from_url(
+            url= model.default_cfg['url'], map_location="cpu", check_hash=True)
+        model.load_state_dict(state_dict)
+    return model
+
+
+@register_model
+def caformer_m36_384_in21ft1k_slstm(pretrained=False, **kwargs):
+    model = MetaFormer(
+        depths=[3, 12, 18, 3],
+        dims=[96, 192, 384, 576],
+        token_mixers=[SepConv, SepConv, Attention, Attention],
+        head_fn=MlpHead,
+        **kwargs)
+    model.default_cfg = default_cfgs['caformer_m36_384_in21ft1k']
+    if pretrained:
+        state_dict = torch.hub.load_state_dict_from_url(
+            url= model.default_cfg['url'], map_location="cpu", check_hash=True)
+        model.load_state_dict(state_dict)
+    return model
+
+
+@register_model
+def caformer_m364_in21k_slstm(pretrained=False, **kwargs):
+    model = MetaFormer(
+        depths=[3, 12, 18, 3],
+        dims=[96, 192, 384, 576],
+        token_mixers=[SepConv, SepConv, Attention, Attention],
+        head_fn=MlpHead,
+        **kwargs)
+    model.default_cfg = default_cfgs['caformer_m364_in21k']
+    if pretrained:
+        state_dict = torch.hub.load_state_dict_from_url(
+            url= model.default_cfg['url'], map_location="cpu", check_hash=True)
+        model.load_state_dict(state_dict)
+    return model
+
+
+@register_model
+def caformer_b36_slstm(pretrained=False, **kwargs):
     model = MetaFormer(
         depths=[3, 12, 18, 3],
         dims=[128, 256, 512, 768],
@@ -1000,7 +997,8 @@ def caformer_b36(pretrained=False, **kwargs):
     return model
 
 
-def caformer_b36_384(pretrained=False, **kwargs):
+@register_model
+def caformer_b36_384_slstm(pretrained=False, **kwargs):
     model = MetaFormer(
         depths=[3, 12, 18, 3],
         dims=[128, 256, 512, 768],
@@ -1015,50 +1013,95 @@ def caformer_b36_384(pretrained=False, **kwargs):
     return model
 
 
+@register_model
+def caformer_b36_in21ft1k_slstm(pretrained=False, **kwargs):
+    model = MetaFormer(
+        depths=[3, 12, 18, 3],
+        dims=[128, 256, 512, 768],
+        token_mixers=[SepConv, SepConv, Attention, Attention],
+        head_fn=MlpHead,
+        **kwargs)
+    model.default_cfg = default_cfgs['caformer_b36_in21ft1k']
+    if pretrained:
+        state_dict = torch.hub.load_state_dict_from_url(
+            url= model.default_cfg['url'], map_location="cpu", check_hash=True)
+        model.load_state_dict(state_dict)
+    return model
+
+
+@register_model
+def caformer_b36_384_in21ft1k_slstm(pretrained=False, **kwargs):
+    model = MetaFormer(
+        depths=[3, 12, 18, 3],
+        dims=[128, 256, 512, 768],
+        token_mixers=[SepConv, SepConv, Attention, Attention],
+        head_fn=MlpHead,
+        **kwargs)
+    model.default_cfg = default_cfgs['caformer_b36_384_in21ft1k']
+    if pretrained:
+        state_dict = torch.hub.load_state_dict_from_url(
+            url= model.default_cfg['url'], map_location="cpu", check_hash=True)
+        model.load_state_dict(state_dict)
+    return model
+
+
+@register_model
+def caformer_b36_in21k_slstm(pretrained=False,  **kwargs):
+    model = MetaFormer(
+        depths=[3, 12, 18, 3],
+        dims=[128, 256, 512, 768],
+        token_mixers=[SepConv, SepConv, Attention, Attention],
+        head_fn=MlpHead,
+        lstm_configs=lstm_configs,
+        **kwargs)
+    model.default_cfg = default_cfgs['caformer_b36_in21k']
+    if pretrained:
+        state_dict = torch.hub.load_state_dict_from_url(
+            url= model.default_cfg['url'], map_location="cpu", check_hash=True)
+        model.load_state_dict(state_dict)
+    return model
+
 
 import os
 from .utils import ImageMultiscale_Shape, VideoMultiscale_Shape
 from einops import rearrange
 @BACKBONE_REGISTRY.register()
-class Meta_TimeSMamba(nn.Module):
+class CAformer(nn.Module):
     def __init__(self, configs) -> None:
         super().__init__()
+        pt_path = os.getenv('PT_PATH')
         version_name = configs['caformer_name']
-        mamba_kwargs = configs['mamba_kwargs']
-
-        if version_name == 'caformer_s18_384':
-            caformer = caformer_s18_384(pretrained=False, mamba_kwargs=mamba_kwargs)
+        if version_name == 'convformer_s36_in21ft1k':
+            caformer = convformer_s36_in21ft1k(pretrained=False)
+        elif version_name == 'caformer_s36_384_in21ft1k':
+            caformer = caformer_s36_384_in21ft1k(pretrained=False)
+        elif version_name == 'caformer_m36_384_in21ft1k':
+            caformer = caformer_m36_384_in21ft1k(pretrained=False)
+        elif version_name == 'caformer_b36_384_in21ft1k':
+            caformer = caformer_s36_384_in21ft1k(pretrained=False)
         elif version_name == 'caformer_s36_384':
-            caformer = caformer_s36_384(pretrained=False, mamba_kwargs=mamba_kwargs)
-        elif version_name == 'caformer_m36_384':
-            caformer = caformer_m36_384(pretrained=False, mamba_kwargs=mamba_kwargs)
-        elif version_name == 'caformer_b36_384':
-            caformer = caformer_b36_384(pretrained=False, mamba_kwargs=mamba_kwargs)
+            caformer = caformer_s36_384(pretrained=False)
         else:
             raise ValueError()
-        pt_path = configs['pt_path']
+        pt_path = configs['pt_path'] 
         if pt_path is not None:
-            ckpt = torch.load(os.path.join(os.getenv('PT_PATH'), pt_path), map_location='cpu')
-            caformer.load_state_dict(ckpt['state_dict']) 
+            ckpt = torch.load(os.path.join(os.getenv('PT_PATH'), 
+                                           f'ca_metaformer/{version_name}.pth'), map_location='cpu')
+            caformer.load_state_dict(ckpt) 
         self.dims = caformer.dims
         del caformer.head
         self.downsample_layers = caformer.downsample_layers
         self.stages = caformer.stages
 
-        self.norm_layer = nn.ModuleList(nn.LayerNorm(haosen) for haosen in self.dims)
-
         assert len(caformer.dims) == 4
         self.num_stage = caformer.num_stage
         assert caformer.num_stage == 4
         self.multiscale_shapes = {}
-        for name, temporal_stride, spatial_stride, dim  in zip(['res2', 'res3', 'res4', 'res5'], 
-                                              [1, 1, 1,  1],
+        for name, spatial_stride, dim  in zip(['res2', 'res3', 'res4', 'res5'], 
                                               [4, 8, 16, 32],
                                               caformer.dims):
-            self.multiscale_shapes[name] =  VideoMultiscale_Shape(spatial_stride=spatial_stride, 
-                                                                  dim=dim,
-                                                                  temporal_stride=temporal_stride)
-        self.max_stride = [1, 32]
+            self.multiscale_shapes[name] =  ImageMultiscale_Shape(spatial_stride=spatial_stride, dim=dim)
+        self.max_stride = 32
         
         freeze = configs['freeze']
         if freeze:
@@ -1067,54 +1110,63 @@ class Meta_TimeSMamba(nn.Module):
 
 
     def forward_features(self, x):
-        batch_size, _, nf, H, W = x.shape
+        # b 3 h w
         hidden_states = []
         for i in range(self.num_stage):
             x = self.downsample_layers[i](x)
-            x = self.stages[i](x.contiguous()).contiguous()
-            # b c t h w -> b t h w c -> b c t h w
-            hidden_states.append(self.norm_layer[i](x.permute(0, 2, 3, 4, 1).contiguous()).permute(0, 4, 1, 2, 3))
+            x = self.stages[i](x)
+            hidden_states.append(x)
         return hidden_states
 
 
-    def forward(self, x): # b 3 t h w
-        layer_outputs = self.forward_features(x)
-        ret = {}
-        names = ['res2', 'res3', 'res4', 'res5']
-        for name, feat in zip(names, layer_outputs):
-            ret[name] = feat.contiguous() # b c h w
-        return ret
+    def forward(self, x): # bt 3 h w
+        if not self.training:
+            batch_feats = []
+            for haosen in x:
+                feats =  self.forward_features(haosen.unsqueeze(0))
+                batch_feats.append(feats)
+            batch_feats = list(zip(*batch_feats)) # 4
+            batch_feats = [torch.cat(haosen, dim=0) for haosen in batch_feats] # list[bt h w c]
+            ret = {}
+            names = ['res2', 'res3', 'res4', 'res5']
+            for name, feat in zip(names, batch_feats):
+                ret[name] = feat.permute(0, 3, 1, 2).contiguous()
+            return ret            
+        else:
+            layer_outputs = self.forward_features(x)
+            ret = {}
+            names = ['res2', 'res3', 'res4', 'res5']
+            for name, feat in zip(names, layer_outputs):
+                ret[name] = feat.permute(0, 3, 1, 2).contiguous() # b c h w
+            return ret
 
 
     def num_parameters(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
+@BACKBONE_REGISTRY.register()
+class Video2D_Caformer(nn.Module):
+    def __init__(self, configs) -> None:
+        super().__init__()
+        self.image_homo = CAformer(configs=configs)
 
-
-
-# @BACKBONE_REGISTRY.register()
-# class Video2D_Caformer(nn.Module):
-#     def __init__(self, configs) -> None:
-#         super().__init__()
-#         self.image_homo = CAformer(configs=configs)
-
-#         self.multiscale_shapes = {}
-#         for name, temporal_stride, spatial_stride, dim  in zip(['res2', 'res3', 'res4', 'res5'],  
-#                                                                [1, 1, 1, 1], 
-#                                                                [4, 8, 16, 32],
-#                                                                self.image_homo.dims):
-#             self.multiscale_shapes[name] =  VideoMultiscale_Shape(temporal_stride=temporal_stride, 
-#                                                                   spatial_stride=spatial_stride, dim=dim)
-#         self.max_stride = [1, 32]
+        self.multiscale_shapes = {}
+        for name, temporal_stride, spatial_stride, dim  in zip(['res2', 'res3', 'res4', 'res5'],  
+                                                               [1, 1, 1, 1], 
+                                                               [4, 8, 16, 32],
+                                                               self.image_homo.dims):
+            self.multiscale_shapes[name] =  VideoMultiscale_Shape(temporal_stride=temporal_stride, 
+                                                                  spatial_stride=spatial_stride, dim=dim)
+        self.max_stride = [1, 32]
     
-#     def forward(self, x):
-#         batch_size, _, T = x.shape[:3]
-#         x = rearrange(x, 'b c t h w -> (b t) c h w').contiguous()
-#         layer_outputs = self.image_homo(x)
+    def forward(self, x):
+        batch_size, _, T = x.shape[:3]
+        x = rearrange(x, 'b c t h w -> (b t) c h w').contiguous()
+        layer_outputs = self.image_homo(x)
 
-#         layer_outputs = {key: rearrange(value.contiguous(), '(b t) c h w -> b c t h w',b=batch_size, t=T).contiguous() \
-#                          for key, value in layer_outputs.items()}
-#         return layer_outputs
+        layer_outputs = {key: rearrange(value.contiguous(), '(b t) c h w -> b c t h w',b=batch_size, t=T).contiguous() \
+                         for key, value in layer_outputs.items()}
+        return layer_outputs
     
-#     def num_parameters(self):
-        # return sum(p.numel() for p in self.parameters() if p.requires_grad)
+    def num_parameters(self):
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)

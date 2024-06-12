@@ -349,9 +349,7 @@ class Attention(nn.Module):
         x = self.proj_drop(x)
         return x
 
-from mamba_ssm import Mamba2
-
-from mamba_ssm import Mamba as Mamba1
+from xlstm import sLSTMLayer, sLSTMLayerConfig
 
 class Mamba(nn.Module):
     """
@@ -359,69 +357,68 @@ class Mamba(nn.Module):
     Modified from timm.
     """
     def __init__(self, 
-                d_state: int = 128,
-                d_conv: int = 4,
-                conv_init: Any | None = None,
-                expand: int = 2,
-                d_ssm: Any | None = None,
-                ngroups: int = 1,
-                A_init_range: Any = (1, 16),
-                D_has_hdim: bool = False,
-                rmsnorm: bool = True,
-                norm_before_gate: bool = False,
-                dt_min: float = 0.001,
-                dt_max: float = 0.1,
-                dt_init_floor: float = 0.0001,
-                dt_limit: Any = (0, float("inf")),
-                conv_bias: bool = True,
-                chunk_size: int = 256,
-                use_mem_eff_path = False,
-                mamba_headdim = 32,
-                # mamba1
-                dt_rank = "auto",
-                dt_init = 'random',
-                dt_scale = 1,
-                dim=None, head_dim=32, num_heads=None, qkv_bias=False,
-                attn_drop=0., proj_drop=0., proj_bias=False, 
-                  **kwargs):
-        assert attn_drop == 0 and proj_drop == 0
-        super().__init__()
+                 # lstm
+                 dim,
+                head_dim=32, num_heads=None,
+                qkv_bias=False, attn_drop=0., proj_drop=0., proj_bias=False,            
 
-        self.layer = Mamba2(d_model=dim,
-                            d_state=d_state,
-                            d_conv=d_conv,
-                            conv_init=conv_init,
-                            expand=expand,
-                            headdim=mamba_headdim,
-                            d_ssm=d_ssm,
-                            ngroups=ngroups,
-                            A_init_range=A_init_range,
-                            D_has_hdim=D_has_hdim,
-                            rmsnorm=rmsnorm,
-                            norm_before_gate=norm_before_gate,
-                            dt_min=dt_min,
-                            dt_max=dt_max,
-                            dt_init_floor=dt_init_floor,
-                            dt_limit=dt_limit,
-                            bias=proj_bias,
-                            conv_bias=conv_bias,
-                            chunk_size=chunk_size,use_mem_eff_path=use_mem_eff_path
-                            
-                            )  
-        # self.layer = Mamba1(d_model=dim,
-        #                     d_state=d_state,
-        #                     d_conv=d_conv,
-        #                     expand=expand,
-        #                     dt_rank = dt_rank, 
-        #                     dt_min = dt_min, 
-        #                     dt_max = dt_max, 
-        #                     dt_init = dt_init, 
-        #                     dt_scale = dt_scale,
-        #                     dt_init_floor = dt_init_floor, 
-        #                     conv_bias = conv_bias, 
-        #                     bias = proj_bias, 
-        #                     use_fast_path = True,
-        #                     )
+                num_states: int = 4,
+                backend = "cuda",
+                function: str = "slstm",
+                bias_init= "powerlaw_blockdependent",
+                recurrent_weight_init= "zeros",
+                _block_idx: int = 0,
+                _num_blocks: int = 1,
+                num_gates: int = 4,
+                gradient_recurrent_cut: bool = False,
+                gradient_recurrent_clipval: float | None = None,
+                forward_clipval: float | None = None,
+                batch_size: int = 8,
+                input_shape= "BSGNH",
+                internal_input_shape= "SBNGH",
+                output_shape="BNSH",
+                constants: dict = dict,
+                dtype = "bfloat16",dtype_b = "float32",dtype_r = None,
+                dtype_w= None,dtype_g = None,dtype_s = None,dtype_a = None,
+                enable_automatic_mixed_precision: bool = True,
+                initial_val = 0,
+                conv1d_kernel_size: int = 4,
+                group_norm_weight: bool = True,
+                dropout: float = 0,
+                    **kwargs):
+        super().__init__()
+        num_heads = num_heads if num_heads else dim // head_dim 
+        hidden_size = dim
+        slstm_config =sLSTMLayerConfig(
+            hidden_size = hidden_size,
+            num_heads=num_heads,
+            num_states=num_states,   
+            backend=backend,
+            function=function,
+            bias_init=bias_init,
+            recurrent_weight_init=recurrent_weight_init,
+            _block_idx=_block_idx,
+            _num_blocks=_num_blocks,
+            num_gates=num_gates,
+            gradient_recurrent_cut=gradient_recurrent_cut,
+            gradient_recurrent_clipval=gradient_recurrent_clipval,
+            forward_clipval=forward_clipval,
+            batch_size=batch_size,
+            input_shape=input_shape,
+            internal_input_shape=internal_input_shape,
+            output_shape=output_shape,
+            constants=constants,
+            dtype=dtype, dtype_b=dtype_b, dtype_r=dtype_r, dtype_w=dtype_w, dtype_g=dtype_g,
+            dtype_s=dtype_s, dtype_a=dtype_a,
+            enable_automatic_mixed_precision=enable_automatic_mixed_precision,
+            initial_val=initial_val, 
+            embedding_dim=dim,
+            conv1d_kernel_size=conv1d_kernel_size, group_norm_weight=group_norm_weight,
+            dropout=dropout,
+        )
+        self.layer = sLSTMLayer(slstm_config)
+
+        
     def forward(self, x):
         b_nf, H, W, c = x.shape
         x = rearrange(x, 'bt h w c -> bt (h w) c')
@@ -429,74 +426,72 @@ class Mamba(nn.Module):
         x = rearrange(x.contiguous(), 'bt (h w) c -> bt h w c',bt=b_nf, h=H, w=W)
         return x
 
-
 class Temporal_Mamba(nn.Module):
-    """
-    Vanilla self-attention from Transformer: https://arxiv.org/abs/1706.03762.
-    Modified from timm.
-    """
     def __init__(self, 
-                d_state: int = 128,
-                d_conv: int = 4,
-                conv_init: Any | None = None,
-                expand: int = 2,
-                d_ssm: Any | None = None,
-                ngroups: int = 1,
-                A_init_range: Any = (1, 16),
-                D_has_hdim: bool = False,
-                rmsnorm: bool = True,
-                norm_before_gate: bool = False,
-                dt_min: float = 0.001,
-                dt_max: float = 0.1,
-                dt_init_floor: float = 0.0001,
-                dt_limit: Any = (0, float("inf")),
-                conv_bias: bool = True,
-                chunk_size: int = 256,
-                use_mem_eff_path = False,
-                dt_rank = "auto",
-                dt_init = 'random',
-                dt_scale = 1,
-                mamba_headdim = 32,
-                dim=None, head_dim=32, num_heads=None, qkv_bias=False,
-                attn_drop=0., proj_drop=0., proj_bias=False, 
-                  **kwargs):
-        assert attn_drop == 0 and proj_drop == 0
+                 # lstm
+                 dim,
+                head_dim=32, num_heads=None,
+                qkv_bias=False, attn_drop=0., proj_drop=0., proj_bias=False,            
+
+                num_states: int = 4,
+                backend = "cuda",
+                function: str = "slstm",
+                bias_init= "powerlaw_blockdependent",
+                recurrent_weight_init= "zeros",
+                _block_idx: int = 0,
+                _num_blocks: int = 1,
+                num_gates: int = 4,
+                gradient_recurrent_cut: bool = False,
+                gradient_recurrent_clipval: float | None = None,
+                forward_clipval: float | None = None,
+                batch_size: int = 8,
+                input_shape= "BSGNH",
+                internal_input_shape= "SBNGH",
+                output_shape="BNSH",
+                constants: dict = dict,
+                dtype = "bfloat16",dtype_b = "float32",dtype_r = None,
+                dtype_w= None,dtype_g = None,dtype_s = None,dtype_a = None,
+                enable_automatic_mixed_precision: bool = True,
+                initial_val = 0,
+                conv1d_kernel_size: int = 4,
+                group_norm_weight: bool = True,
+                dropout: float = 0,
+                    **kwargs):
         super().__init__()
-        self.layer = Mamba2(d_model=dim,
-                            d_state=d_state,
-                            d_conv=d_conv,
-                            conv_init=conv_init,
-                            expand=expand,
-                            headdim=mamba_headdim,
-                            d_ssm=d_ssm,
-                            ngroups=ngroups,
-                            A_init_range=A_init_range,
-                            D_has_hdim=D_has_hdim,
-                            rmsnorm=rmsnorm,
-                            norm_before_gate=norm_before_gate,
-                            dt_min=dt_min,
-                            dt_max=dt_max,
-                            dt_init_floor=dt_init_floor,
-                            dt_limit=dt_limit,
-                            bias=proj_bias,
-                            conv_bias=conv_bias,
-                            chunk_size=chunk_size,
-                            use_mem_eff_path=use_mem_eff_path
-                            )  
-        # self.layer = Mamba1(d_model=dim,
-        #                     d_state=d_state,
-        #                     d_conv=d_conv,
-        #                     expand=expand,
-        #                     dt_rank = dt_rank, 
-        #                     dt_min = dt_min, 
-        #                     dt_max = dt_max, 
-        #                     dt_init = dt_init, 
-        #                     dt_scale = dt_scale,
-        #                     dt_init_floor = dt_init_floor, 
-        #                     conv_bias = conv_bias, 
-        #                     bias = proj_bias, 
-        #                     use_fast_path = True,
-        #                     )
+        num_heads = num_heads if num_heads else dim // head_dim 
+        hidden_size = dim
+
+        slstm_config =sLSTMLayerConfig(
+            hidden_size = hidden_size,
+            num_heads=num_heads,
+            num_states=num_states,   
+            backend=backend,
+            function=function,
+            bias_init=bias_init,
+            recurrent_weight_init=recurrent_weight_init,
+            _block_idx=_block_idx,
+            _num_blocks=_num_blocks,
+            num_gates=num_gates,
+            gradient_recurrent_cut=gradient_recurrent_cut,
+            gradient_recurrent_clipval=gradient_recurrent_clipval,
+            forward_clipval=forward_clipval,
+            batch_size=batch_size,
+            input_shape=input_shape,
+            internal_input_shape=internal_input_shape,
+            output_shape=output_shape,
+            constants=constants,
+            dtype=dtype, dtype_b=dtype_b, dtype_r=dtype_r, dtype_w=dtype_w, dtype_g=dtype_g,
+            dtype_s=dtype_s, dtype_a=dtype_a,
+            enable_automatic_mixed_precision=enable_automatic_mixed_precision,
+            initial_val=initial_val, 
+            embedding_dim=dim,
+            conv1d_kernel_size=conv1d_kernel_size, group_norm_weight=group_norm_weight,
+            dropout=dropout,
+        )
+        self.layer = sLSTMLayer(slstm_config)
+        self.layer = sLSTMLayer(slstm_config)
+
+        
     def forward(self, x):
         batch_size, _, nf, H, W = x.shape
         assert nf > 1
@@ -505,6 +500,107 @@ class Temporal_Mamba(nn.Module):
         x = rearrange(x.contiguous(), '(b h w) t c -> b c t h w',b=batch_size, h=H, w=W)
         return x
 
+from xlstm import mLSTMLayer, mLSTMLayerConfig, xLSTMLMModel
+
+class Mamba_mLSTM(nn.Module):
+    """
+    Vanilla self-attention from Transformer: https://arxiv.org/abs/1706.03762.
+    Modified from timm.
+    """
+    def __init__(self, 
+                 # lstm
+                 dim,
+                head_dim=32, num_heads=None,
+                qkv_bias=False, attn_drop=0., proj_drop=0., proj_bias=False,            
+
+                proj_factor: float = 2,
+                round_proj_up_dim_up: bool = True,
+                round_proj_up_to_multiple_of: int = 64,
+                _proj_up_dim: int = None,
+                conv1d_kernel_size: int = 4,
+                qkv_proj_blocksize: int = 4,
+                
+                bias: bool = False,
+                dropout: float = 0,
+                context_length: int = -1,
+                _num_blocks: int = 1,
+                _inner_embedding_dim: int = None,
+                    **kwargs):
+        super().__init__()
+        assert num_heads is None
+        num_heads = num_heads if num_heads else dim // head_dim 
+        slstm_config = mLSTMLayerConfig(
+            proj_factor=proj_factor,
+            round_proj_up_dim_up=round_proj_up_dim_up,
+            round_proj_up_to_multiple_of=round_proj_up_to_multiple_of,
+            _proj_up_dim=_proj_up_dim,
+            conv1d_kernel_size=conv1d_kernel_size,
+            qkv_proj_blocksize=qkv_proj_blocksize,
+            num_heads=num_heads,
+            embedding_dim=dim,
+            bias=bias,
+            dropout=dropout,
+            context_length=context_length,
+            _num_blocks=_num_blocks,
+            _inner_embedding_dim=_inner_embedding_dim,
+        )
+        self.layer = mLSTMLayer(slstm_config)
+
+        
+    def forward(self, x):
+        b_nf, H, W, c = x.shape
+        x = rearrange(x, 'bt h w c -> bt (h w) c')
+        x = self.layer(x)
+        x = rearrange(x.contiguous(), 'bt (h w) c -> bt h w c',bt=b_nf, h=H, w=W)
+        return x
+
+class Temporal_Mamba_mLSTM(nn.Module):
+    def __init__(self, 
+                 # lstm
+                 dim,
+                head_dim=32, num_heads=None,
+                qkv_bias=False, attn_drop=0., proj_drop=0., proj_bias=False,            
+
+                proj_factor: float = 2,
+                round_proj_up_dim_up: bool = True,
+                round_proj_up_to_multiple_of: int = 64,
+                _proj_up_dim: int = None,
+                conv1d_kernel_size: int = 4,
+                qkv_proj_blocksize: int = 4,
+                
+                bias: bool = False,
+                dropout: float = 0,
+                context_length: int = -1,
+                _num_blocks: int = 1,
+                _inner_embedding_dim: int = None,
+                    **kwargs):
+        super().__init__()
+        assert num_heads is None
+        num_heads = num_heads if num_heads else dim // head_dim 
+        slstm_config = mLSTMLayerConfig(
+            proj_factor=proj_factor,
+            round_proj_up_dim_up=round_proj_up_dim_up,
+            round_proj_up_to_multiple_of=round_proj_up_to_multiple_of,
+            _proj_up_dim=_proj_up_dim,
+            conv1d_kernel_size=conv1d_kernel_size,
+            qkv_proj_blocksize=qkv_proj_blocksize,
+            num_heads=num_heads,
+            embedding_dim=dim,
+            bias=bias,
+            dropout=dropout,
+            context_length=context_length,
+            _num_blocks=_num_blocks,
+            _inner_embedding_dim=_inner_embedding_dim,
+        )
+        self.layer = mLSTMLayer(slstm_config)
+        
+    def forward(self, x):
+        batch_size, _, nf, H, W = x.shape
+        assert nf > 1
+        x = rearrange(x, 'b c t h w -> (b h w) t c')
+        x = self.layer(x)
+        x = rearrange(x.contiguous(), '(b h w) t c -> b c t h w',b=batch_size, h=H, w=W)
+        return x
 
 class LayerNormGeneral(nn.Module):
     r""" General LayerNorm for different situations.
@@ -940,7 +1036,7 @@ def caformer_s36_384(pretrained=False, mamba_kwargs=None,  **kwargs):
     model = MetaFormer(
         depths=[3, 12, 18, 3],
         dims=[64, 128, 320, 512],
-        token_mixers=[(None, SepConv), (None, SepConv), (Temporal_Mamba, Mamba), (Temporal_Mamba, Mamba)],
+        token_mixers=[(None, SepConv), (None, SepConv), (Temporal_Mamba_mLSTM, Mamba_mLSTM), (Temporal_Mamba, Mamba)],
         # token_mixers=[(None, SepConv), (None, SepConv), (None, Attention), (None, Attention)],
         head_fn=MlpHead,
         mamba_kwargs=mamba_kwargs,
@@ -1020,7 +1116,7 @@ import os
 from .utils import ImageMultiscale_Shape, VideoMultiscale_Shape
 from einops import rearrange
 @BACKBONE_REGISTRY.register()
-class Meta_TimeSMamba(nn.Module):
+class Meta_TimeSsLSTM(nn.Module):
     def __init__(self, configs) -> None:
         super().__init__()
         version_name = configs['caformer_name']

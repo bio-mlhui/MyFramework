@@ -135,6 +135,14 @@ def run(rank, configs, world_size):
             mode=configs['wandb_mode'],
         )  
     comm.synchronize()
+    # if os.getenv('CURRENT_TASK') is None:
+    #     current_task = configs.pop('CURRENT_TASK', None)
+    #     assert current_task is not None
+    #     os.environ['CURRENT_TASK'] = current_task
+    #     task_environs = configs.pop('TASK_ENVIRONS', None) # {key, value}
+    #     if task_environs is not None:
+    #         for key, value in task_environs.items():
+    #             os.environ[key] = value
     # init according to ( initckpt/path, initckpt/load_sampler, initckpt/load_optimizer )
     trainer = task_to_trainer[configs['task']](configs=configs)
     comm.synchronize()
@@ -173,14 +181,6 @@ if __name__=="__main__":
     configs['task'], configs['group'], configs['config'] = task, group, config
     configs['out_dir'] = os.path.join('./', 'output', task, group, config)
     configs['trainer_mode'] = args.trainer_mode
-    if os.getenv('CURRENT_TASK') is None:
-        current_task = configs.pop('CURRENT_TASK', None)
-        assert current_task is not None
-        os.environ['CURRENT_TASK'] = current_task
-        task_environs = configs.pop('TASK_ENVIRONS', None) # {key, value}
-        if task_environs is not None:
-            for key, value in task_environs.items():
-                os.environ[key] = value
     wandb_id = f'{task}_{group}_{config}'
     if args.append_wandb_id != '':
         wandb_id = wandb_id + '_' + args.append_wandb_id

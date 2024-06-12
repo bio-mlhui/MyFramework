@@ -29,168 +29,6 @@ from timm.models.layers import to_2tuple
 from detectron2.modeling import BACKBONE_REGISTRY
 
 
-def _cfg(url='', **kwargs):
-    return {
-        'url': url,
-        'num_classes': 1000, 'input_size': (3, 224, 224), 'pool_size': None,
-        'crop_pct': 1.0, 'interpolation': 'bicubic',
-        'mean': IMAGENET_DEFAULT_MEAN, 'std': IMAGENET_DEFAULT_STD, 'classifier': 'head',
-        **kwargs
-    }
-
-
-default_cfgs = {
-    'identityformer_s12': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/identityformer/identityformer_s12.pth'),
-    'identityformer_s24': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/identityformer/identityformer_s24.pth'),
-    'identityformer_s36': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/identityformer/identityformer_s36.pth'),
-    'identityformer_m36': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/identityformer/identityformer_m36.pth'),
-    'identityformer_m48': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/identityformer/identityformer_m48.pth'),
-
-
-    'randformer_s12': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/randformer/randformer_s12.pth'),
-    'randformer_s24': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/randformer/randformer_s24.pth'),
-    'randformer_s36': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/randformer/randformer_s36.pth'),
-    'randformer_m36': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/randformer/randformer_m36.pth'),
-    'randformer_m48': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/randformer/randformer_m48.pth'),
-
-    'poolformerv2_s12': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/poolformerv2/poolformerv2_s12.pth'),
-    'poolformerv2_s24': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/poolformerv2/poolformerv2_s24.pth'),
-    'poolformerv2_s36': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/poolformerv2/poolformerv2_s36.pth'),
-    'poolformerv2_m36': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/poolformerv2/poolformerv2_m36.pth'),
-    'poolformerv2_m48': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/poolformerv2/poolformerv2_m48.pth'),
-
-
-
-    'convformer_s18': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/convformer/convformer_s18.pth'),
-    'convformer_s18_384': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/convformer/convformer_s18_384.pth',
-        input_size=(3, 384, 384)),
-    'convformer_s18_in21ft1k': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/convformer/convformer_s18_in21ft1k.pth'),
-    'convformer_s18_384_in21ft1k': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/convformer/convformer_s18_384_in21ft1k.pth',
-        input_size=(3, 384, 384)),
-    'convformer_s18_in21k': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/convformer/convformer_s18_in21k.pth',
-        num_classes=21841),
-
-    'convformer_s36': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/convformer/convformer_s36.pth'),
-    'convformer_s36_384': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/convformer/convformer_s36_384.pth',
-        input_size=(3, 384, 384)),
-    'convformer_s36_in21ft1k': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/convformer/convformer_s36_in21ft1k.pth'),
-    'convformer_s36_384_in21ft1k': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/convformer/convformer_s36_384_in21ft1k.pth',
-        input_size=(3, 384, 384)),
-    'convformer_s36_in21k': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/convformer/convformer_s36_in21k.pth',
-        num_classes=21841),
-
-    'convformer_m36': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/convformer/convformer_m36.pth'),
-    'convformer_m36_384': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/convformer/convformer_m36_384.pth',
-        input_size=(3, 384, 384)),
-    'convformer_m36_in21ft1k': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/convformer/convformer_m36_in21ft1k.pth'),
-    'convformer_m36_384_in21ft1k': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/convformer/convformer_m36_384_in21ft1k.pth',
-        input_size=(3, 384, 384)),
-    'convformer_m36_in21k': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/convformer/convformer_m36_in21k.pth',
-        num_classes=21841),
-
-    'convformer_b36': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/convformer/convformer_b36.pth'),
-    'convformer_b36_384': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/convformer/convformer_b36_384.pth',
-        input_size=(3, 384, 384)),
-    'convformer_b36_in21ft1k': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/convformer/convformer_b36_in21ft1k.pth'),
-    'convformer_b36_384_in21ft1k': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/convformer/convformer_b36_384_in21ft1k.pth',
-        input_size=(3, 384, 384)),
-    'convformer_b36_in21k': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/convformer/convformer_b36_in21k.pth',
-        num_classes=21841),
-
-
-    'caformer_s18': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/caformer/caformer_s18.pth'),
-    'caformer_s18_384': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/caformer/caformer_s18_384.pth',
-        input_size=(3, 384, 384)),
-    'caformer_s18_in21ft1k': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/caformer/caformer_s18_in21ft1k.pth'),
-    'caformer_s18_384_in21ft1k': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/caformer/caformer_s18_384_in21ft1k.pth',
-        input_size=(3, 384, 384)),
-    'caformer_s18_in21k': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/caformer/caformer_s18_in21k.pth',
-        num_classes=21841),
-
-    'caformer_s36': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/caformer/caformer_s36.pth'),
-    'caformer_s36_384': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/caformer/caformer_s36_384.pth',
-        input_size=(3, 384, 384)),
-    'caformer_s36_in21ft1k': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/caformer/caformer_s36_in21ft1k.pth'),
-    'caformer_s36_384_in21ft1k': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/caformer/caformer_s36_384_in21ft1k.pth',
-        input_size=(3, 384, 384)),
-    'caformer_s36_in21k': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/caformer/caformer_s36_in21k.pth',
-        num_classes=21841),
-
-    'caformer_m36': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/caformer/caformer_m36.pth'),
-    'caformer_m36_384': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/caformer/caformer_m36_384.pth',
-        input_size=(3, 384, 384)),
-    'caformer_m36_in21ft1k': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/caformer/caformer_m36_in21ft1k.pth'),
-    'caformer_m36_384_in21ft1k': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/caformer/caformer_m36_384_in21ft1k.pth',
-        input_size=(3, 384, 384)),
-    'caformer_m36_in21k': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/caformer/caformer_m36_in21k.pth',
-        num_classes=21841),
-
-    'caformer_b36': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/caformer/caformer_b36.pth'),
-    'caformer_b36_384': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/caformer/caformer_b36_384.pth',
-        input_size=(3, 384, 384)),
-    'caformer_b36_in21ft1k': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/caformer/caformer_b36_in21ft1k.pth'),
-    'caformer_b36_384_in21ft1k': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/caformer/caformer_b36_384_in21ft1k.pth',
-        input_size=(3, 384, 384)),
-    'caformer_b36_in21k': _cfg(
-        url='https://huggingface.co/sail/dl/resolve/main/caformer/caformer_b36_in21k.pth',
-        num_classes=21841),
-}
-
-
 class Downsampling(nn.Module):
     """
     Downsampling implemented by a layer of convolution.
@@ -309,49 +147,7 @@ class OldAttention(nn.Module):
         return x
 
 from typing import Any
-
-class Attention(nn.Module):
-    """
-    Vanilla self-attention from Transformer: https://arxiv.org/abs/1706.03762.
-    Modified from timm.
-    """
-    def __init__(self, dim, head_dim=32, num_heads=None, qkv_bias=False,
-        attn_drop=0., proj_drop=0., proj_bias=False, **kwargs):
-        super().__init__()
-
-        self.head_dim = head_dim
-        self.scale = head_dim ** -0.5
-
-        self.num_heads = num_heads if num_heads else dim // head_dim
-        if self.num_heads == 0:
-            self.num_heads = 1
-        
-        self.attention_dim = self.num_heads * self.head_dim
-
-        self.qkv = nn.Linear(dim, self.attention_dim * 3, bias=qkv_bias)
-        self.attn_drop = nn.Dropout(attn_drop)
-        self.proj = nn.Linear(self.attention_dim, dim, bias=proj_bias)
-        self.proj_drop = nn.Dropout(proj_drop)
-
-        
-    def forward(self, x):
-        B, H, W, C = x.shape
-        N = H * W
-        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv.unbind(0)   # make torchscript happy (cannot use tensor as tuple)
-
-        attn = (q @ k.transpose(-2, -1)) * self.scale
-        attn = attn.softmax(dim=-1)
-        attn = self.attn_drop(attn)
-
-        x = (attn @ v).transpose(1, 2).reshape(B, H, W, self.attention_dim)
-        x = self.proj(x)
-        x = self.proj_drop(x)
-        return x
-
-from mamba_ssm import Mamba2
-
-from mamba_ssm import Mamba as Mamba1
+from xlstm import sLSTMLayer, sLSTMLayerConfig, mLSTMLayer
 
 class Mamba(nn.Module):
     """
@@ -359,69 +155,68 @@ class Mamba(nn.Module):
     Modified from timm.
     """
     def __init__(self, 
-                d_state: int = 128,
-                d_conv: int = 4,
-                conv_init: Any | None = None,
-                expand: int = 2,
-                d_ssm: Any | None = None,
-                ngroups: int = 1,
-                A_init_range: Any = (1, 16),
-                D_has_hdim: bool = False,
-                rmsnorm: bool = True,
-                norm_before_gate: bool = False,
-                dt_min: float = 0.001,
-                dt_max: float = 0.1,
-                dt_init_floor: float = 0.0001,
-                dt_limit: Any = (0, float("inf")),
-                conv_bias: bool = True,
-                chunk_size: int = 256,
-                use_mem_eff_path = False,
-                mamba_headdim = 32,
-                # mamba1
-                dt_rank = "auto",
-                dt_init = 'random',
-                dt_scale = 1,
-                dim=None, head_dim=32, num_heads=None, qkv_bias=False,
-                attn_drop=0., proj_drop=0., proj_bias=False, 
-                  **kwargs):
-        assert attn_drop == 0 and proj_drop == 0
-        super().__init__()
+                 # lstm
+                 dim,
+                head_dim=32, num_heads=None,
+                qkv_bias=False, attn_drop=0., proj_drop=0., proj_bias=False,            
 
-        self.layer = Mamba2(d_model=dim,
-                            d_state=d_state,
-                            d_conv=d_conv,
-                            conv_init=conv_init,
-                            expand=expand,
-                            headdim=mamba_headdim,
-                            d_ssm=d_ssm,
-                            ngroups=ngroups,
-                            A_init_range=A_init_range,
-                            D_has_hdim=D_has_hdim,
-                            rmsnorm=rmsnorm,
-                            norm_before_gate=norm_before_gate,
-                            dt_min=dt_min,
-                            dt_max=dt_max,
-                            dt_init_floor=dt_init_floor,
-                            dt_limit=dt_limit,
-                            bias=proj_bias,
-                            conv_bias=conv_bias,
-                            chunk_size=chunk_size,use_mem_eff_path=use_mem_eff_path
-                            
-                            )  
-        # self.layer = Mamba1(d_model=dim,
-        #                     d_state=d_state,
-        #                     d_conv=d_conv,
-        #                     expand=expand,
-        #                     dt_rank = dt_rank, 
-        #                     dt_min = dt_min, 
-        #                     dt_max = dt_max, 
-        #                     dt_init = dt_init, 
-        #                     dt_scale = dt_scale,
-        #                     dt_init_floor = dt_init_floor, 
-        #                     conv_bias = conv_bias, 
-        #                     bias = proj_bias, 
-        #                     use_fast_path = True,
-        #                     )
+                num_states: int = 4,
+                backend = "cuda",
+                function: str = "slstm",
+                bias_init= "powerlaw_blockdependent",
+                recurrent_weight_init= "zeros",
+                _block_idx: int = 0,
+                _num_blocks: int = 1,
+                num_gates: int = 4,
+                gradient_recurrent_cut: bool = False,
+                gradient_recurrent_clipval: float | None = None,
+                forward_clipval: float | None = None,
+                batch_size: int = 8,
+                input_shape= "BSGNH",
+                internal_input_shape= "SBNGH",
+                output_shape="BNSH",
+                constants: dict = dict,
+                dtype = "bfloat16",dtype_b = "float32",dtype_r = None,
+                dtype_w= None,dtype_g = None,dtype_s = None,dtype_a = None,
+                enable_automatic_mixed_precision: bool = True,
+                initial_val = 0,
+                conv1d_kernel_size: int = 4,
+                group_norm_weight: bool = True,
+                dropout: float = 0,
+                    **kwargs):
+        super().__init__()
+        num_heads = num_heads if num_heads else dim // head_dim 
+        hidden_size = dim
+        slstm_config =sLSTMLayerConfig(
+            hidden_size=hidden_size,
+            num_heads=num_heads,
+            num_states=num_states,   
+            backend=backend,
+            function=function,
+            bias_init=bias_init,
+            recurrent_weight_init=recurrent_weight_init,
+            _block_idx=_block_idx,
+            _num_blocks=_num_blocks,
+            num_gates=num_gates,
+            gradient_recurrent_cut=gradient_recurrent_cut,
+            gradient_recurrent_clipval=gradient_recurrent_clipval,
+            forward_clipval=forward_clipval,
+            batch_size=batch_size,
+            input_shape=input_shape,
+            internal_input_shape=internal_input_shape,
+            output_shape=output_shape,
+            constants=constants,
+            dtype=dtype, dtype_b=dtype_b, dtype_r=dtype_r, dtype_w=dtype_w, dtype_g=dtype_g,
+            dtype_s=dtype_s, dtype_a=dtype_a,
+            enable_automatic_mixed_precision=enable_automatic_mixed_precision,
+            initial_val=initial_val, 
+            embedding_dim=dim,
+            conv1d_kernel_size=conv1d_kernel_size, group_norm_weight=group_norm_weight,
+            dropout=dropout,
+        )
+        self.layer = sLSTMLayer(slstm_config)
+
+        
     def forward(self, x):
         b_nf, H, W, c = x.shape
         x = rearrange(x, 'bt h w c -> bt (h w) c')
@@ -429,74 +224,71 @@ class Mamba(nn.Module):
         x = rearrange(x.contiguous(), 'bt (h w) c -> bt h w c',bt=b_nf, h=H, w=W)
         return x
 
-
 class Temporal_Mamba(nn.Module):
-    """
-    Vanilla self-attention from Transformer: https://arxiv.org/abs/1706.03762.
-    Modified from timm.
-    """
     def __init__(self, 
-                d_state: int = 128,
-                d_conv: int = 4,
-                conv_init: Any | None = None,
-                expand: int = 2,
-                d_ssm: Any | None = None,
-                ngroups: int = 1,
-                A_init_range: Any = (1, 16),
-                D_has_hdim: bool = False,
-                rmsnorm: bool = True,
-                norm_before_gate: bool = False,
-                dt_min: float = 0.001,
-                dt_max: float = 0.1,
-                dt_init_floor: float = 0.0001,
-                dt_limit: Any = (0, float("inf")),
-                conv_bias: bool = True,
-                chunk_size: int = 256,
-                use_mem_eff_path = False,
-                dt_rank = "auto",
-                dt_init = 'random',
-                dt_scale = 1,
-                mamba_headdim = 32,
-                dim=None, head_dim=32, num_heads=None, qkv_bias=False,
-                attn_drop=0., proj_drop=0., proj_bias=False, 
-                  **kwargs):
-        assert attn_drop == 0 and proj_drop == 0
+                 # lstm
+                 dim,
+                head_dim=32, num_heads=None,
+                qkv_bias=False, attn_drop=0., proj_drop=0., proj_bias=False,            
+
+                num_states: int = 4,
+                backend = "cuda",
+                function: str = "slstm",
+                bias_init= "powerlaw_blockdependent",
+                recurrent_weight_init= "zeros",
+                _block_idx: int = 0,
+                _num_blocks: int = 1,
+                num_gates: int = 4,
+                gradient_recurrent_cut: bool = False,
+                gradient_recurrent_clipval: float | None = None,
+                forward_clipval: float | None = None,
+                batch_size: int = 8,
+                input_shape= "BSGNH",
+                internal_input_shape= "SBNGH",
+                output_shape="BNSH",
+                constants: dict = dict,
+                dtype = "bfloat16",dtype_b = "float32",dtype_r = None,
+                dtype_w= None,dtype_g = None,dtype_s = None,dtype_a = None,
+                enable_automatic_mixed_precision: bool = True,
+                initial_val = 0,
+                embedding_dim: int = -1,
+                conv1d_kernel_size: int = 4,
+                group_norm_weight: bool = True,
+                dropout: float = 0,
+                    **kwargs):
         super().__init__()
-        self.layer = Mamba2(d_model=dim,
-                            d_state=d_state,
-                            d_conv=d_conv,
-                            conv_init=conv_init,
-                            expand=expand,
-                            headdim=mamba_headdim,
-                            d_ssm=d_ssm,
-                            ngroups=ngroups,
-                            A_init_range=A_init_range,
-                            D_has_hdim=D_has_hdim,
-                            rmsnorm=rmsnorm,
-                            norm_before_gate=norm_before_gate,
-                            dt_min=dt_min,
-                            dt_max=dt_max,
-                            dt_init_floor=dt_init_floor,
-                            dt_limit=dt_limit,
-                            bias=proj_bias,
-                            conv_bias=conv_bias,
-                            chunk_size=chunk_size,
-                            use_mem_eff_path=use_mem_eff_path
-                            )  
-        # self.layer = Mamba1(d_model=dim,
-        #                     d_state=d_state,
-        #                     d_conv=d_conv,
-        #                     expand=expand,
-        #                     dt_rank = dt_rank, 
-        #                     dt_min = dt_min, 
-        #                     dt_max = dt_max, 
-        #                     dt_init = dt_init, 
-        #                     dt_scale = dt_scale,
-        #                     dt_init_floor = dt_init_floor, 
-        #                     conv_bias = conv_bias, 
-        #                     bias = proj_bias, 
-        #                     use_fast_path = True,
-        #                     )
+        num_heads = num_heads if num_heads else dim // head_dim 
+        hidden_size = dim
+
+        slstm_config =sLSTMLayerConfig(
+            hidden_size=hidden_size,
+            num_heads=num_heads,
+            num_states=num_states,   
+            backend=backend,
+            function=function,
+            bias_init=bias_init,
+            recurrent_weight_init=recurrent_weight_init,
+            _block_idx=_block_idx,
+            _num_blocks=_num_blocks,
+            num_gates=num_gates,
+            gradient_recurrent_cut=gradient_recurrent_cut,
+            gradient_recurrent_clipval=gradient_recurrent_clipval,
+            forward_clipval=forward_clipval,
+            batch_size=batch_size,
+            input_shape=input_shape,
+            internal_input_shape=internal_input_shape,
+            output_shape=output_shape,
+            constants=constants,
+            dtype=dtype, dtype_b=dtype_b, dtype_r=dtype_r, dtype_w=dtype_w, dtype_g=dtype_g,
+            dtype_s=dtype_s, dtype_a=dtype_a,
+            enable_automatic_mixed_precision=enable_automatic_mixed_precision,
+            initial_val=initial_val, embedding_dim=embedding_dim,
+            conv1d_kernel_size=conv1d_kernel_size, group_norm_weight=group_norm_weight,
+            dropout=dropout,
+        )
+        self.layer = sLSTMLayer(slstm_config)
+
+        
     def forward(self, x):
         batch_size, _, nf, H, W = x.shape
         assert nf > 1
@@ -504,7 +296,6 @@ class Temporal_Mamba(nn.Module):
         x = self.layer(x)
         x = rearrange(x.contiguous(), '(b h w) t c -> b c t h w',b=batch_size, h=H, w=W)
         return x
-
 
 class LayerNormGeneral(nn.Module):
     r""" General LayerNorm for different situations.
@@ -896,7 +687,6 @@ def caformer_s18(pretrained=False,mamba_kwargs=None, **kwargs):
         head_fn=MlpHead,
         mamba_kwargs=mamba_kwargs,
         **kwargs)
-    model.default_cfg = default_cfgs['caformer_s18']
     if pretrained:
         state_dict = torch.hub.load_state_dict_from_url(
             url= model.default_cfg['url'], map_location="cpu", check_hash=True)
@@ -912,15 +702,92 @@ def caformer_s18_384(pretrained=False,mamba_kwargs=None, **kwargs):
         head_fn=MlpHead,
         mamba_kwargs=mamba_kwargs,
         **kwargs)
-    model.default_cfg = default_cfgs['caformer_s18_384']
-    if pretrained:
-        state_dict = torch.hub.load_state_dict_from_url(
-            url= model.default_cfg['url'], map_location="cpu", check_hash=True)
-        model.load_state_dict(state_dict)
     return model
 
+# 需要生成每个layer的config
+def block_class(config, base_class_name):  # 返回一个只接受dim, head_dim的class
+    from mamba_ssm import Mamba2, Mamba
+    from xlstm import sLSTMLayer, mLSTMLayer, sLSTMLayerConfig, mLSTMLayerConfig
+    if base_class_name == 'sLSTM':
+        class LAYER_CLASS(sLSTMLayer):
+            def __init__(self, dim, head_dim=32, num_heads=None, qkv_bias=False,
+                             attn_drop=0., proj_drop=0., proj_bias=False, **kwargs):
+                config['']
+                config = sLSTMLayerConfig(**config)
+                super().__init__(config=config)
+    elif base_class_name == 'mLSTM':
+        class LAYER_CLASS(mLSTMLayer):
+            def __init__(self, dim, head_dim=32, num_heads=None, qkv_bias=False,
+                             attn_drop=0., proj_drop=0., proj_bias=False, **kwargs):
+                config['']
+                config = mLSTMLayerConfig(**config)
+                super().__init__(config=config)        
+    elif base_class_name == 'Mamba2':
+        class LAYER_CLASS(Mamba2):
+            def __init__(self, dim, head_dim=32, num_heads=None, qkv_bias=False,
+                             attn_drop=0., proj_drop=0., proj_bias=False, **kwargs):
+                super().__init__(**config)             
+    elif base_class_name == 'Mamba':
+        class LAYER_CLASS(Mamba):
+            def __init__(self, dim, head_dim=32, num_heads=None, qkv_bias=False,
+                             attn_drop=0., proj_drop=0., proj_bias=False, **kwargs):
+                super().__init__(**config) 
+    elif base_class_name == 'attention':
+        class LAYER_CLASS(OldAttention):
+            def __init__(self, dim, head_dim=32, num_heads=None, qkv_bias=False,
+                             attn_drop=0., proj_drop=0., proj_bias=False, **kwargs):
+                super().__init__(dim, head_dim=32, num_heads=None, qkv_bias=False,
+                             attn_drop=0., proj_drop=0., proj_bias=False, **kwargs)         
+    else:
+        raise ValueError()
+    return LAYER_CLASS          
+                
 
-def caformer_s36(pretrained=False,mamba_kwargs=None,  **kwargs):
+def caformer_s36(pretrained=False,**kwargs):
+    from xlstm import xLSTMBlockStackConfig, xLSTMBlockStack
+
+    def _create_blocks(self, config: xLSTMBlockStackConfig):
+
+        blocks = []
+        for block_idx, block_type_int in enumerate(config.block_map):
+            if block_type_int == 0:
+                config = deepcopy(self.config.mlstm_block)
+                if hasattr(config, "_block_idx"):
+                    config._block_idx = block_idx
+                    config.__post_init__()
+                blocks.append(mLSTMBlock(config=config))
+            elif block_type_int == 1:
+                config = deepcopy(self.config.slstm_block)
+                if hasattr(config, "_block_idx"):
+                    config._block_idx = block_idx
+                    config.__post_init__()
+                blocks.append(sLSTMBlock(config=config))
+            else:
+                raise ValueError(f"Invalid block type {block_type_int}")
+
+        return nn.ModuleList(blocks)
+
+    cfg = xLSTMBlockStackConfig(
+        mlstm_block=mLSTMBlockConfig(
+            mlstm=mLSTMLayerConfig(
+                conv1d_kernel_size=4, qkv_proj_blocksize=4, num_heads=4
+            )
+        ),
+        slstm_block=sLSTMBlockConfig(
+            slstm=sLSTMLayerConfig(
+                backend="cuda",
+                num_heads=4,
+                conv1d_kernel_size=4,
+                bias_init="powerlaw_blockdependent",
+            ),
+            feedforward=FeedForwardConfig(proj_factor=1.3, act_fn="gelu"),
+        ),
+        context_length=256,
+        num_blocks=7,
+        embedding_dim=128,
+        slstm_at=[1],
+
+    )
     model = MetaFormer(
         depths=[3, 12, 18, 3],
         dims=[64, 128, 320, 512],
@@ -928,15 +795,10 @@ def caformer_s36(pretrained=False,mamba_kwargs=None,  **kwargs):
         head_fn=MlpHead,
         mamba_kwargs=mamba_kwargs,
         **kwargs)
-    model.default_cfg = default_cfgs['caformer_s36']
-    if pretrained:
-        state_dict = torch.hub.load_state_dict_from_url(
-            url= model.default_cfg['url'], map_location="cpu", check_hash=True)
-        model.load_state_dict(state_dict)
     return model
 
 
-def caformer_s36_384(pretrained=False, mamba_kwargs=None,  **kwargs):
+def caformer_s36_384(pretrained=False, **kwargs):
     model = MetaFormer(
         depths=[3, 12, 18, 3],
         dims=[64, 128, 320, 512],
@@ -945,15 +807,10 @@ def caformer_s36_384(pretrained=False, mamba_kwargs=None,  **kwargs):
         head_fn=MlpHead,
         mamba_kwargs=mamba_kwargs,
         **kwargs)
-    model.default_cfg = default_cfgs['caformer_s36_384']
-    if pretrained:
-        state_dict = torch.hub.load_state_dict_from_url(
-            url= model.default_cfg['url'], map_location="cpu", check_hash=True)
-        model.load_state_dict(state_dict)
     return model
 
 
-def caformer_m36(pretrained=False, mamba_kwargs=None, **kwargs):
+def caformer_m36(pretrained=False,**kwargs):
     model = MetaFormer(
         depths=[3, 12, 18, 3],
         dims=[96, 192, 384, 576],
@@ -961,15 +818,10 @@ def caformer_m36(pretrained=False, mamba_kwargs=None, **kwargs):
         head_fn=MlpHead,
         mamba_kwargs=mamba_kwargs,
         **kwargs)
-    model.default_cfg = default_cfgs['caformer_m36']
-    if pretrained:
-        state_dict = torch.hub.load_state_dict_from_url(
-            url= model.default_cfg['url'], map_location="cpu", check_hash=True)
-        model.load_state_dict(state_dict)
     return model
 
 
-def caformer_m36_384(pretrained=False, mamba_kwargs=None, **kwargs):
+def caformer_m36_384(pretrained=False, **kwargs):
     model = MetaFormer(
         depths=[3, 12, 18, 3],
         dims=[96, 192, 384, 576],
@@ -977,11 +829,6 @@ def caformer_m36_384(pretrained=False, mamba_kwargs=None, **kwargs):
         head_fn=MlpHead,
         mamba_kwargs=mamba_kwargs,
         **kwargs)
-    model.default_cfg = default_cfgs['caformer_m36_384']
-    if pretrained:
-        state_dict = torch.hub.load_state_dict_from_url(
-            url= model.default_cfg['url'], map_location="cpu", check_hash=True)
-        model.load_state_dict(state_dict)
     return model
 
 
@@ -989,14 +836,9 @@ def caformer_b36(pretrained=False, **kwargs):
     model = MetaFormer(
         depths=[3, 12, 18, 3],
         dims=[128, 256, 512, 768],
-        token_mixers=[SepConv, SepConv, Attention, Attention],
+        token_mixers=[(None, SepConv), (None, SepConv), (Temporal_Mamba, Mamba), (Temporal_Mamba, Mamba)],
         head_fn=MlpHead,
         **kwargs)
-    model.default_cfg = default_cfgs['caformer_b36']
-    if pretrained:
-        state_dict = torch.hub.load_state_dict_from_url(
-            url= model.default_cfg['url'], map_location="cpu", check_hash=True)
-        model.load_state_dict(state_dict)
     return model
 
 
@@ -1004,23 +846,20 @@ def caformer_b36_384(pretrained=False, **kwargs):
     model = MetaFormer(
         depths=[3, 12, 18, 3],
         dims=[128, 256, 512, 768],
-        token_mixers=[SepConv, SepConv, Attention, Attention],
+        token_mixers=[(None, SepConv), (None, SepConv), (Temporal_Mamba, Mamba), (Temporal_Mamba, Mamba)],
         head_fn=MlpHead,
         **kwargs)
-    model.default_cfg = default_cfgs['caformer_b36_384']
-    if pretrained:
-        state_dict = torch.hub.load_state_dict_from_url(
-            url= model.default_cfg['url'], map_location="cpu", check_hash=True)
-        model.load_state_dict(state_dict)
     return model
 
 
+from timm.models import register_model
+register_model()
 
 import os
 from .utils import ImageMultiscale_Shape, VideoMultiscale_Shape
 from einops import rearrange
 @BACKBONE_REGISTRY.register()
-class Meta_TimeSMamba(nn.Module):
+class Meta_TimeSLSTM(nn.Module):
     def __init__(self, configs) -> None:
         super().__init__()
         version_name = configs['caformer_name']
@@ -1039,7 +878,7 @@ class Meta_TimeSMamba(nn.Module):
         pt_path = configs['pt_path']
         if pt_path is not None:
             ckpt = torch.load(os.path.join(os.getenv('PT_PATH'), pt_path), map_location='cpu')
-            caformer.load_state_dict(ckpt['state_dict']) 
+            caformer.load_state_dict(ckpt) 
         self.dims = caformer.dims
         del caformer.head
         self.downsample_layers = caformer.downsample_layers
@@ -1089,32 +928,3 @@ class Meta_TimeSMamba(nn.Module):
     def num_parameters(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
-
-
-
-# @BACKBONE_REGISTRY.register()
-# class Video2D_Caformer(nn.Module):
-#     def __init__(self, configs) -> None:
-#         super().__init__()
-#         self.image_homo = CAformer(configs=configs)
-
-#         self.multiscale_shapes = {}
-#         for name, temporal_stride, spatial_stride, dim  in zip(['res2', 'res3', 'res4', 'res5'],  
-#                                                                [1, 1, 1, 1], 
-#                                                                [4, 8, 16, 32],
-#                                                                self.image_homo.dims):
-#             self.multiscale_shapes[name] =  VideoMultiscale_Shape(temporal_stride=temporal_stride, 
-#                                                                   spatial_stride=spatial_stride, dim=dim)
-#         self.max_stride = [1, 32]
-    
-#     def forward(self, x):
-#         batch_size, _, T = x.shape[:3]
-#         x = rearrange(x, 'b c t h w -> (b t) c h w').contiguous()
-#         layer_outputs = self.image_homo(x)
-
-#         layer_outputs = {key: rearrange(value.contiguous(), '(b t) c h w -> b c t h w',b=batch_size, t=T).contiguous() \
-#                          for key, value in layer_outputs.items()}
-#         return layer_outputs
-    
-#     def num_parameters(self):
-        # return sum(p.numel() for p in self.parameters() if p.requires_grad)

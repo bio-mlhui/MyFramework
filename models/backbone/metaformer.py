@@ -1554,10 +1554,14 @@ class CAformer(nn.Module):
             caformer = caformer_m36_384_in21ft1k(pretrained=False)
         elif version_name == 'caformer_b36_384_in21ft1k':
             caformer = caformer_s36_384_in21ft1k(pretrained=False)
+        elif version_name == 'caformer_s36_384':
+            caformer = caformer_s36_384(pretrained=False)
         else:
             raise ValueError()
-        ckpt = torch.load(os.path.join(pt_path, f'ca_metaformer/{version_name}.pth'), map_location='cpu')
-        caformer.load_state_dict(ckpt) 
+        pt_path = configs['pt_path'] 
+        if pt_path is not None:
+            ckpt = torch.load(os.path.join(os.getenv('PT_PATH'), pt_path), map_location='cpu')
+            caformer.load_state_dict(ckpt) 
         self.dims = caformer.dims
         del caformer.head
         self.downsample_layers = caformer.downsample_layers
