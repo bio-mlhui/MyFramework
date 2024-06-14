@@ -91,6 +91,7 @@ class REGBB(OptimizeModel):
         video_backbone_configs = configs['model']['video_backbone'] 
         video_backbone_cls = BACKBONE_REGISTRY.get(video_backbone_configs['name'])
         self.video_backbone = video_backbone_cls(video_backbone_configs)
+        self.max_stride = self.video_backbone.max_stride
 
     @property
     def device(self):

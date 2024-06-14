@@ -244,6 +244,11 @@ class Dinov2_LORA_REG(nn.Module):
         # dinov2_vitg14 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitg14')
         # 'interpolate_antialias': False,
         # 'interpolate_offset': 0.1,   
+
+        dinov2_vits14_reg = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14_reg')  # 
+        # dinov2_vitb14_reg = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14_reg')
+        # dinov2_vitl14_reg = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14_reg')
+        # dinov2_vitg14_reg = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitg14_reg')
         if isinstance(weights, str):
             try:
                 weights = Weights[weights]
@@ -303,27 +308,27 @@ class Dinov2_LORA_REG(nn.Module):
             for p in self.ssl.parameters():
                 p.requires_grad_(False)
         # ssl_finetune
-        peft_config = LoraConfig(
-            r=8,
-            target_modules=None, # list[str]
-            lora_alpha = 8,
-            lora_dropout = 0,
-            fan_in_fan_out = True, # Set this to True if the layer to replace stores weight like (fan_in, fan_out)
-            bias="none", # If ‘all’ or ‘lora_only’, the corresponding biases will be updated during training. Be aware that this means that, even when disabling the adapters, the model will not produce the same output as the base model would have without adaptation
-            use_rslora= False, # scaling factor设置成 alpha/r 还是 alpha/sqrt(r)
-            modules_to_save = None, # List of modules apart from adapter layers to be set as trainable and saved in the final checkpoint
-            init_lora_weights='pissa', # How to initialize the weights of the adapter layers
-            layers_to_transform= None, # list[int] If a list of ints is passed, it will apply the adapter to the layer indices that are specified in this list. 
-            layers_pattern= None, #  The layer pattern name, used only if layers_to_transform is different from None.
-            rank_pattern = None, # the mapping from layer names or regexp expression to ranks which are different from the default rank specified by r.
-            alpha_pattern = None, # The mapping from layer names or regexp expression to alphas which are different from the default alpha specified by lora_alpha.
-            megatron_config = None, #  The TransformerConfig arguments for Megatron.
-            megatron_core="megatron.core", #  The core module from Megatron to use
-            loftq_config = dict, #  The configuration of LoftQ. If this is not None, then LoftQ will be used to quantize the backbone weights and initialize Lora layers. Also pass init_lora_weights='loftq'. Note that you should not pass a quantized model in this case, as LoftQ will quantize the model itself.
-            use_dora= False, # Weight-Decomposed Low-Rank Adaptation
-            layer_replication= None #  Build a new stack of layers by stacking the original model layers according to the ranges specified. This allows expanding (or shrinking) the model without duplicating the base model weights. The new layers will all have separate LoRA adapters attached to them.
-        )
-        self.ssl = LoraModel(self.ssl, config=peft_config, adapter_name='default')
+        # peft_config = LoraConfig(
+        #     r=8,
+        #     target_modules=None, # list[str]
+        #     lora_alpha = 8,
+        #     lora_dropout = 0,
+        #     fan_in_fan_out = True, # Set this to True if the layer to replace stores weight like (fan_in, fan_out)
+        #     bias="none", # If ‘all’ or ‘lora_only’, the corresponding biases will be updated during training. Be aware that this means that, even when disabling the adapters, the model will not produce the same output as the base model would have without adaptation
+        #     use_rslora= False, # scaling factor设置成 alpha/r 还是 alpha/sqrt(r)
+        #     modules_to_save = None, # List of modules apart from adapter layers to be set as trainable and saved in the final checkpoint
+        #     init_lora_weights='pissa', # How to initialize the weights of the adapter layers
+        #     layers_to_transform= None, # list[int] If a list of ints is passed, it will apply the adapter to the layer indices that are specified in this list. 
+        #     layers_pattern= None, #  The layer pattern name, used only if layers_to_transform is different from None.
+        #     rank_pattern = None, # the mapping from layer names or regexp expression to ranks which are different from the default rank specified by r.
+        #     alpha_pattern = None, # The mapping from layer names or regexp expression to alphas which are different from the default alpha specified by lora_alpha.
+        #     megatron_config = None, #  The TransformerConfig arguments for Megatron.
+        #     megatron_core="megatron.core", #  The core module from Megatron to use
+        #     loftq_config = dict, #  The configuration of LoftQ. If this is not None, then LoftQ will be used to quantize the backbone weights and initialize Lora layers. Also pass init_lora_weights='loftq'. Note that you should not pass a quantized model in this case, as LoftQ will quantize the model itself.
+        #     use_dora= False, # Weight-Decomposed Low-Rank Adaptation
+        #     layer_replication= None #  Build a new stack of layers by stacking the original model layers according to the ranges specified. This allows expanding (or shrinking) the model without duplicating the base model weights. The new layers will all have separate LoRA adapters attached to them.
+        # )
+        # self.ssl = LoraModel(self.ssl, config=peft_config, adapter_name='default')
 
     def __init__(self,
             configs,
@@ -336,26 +341,57 @@ class Dinov2_LORA_REG(nn.Module):
         task_configs = configs.pop('task_configs')
 
         self.input_tasks = task_configs.keys()
-
-
-        # ms_fusion: multiscale fm_reg -> multiscale fm_reg
-        # self.ms_fusion = META_ARCH_REGISTRY.get(ms_configs['name'])(ms_configs)
+        
+        from models.backbone.utils import ImageMultiscale_Shape
+        multiscale_shapes = {'res2': ImageMultiscale_Shape(4, self.ssl.embed_dim), 'res3': ImageMultiscale_Shape(8, self.ssl.embed_dim),
+                             'res4': ImageMultiscale_Shape(16, self.ssl.embed_dim), 'res5': ImageMultiscale_Shape(32, self.ssl.embed_dim)}
 
         task_heads = {}
-        task_registers = {}
-        task_name_to_head_cls = {'cls': ClassificationHead, 'sem': SemanticSegmentationHead, 'ins': Instance_Detection_Head}
-        for t_name, t_config in task_configs.items():
-            task_registers[t_name] = nn.Parameter(torch.zeros(1, t_config['num_registers'], self.ssl.embed_dim))
-            task_heads[t_name] = task_name_to_head_cls[t_name](t_config)  
+        self.task_to_num_regs = {'cls': 1, 'ssl': self.ssl.num_register_tokens}
+        self.task_register_pos_embeds = None 
+        # ssl的pos
+        self.ssl_reg_pos = nn.Parameter(torch.zeros(1, self.ssl.num_register_tokens, self.ssl.embed_dim))
+        
+        # sem seg的pos
+        self.sem_seg_registers = nn.Parameter(torch.zeros(1, task_configs['sem_seg']['num_registers'], self.ssl.embed_dim))
+        self.sem_seg_pos_embeds = nn.Parameter(torch.zeros(1, task_configs['sem_seg']['num_registers'], self.ssl.embed_dim))
+        self.task_to_num_regs['sem_seg'] = task_configs['sem_seg']['num_registers']
+        # ins seg的pos
+        self.ins_det_registers = nn.Parameter(torch.zeros(1, task_configs['ins_det']['num_registers'], self.ssl.embed_dim))
+        self.ins_det_pos_embeds = nn.Parameter(torch.zeros(1, task_configs['ins_det']['num_registers'], self.ssl.embed_dim))
+        self.task_to_num_regs['ins_det'] = task_configs['ins_det']['num_registers']
+        
+        self.task_to_reg_ptr = {'sem_seg': self.sem_seg_registers, 'ins_det': self.ins_det_registers}
+        
+        # head
+        # 和数据集相关?
+        
+        
+        # task_name_to_head_cls = {'cls': ClassificationHead, 'sem': SemanticSegmentationHead, 'ins': Instance_Detection_Head}
+        # for t_name, t_config in task_configs.items():
+        #     # task_heads[t_name] = task_name_to_head_cls[t_name](t_config)
 
-        # 需要数据集的参数
-        self.task_registers = nn.ModuleDict(task_registers)
-        self.task_heads = nn.ModuleDict(task_heads)
+        # ms_fusion: multiscale fm_reg -> multiscale fm_reg
+        self.ms_fusion = META_ARCH_REGISTRY.get(ms_configs['name'])(d_model=self.ssl.embed_dim,
+                                                                    configs=ms_configs,
+                                                                    multiscale_shapes=multiscale_shapes,
+                                                                    task_to_num_regs=self.task_to_num_regs)
+
+        # self.task_heads = nn.ModuleDict(task_heads)
+
+        trunc_normal_(self.ssl_reg_pos, std=0.02)
+        trunc_normal_(self.sem_seg_pos_embeds, std=0.02)
+        nn.init.normal_(self.sem_seg_registers, std=1e-6)
+        trunc_normal_(self.ins_det_pos_embeds, std=0.02)
+        nn.init.normal_(self.ins_det_registers, std=1e-6)
+        
+        self.multiscale_shapes = multiscale_shapes
+        self.max_stride = 32
 
     def forward(self, x,): # b c h w -> ms: {'res2', 'res3', 'res4, 'res5}, reg: {'reg2', 'reg3', 'reg4', 'reg5'}
         batch_size, _, H, W = x.shape
         task_registers = torch.cat([self.task_registers[t_name] for t_name in self.input_tasks], dim=1) # 1 s_t c
-        
+        output = self.ssl({'x': x, 'task_registers': task_registers})
         pass
 
 
@@ -566,13 +602,35 @@ class DinoVisionTransformer(nn.Module):
         patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).view(1, -1, dim)
         return torch.cat((class_pos_embed.unsqueeze(0), patch_pos_embed), dim=1).to(previous_dtype)
 
+    # def prepare_tokens_with_masks(self, x, masks=None):
+    #     B, nc, w, h = x.shape
+    #     x = self.patch_embed(x)
+    #     if masks is not None:
+    #         x = torch.where(masks.unsqueeze(-1), self.mask_token.to(x.dtype).unsqueeze(0), x)
+
+    #     x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1)
+    #     x = x + self.interpolate_pos_encoding(x, w, h)
+
+    #     if self.register_tokens is not None:
+    #         x = torch.cat(
+    #             (
+    #                 x[:, :1],
+    #                 self.register_tokens.expand(x.shape[0], -1, -1),
+    #                 x[:, 1:],
+    #             ),
+    #             dim=1,
+    #         )
+
+    #     return x
+
     def prepare_tokens_with_masks(self, x, masks=None):
+        x, task_registers = x['x'], x['task_registers']  # 1 s c
         B, nc, w, h = x.shape
         x = self.patch_embed(x)
         if masks is not None:
             x = torch.where(masks.unsqueeze(-1), self.mask_token.to(x.dtype).unsqueeze(0), x)
 
-        x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1)
+        x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1) # b s c
         x = x + self.interpolate_pos_encoding(x, w, h)
 
         if self.register_tokens is not None:
@@ -580,37 +638,15 @@ class DinoVisionTransformer(nn.Module):
                 (
                     x[:, :1],
                     self.register_tokens.expand(x.shape[0], -1, -1),
+                    task_registers.expand(x.shape[0], -1, -1),
                     x[:, 1:],
                 ),
                 dim=1,
-            )
-
+            )   # b 1+4+s+hw c
         return x
 
-    def forward_features_list(self, x_list, masks_list):
-        x = [self.prepare_tokens_with_masks(x, masks) for x, masks in zip(x_list, masks_list)]
-        for blk in self.blocks:
-            x = blk(x)
-
-        all_x = x
-        output = []
-        for x, masks in zip(all_x, masks_list):
-            x_norm = self.norm(x)
-            output.append(
-                {
-                    "x_norm_clstoken": x_norm[:, 0],
-                    "x_norm_regtokens": x_norm[:, 1 : self.num_register_tokens + 1],
-                    "x_norm_patchtokens": x_norm[:, self.num_register_tokens + 1 :],
-                    "x_prenorm": x,
-                    "masks": masks,
-                }
-            )
-        return output
-
     def forward_features(self, x, masks=None):
-        if isinstance(x, list):
-            return self.forward_features_list(x, masks)
-
+        num_task_registers = x['task_registers'].shape[1] if x['task_registers'] is not None else 0
         x = self.prepare_tokens_with_masks(x, masks)
 
         for blk in self.blocks:
@@ -620,7 +656,8 @@ class DinoVisionTransformer(nn.Module):
         return {
             "x_norm_clstoken": x_norm[:, 0],
             "x_norm_regtokens": x_norm[:, 1 : self.num_register_tokens + 1],
-            "x_norm_patchtokens": x_norm[:, self.num_register_tokens + 1 :],
+            "x_norm_task_regs": x_norm[:, self.num_register_tokens+1: (num_task_registers+self.num_register_tokens+1)],
+            "x_norm_patchtokens": x_norm[:, (num_task_registers+self.num_register_tokens+1) :],
             "x_prenorm": x,
             "masks": masks,
         }

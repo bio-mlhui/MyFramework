@@ -144,7 +144,7 @@ def run(rank, configs, world_size):
     #         for key, value in task_environs.items():
     #             os.environ[key] = value
     # init according to ( initckpt/path, initckpt/load_sampler, initckpt/load_optimizer )
-    trainer = task_to_trainer[configs['task']](configs=configs)
+    trainer = task_to_trainer[os.getenv('CURRENT_TASK')](configs=configs)
     comm.synchronize()
     if configs['trainer_mode'] == 'eval':
         eval_ckpts = configs['eval_ckpts']
