@@ -12,7 +12,7 @@ from .utils import _DINOV2_BASE_URL, _make_dinov2_model_name
 class Weights(Enum):
     LVD142M = "LVD142M"
 from detectron2.modeling import BACKBONE_REGISTRY
-
+import torch.nn.functional as F
 import logging
 
  
@@ -187,9 +187,12 @@ class BlockChunk(nn.ModuleList):
     
 from peft import get_peft_config, get_peft_model, LoraConfig, TaskType, LoraModel
 from detectron2.modeling import META_ARCH_REGISTRY
-
+from models.backbone.metaformer_build_tool import SepConv, Attention,  Attention_REG, \
+    DOWNSAMPLE_LAYERS_FOUR_STAGES_LAST_REG, LayerNormWithoutBias, LayerNormGeneral, MetaFormerBlock, DOWNSAMPLE_LAYERS_FOUR_STAGES_LASTTWO_REG, DOWNSAMPLE_LAYERS_FIVE_STAGES_LASTTWO_REG
+from models.backbone.metaformer_build_tool import Mlp as Meta_MLP
 @BACKBONE_REGISTRY.register()
 class Dinov2_LORA_REG(nn.Module):
+    # 假设: 在 8/阶段
     # def _load_from_state_dict(
     #     self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
     # ):
@@ -212,99 +215,12 @@ class Dinov2_LORA_REG(nn.Module):
         
     #     return super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
     
-    def has_a_peft_ssl(self, 
-                       configs,
-                       peft_configs):
-        arch_name = configs.pop('arch_name', 'vit_large')
-        img_size = configs.pop('img_size', 518)
-        patch_size = configs.pop('patch_size', 14)
-        init_values = configs.pop('init_values', 1.0)
-        ffn_layer = configs.pop('ffn_layer', 'mlp')
-        block_chunks = configs.pop('block_chunks', 0)
-        num_register_tokens = configs.pop('num_register_tokens', 0)
-        interpolate_antialias = configs.pop('interpolate_antialias', False)
-        interpolate_offset = configs.pop('interpolate_offset', 0.1)
-        pretrained = configs.pop('pretrained', True)
-        weights = configs.pop('weights', 'LVD142M')
-        freeze_ssl = configs.pop('freeze_ssl', False)   
-        pt_path = configs.pop('pt_path')
-
-        # dinov2_vitg14_reg = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitg14_reg')
-        # 'arch_name': 'vit_giant2',
-        # 'img_size': 518,
-        # 'patch_size': 14,
-        # 'init_values': 1.0,
-        # 'ffn_layer': 'swiglufused',
-        # 'block_chunks': 0,
-        # 'num_register_tokens': 4,
-        # 'interpolate_antialias': True,
-        # 'interpolate_offset': 0.0,
-        # 'pretrained': True,
-        # 'weights': 'LVD142M',
-        # dinov2_vitg14 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitg14')
-        # 'interpolate_antialias': False,
-        # 'interpolate_offset': 0.1,   
-
-        dinov2_vits14_reg = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14_reg')  # 
-        # dinov2_vitb14_reg = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14_reg')
-        # dinov2_vitl14_reg = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14_reg')
-        # dinov2_vitg14_reg = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitg14_reg')
-        if isinstance(weights, str):
-            try:
-                weights = Weights[weights]
-            except KeyError:
-                raise AssertionError(f"Unsupported weights: {weights}")
-        model_base_name = _make_dinov2_model_name(arch_name, patch_size)
-        vit_kwargs = dict(
-            img_size=img_size,
-            patch_size=patch_size,
-            init_values=init_values,
-            ffn_layer=ffn_layer,
-            block_chunks=block_chunks,
-            num_register_tokens=num_register_tokens,
-            interpolate_antialias=interpolate_antialias,
-            interpolate_offset=interpolate_offset,
-        )
-        vit_kwargs.update(**configs)
-        arch_name_to_configs = {
-            'vit_small': {
-                'embed_dim': 384,
-                'depth': 12,
-                'num_heads': 6,
-                'mlp_ratio': 4,
-                'block_fn': partial(Block, attn_class=MemEffAttention),
-            },
-            'vit_base': {
-                'embed_dim': 768,
-                'depth': 12,
-                'num_heads': 12,
-                'mlp_ratio': 4,
-                'block_fn': partial(Block, attn_class=MemEffAttention),
-            },
-            'vit_large': {
-                'embed_dim': 1024,
-                'depth': 24,
-                'num_heads': 16,
-                'mlp_ratio': 4,
-                'block_fn': partial(Block, attn_class=MemEffAttention),
-            },
-            'vit_giant2': {
-                'embed_dim': 1536,
-                'depth': 40,
-                'num_heads': 24,
-                'mlp_ratio': 4,
-                'block_fn': partial(Block, attn_class=MemEffAttention),
-            },
-
-        }
-        vit_kwargs.update(arch_name_to_configs[arch_name])
-        self.ssl = DinoVisionTransformer(**vit_kwargs)
-        model_full_name = _make_dinov2_model_name(arch_name, patch_size, num_register_tokens)
-        if model_full_name not in pt_path:
-            logging.warning('pt_path对应的预训练模型 和 现在的模型不匹配')
-        state_dict = torch.load(os.path.join(os.getenv('PT_PATH'), f'{pt_path}'), map_location='cpu')
+    def has_a_peft_ssl(self, ssl_configs, ssl_freeze, ssl_pt_path, ssl_out_dino_dim, lora_configs):
+        self.ssl = DinoVisionTransformer(**ssl_configs)
+        state_dict = torch.load(os.path.join(os.getenv('PT_PATH'), ssl_pt_path), map_location='cpu')
         self.ssl.load_state_dict(state_dict, strict=True) 
-        if freeze_ssl:
+        self.use_dino_norm = ssl_out_dino_dim
+        if ssl_freeze:
             for p in self.ssl.parameters():
                 p.requires_grad_(False)
         # ssl_finetune
@@ -330,70 +246,320 @@ class Dinov2_LORA_REG(nn.Module):
         # )
         # self.ssl = LoraModel(self.ssl, config=peft_config, adapter_name='default')
 
-    def __init__(self,
-            configs,
-        ):
-        super().__init__()
-        ssl_configs = configs.pop('ssl_configs')
-        lora_configs = configs.pop('lora_configs')
-        self.has_a_peft_ssl(ssl_configs, lora_configs)
-        ms_configs = configs.pop('ms_configs')
-        task_configs = configs.pop('task_configs')
+    def has_metaformer(self, 
+                       configs,
+                       mlps=Meta_MLP,
+                       norm_layers=partial(LayerNormWithoutBias, eps=1e-6), # partial(LayerNormGeneral, eps=1e-6, bias=False),
+                       layer_scale_init_values=None,               
+                 ):
+        meta_configs, ssl_configs = configs.pop('meta_configs'), configs.pop('ssl_configs')
+        name_to_configs = {
+            'dinov2_vits14_reg': {
+                'img_size': 518,
+                'patch_size': 14,
+                'init_values': 1.0,
+                'ffn_layer': 'mlp',
+                'block_chunks': 0,
+                'num_register_tokens': 4, 
+                'interpolate_antialias': True,
+                'interpolate_offset': 0.0,
+                'embed_dim': 384,
+                'depth': 12,
+                'num_heads': 6,
+                'mlp_ratio': 4,
+                'block_fn': partial(Block, attn_class=MemEffAttention),
+            },
+            'dinov2_vitb14_reg': {
+                'img_size': 518,
+                'patch_size': 14,
+                'init_values': 1.0,
+                'ffn_layer': 'mlp',
+                'block_chunks': 0,
+                'num_register_tokens': 4, 
+                'interpolate_antialias': True,
+                'interpolate_offset': 0.0,
+                'embed_dim': 768,
+                'depth': 12,
+                'num_heads': 12,
+                'mlp_ratio': 4,
+                'block_fn': partial(Block, attn_class=MemEffAttention),              
+            },
+            'dinov2_vitl14_reg': {
+                'img_size': 518,
+                'patch_size': 14,
+                'init_values': 1.0,
+                'ffn_layer': 'mlp',
+                'block_chunks': 0,
+                'num_register_tokens': 4, 
+                'interpolate_antialias': True,
+                'interpolate_offset': 0.0,
+                'embed_dim': 1024,
+                'depth': 24,
+                'num_heads': 16,
+                'mlp_ratio': 4,
+                'block_fn': partial(Block, attn_class=MemEffAttention),              
+            },
+            'dinov2_vitg14_reg': {
+                'img_size': 518,
+                'patch_size': 14,
+                'init_values': 1.0,
+                'ffn_layer': 'swiglufused',
+                'block_chunks': 0,
+                'num_register_tokens': 4, 
+                'interpolate_antialias': True,
+                'interpolate_offset': 0.0,
+                'embed_dim': 1536,
+                'depth': 40,
+                'num_heads': 24,
+                'mlp_ratio': 4,
+                'block_fn': partial(Block, attn_class=MemEffAttention),             
+            },
+        }
+        dino_configs, ssl_pt_path, ssl_freeze, ssl_out_dino_dim, ssl_lora_configs = \
+            name_to_configs[ssl_configs['dino_name']], ssl_configs['pt_path'], ssl_configs['freeze'], ssl_configs['out_dino_norm'], ssl_configs['lora_configs']
+        
+        depths, dims, token_mixers, drop_path_rate, downsample_layer_name, self.first_attn_stage_idx = meta_configs.pop('depths'), meta_configs.pop('dims'), meta_configs.pop('token_mixers'),\
+            meta_configs.pop('drop_path_rate'),  meta_configs.pop('downsample_layer_name'), meta_configs.pop('first_attn_stage_idx')
+        res_scale_init_values = meta_configs.pop('res_scale_init_values')
+        if downsample_layer_name == 'four_stage_last_reg':
+            downsample_layers = DOWNSAMPLE_LAYERS_FOUR_STAGES_LAST_REG
+        elif downsample_layer_name == 'four_stage_lasttwo_reg':
+            downsample_layers = DOWNSAMPLE_LAYERS_FOUR_STAGES_LASTTWO_REG
+        elif downsample_layer_name == 'five_stage_lasttwo_reg':
+            downsample_layers = DOWNSAMPLE_LAYERS_FIVE_STAGES_LASTTWO_REG
+        else:
+            raise ValueError()
+        
+        dino_stage_idx, num_stage = depths.index(None), len(depths)
+        dims[dino_stage_idx], depths[dino_stage_idx] = dino_configs['embed_dim'], dino_configs['depth']
+        self.dims = dims
+        name_to_token_mixers = {'conv': SepConv, 'attn': Attention, 'first_attn': partial(Attention_REG, reg_cls=self), 'iden': nn.Identity}
+        
+        down_dims = [3] + dims
+        self.downsample_layers = nn.ModuleList([downsample_layers[i](down_dims[i], down_dims[i+1]) for i in range(num_stage)])
+        
+        assert len(token_mixers) == num_stage
+        depth_token_mixers = []
+        for stage_idx, (haosen_dep, haosen_mixer) in enumerate(zip(depths, token_mixers)):
+            if isinstance(haosen_mixer, str):
+                depth_token_mixers.extend([name_to_token_mixers[haosen_mixer]] * haosen_dep)
+            elif isinstance(haosen_mixer, list):
+                for hhsen_mixer, hhsen_depth in haosen_mixer:
+                    assert isinstance(hhsen_mixer, str) and isinstance(hhsen_depth, int)
+                    depth_token_mixers.extend([name_to_token_mixers[hhsen_mixer]] * hhsen_depth)
+            elif haosen_mixer is None:
+                depth_token_mixers.extend([None] * haosen_dep)
+            else:
+                raise ValueError()
+        assert len(depth_token_mixers) == sum(depths)
+        
+        if not isinstance(mlps, (list, tuple)):
+            mlps = [mlps] * num_stage
+        if not isinstance(norm_layers, (list, tuple)):
+            norm_layers = [norm_layers] * num_stage
 
-        self.input_tasks = task_configs.keys()
+        dp_rates=[x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]
+
+        if not isinstance(layer_scale_init_values, (list, tuple)):
+            layer_scale_init_values = [layer_scale_init_values] * num_stage
+        if not isinstance(res_scale_init_values, (list, tuple)):
+            res_scale_init_values = [res_scale_init_values] * num_stage
+        cur = 0
+        self.before_stages = nn.ModuleList()
+        self.after_stages = nn.ModuleList()
+        for i in range(num_stage):
+            if i != dino_stage_idx:
+                stage = nn.Sequential(
+                    *[MetaFormerBlock(dim=dims[i],
+                    token_mixer=depth_token_mixers[cur+j],
+                    mlp=mlps[i],
+                    norm_layer=norm_layers[i],
+                    drop_path=dp_rates[cur + j],
+                    layer_scale_init_value=layer_scale_init_values[i],
+                    res_scale_init_value=res_scale_init_values[i],
+                    ) for j in range(depths[i])]
+                )
+                if i < dino_stage_idx:
+                    self.before_stages.append(stage)
+                elif i > dino_stage_idx:
+                    self.after_stages.append(stage)   
+            else:
+                dino_configs['drop_path_rate_list'] = dp_rates[cur: (cur+depths[i])]
+                self.has_a_peft_ssl(ssl_configs=dino_configs, ssl_freeze=ssl_freeze, ssl_pt_path=ssl_pt_path, lora_configs=ssl_lora_configs,
+                                    ssl_out_dino_dim=ssl_out_dino_dim)
+                self.alias_conv = nn.Conv2d(self.ssl.embed_dim, self.ssl.embed_dim, kernel_size=3, padding=1,)
+                self.alias_norm = partial(LayerNormGeneral, bias=False, eps=1e-6)(self.ssl.embed_dim)
+            cur += depths[i]
+        def _init_weights(m):
+            if isinstance(m, (nn.Conv2d, nn.Linear)):
+                trunc_normal_(m.weight, std=.02)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+        self.before_stages.apply(_init_weights)
+        self.after_stages.apply(_init_weights)
+        self.downsample_layers.apply(_init_weights)
+
+    def __init__(self, configs,):
+        super().__init__()
+        self.has_metaformer(configs=configs)    
         
         from models.backbone.utils import ImageMultiscale_Shape
-        multiscale_shapes = {'res2': ImageMultiscale_Shape(4, self.ssl.embed_dim), 'res3': ImageMultiscale_Shape(8, self.ssl.embed_dim),
-                             'res4': ImageMultiscale_Shape(16, self.ssl.embed_dim), 'res5': ImageMultiscale_Shape(32, self.ssl.embed_dim)}
-
-        task_heads = {}
+        multiscale_shapes = {}
+        for idx, _ in enumerate(self.before_stages):
+            multiscale_shapes[f'res{idx+2}'] = ImageMultiscale_Shape(2**(idx+2), self.dims[idx])
+        multiscale_shapes[f'res{len(self.before_stages)+2}'] = ImageMultiscale_Shape(self.ssl.patch_size, self.ssl.embed_dim) 
+        for idx, _ in enumerate(self.after_stages):
+            multiscale_shapes[f'res{len(self.before_stages)+1+idx+2}'] = ImageMultiscale_Shape(self.ssl.patch_size * (2**(idx+1)), self.dims[len(self.before_stages)+idx+1])        
+        self.multiscale_shapes = multiscale_shapes
+        self.max_stride = self.ssl.patch_size * (2**(len(self.after_stages)))
+        task_configs = configs.pop('task_configs')
+        self.local_tasks, self.global_tasks = configs.pop('local_tasks'), configs.pop('global_tasks')
         self.task_to_num_regs = {'cls': 1, 'ssl': self.ssl.num_register_tokens}
-        self.task_register_pos_embeds = None 
         # ssl的pos
         self.ssl_reg_pos = nn.Parameter(torch.zeros(1, self.ssl.num_register_tokens, self.ssl.embed_dim))
         
-        # sem seg的pos
-        self.sem_seg_registers = nn.Parameter(torch.zeros(1, task_configs['sem_seg']['num_registers'], self.ssl.embed_dim))
-        self.sem_seg_pos_embeds = nn.Parameter(torch.zeros(1, task_configs['sem_seg']['num_registers'], self.ssl.embed_dim))
+        # local_registers
+        self.sem_seg_reg = nn.Parameter(torch.zeros(1, task_configs['sem_seg']['num_registers'], self.dims[self.first_attn_stage_idx]))
+        self.sem_seg_reg_pos = nn.Parameter(torch.zeros(1, task_configs['sem_seg']['num_registers'], self.dims[self.first_attn_stage_idx]))
         self.task_to_num_regs['sem_seg'] = task_configs['sem_seg']['num_registers']
-        # ins seg的pos
-        self.ins_det_registers = nn.Parameter(torch.zeros(1, task_configs['ins_det']['num_registers'], self.ssl.embed_dim))
-        self.ins_det_pos_embeds = nn.Parameter(torch.zeros(1, task_configs['ins_det']['num_registers'], self.ssl.embed_dim))
+        self.ins_det_reg = nn.Parameter(torch.zeros(1, task_configs['ins_det']['num_registers'], self.dims[self.first_attn_stage_idx]))
+        self.ins_det_reg_pos = nn.Parameter(torch.zeros(1, task_configs['ins_det']['num_registers'], self.dims[self.first_attn_stage_idx]))
         self.task_to_num_regs['ins_det'] = task_configs['ins_det']['num_registers']
         
-        self.task_to_reg_ptr = {'sem_seg': self.sem_seg_registers, 'ins_det': self.ins_det_registers}
-        
+        self.task_to_reg_ptr = {'sem_seg': self.sem_seg_reg, 'ins_det': self.ins_det_reg, 'cls': self.ssl.cls_token, 'ssl': self.ssl.register_tokens}
+        self.task_to_reg_pos_ptr = {'sem_seg': self.sem_seg_reg_pos, 'ins_det': self.ins_det_reg_pos, 'ssl': self.ssl_reg_pos}
+
+        trunc_normal_(self.ssl_reg_pos, std=0.02)
+        trunc_normal_(self.sem_seg_reg_pos, std=0.02)
+        nn.init.normal_(self.sem_seg_reg, std=1e-6)
+        trunc_normal_(self.ins_det_reg_pos, std=0.02)
+        nn.init.normal_(self.ins_det_reg, std=1e-6)
+       
         # head
         # 和数据集相关?
-        
-        
         # task_name_to_head_cls = {'cls': ClassificationHead, 'sem': SemanticSegmentationHead, 'ins': Instance_Detection_Head}
         # for t_name, t_config in task_configs.items():
         #     # task_heads[t_name] = task_name_to_head_cls[t_name](t_config)
-
-        # ms_fusion: multiscale fm_reg -> multiscale fm_reg
-        self.ms_fusion = META_ARCH_REGISTRY.get(ms_configs['name'])(d_model=self.ssl.embed_dim,
+        # self.task_heads = nn.ModuleDict(task_heads)
+        ms_configs = configs.pop('ms_configs')
+        self.ms_fusion = META_ARCH_REGISTRY.get(ms_configs['name'])(d_model=256,
                                                                     configs=ms_configs,
                                                                     multiscale_shapes=multiscale_shapes,
                                                                     task_to_num_regs=self.task_to_num_regs)
+    
+    def get_local_registers(self,):
+        register_toks = torch.cat([self.task_to_reg_ptr[haosen]  for haosen in self.local_tasks], dim=1) # 1 s c
+        # 1 c -> 1 1 c,  1 s c
+        register_tok_poses = torch.cat([self.task_to_reg_pos_ptr[haosen] for haosen in self.local_tasks], dim=1)
+        return register_toks, register_tok_poses
+    
+    def get_global_registers(self, ):
+        register_toks = torch.cat([self.task_to_reg_ptr[haosen]  for haosen in self.global_tasks], dim=1) # 1 s c
+        # 1 c -> 1 1 c,  1 s c
+        register_tok_poses = torch.cat([self.task_to_reg_pos_ptr[haosen] if haosen != 'cls' else self.ssl.pos_embed[:, 0].unsqueeze(0)\
+            for haosen in self.global_tasks], dim=1) 
+        return  register_toks,  register_tok_poses  
 
-        # self.task_heads = nn.ModuleDict(task_heads)
+    def prepare_tokens_with_masks(self, x, masks=None):
+        x, task_registers = x['x'], x['task_registers']  # 1 s c
+        B, nc, w, h = x.shape
+        x = self.patch_embed(x)
+        if masks is not None:
+            x = torch.where(masks.unsqueeze(-1), self.mask_token.to(x.dtype).unsqueeze(0), x)
 
-        trunc_normal_(self.ssl_reg_pos, std=0.02)
-        trunc_normal_(self.sem_seg_pos_embeds, std=0.02)
-        nn.init.normal_(self.sem_seg_registers, std=1e-6)
-        trunc_normal_(self.ins_det_pos_embeds, std=0.02)
-        nn.init.normal_(self.ins_det_registers, std=1e-6)
+        x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1) # b s c
+        x = x + self.interpolate_pos_encoding(x, w, h)
+
+        if self.register_tokens is not None:
+            x = torch.cat(
+                (
+                    x[:, :1],
+                    self.register_tokens.expand(x.shape[0], -1, -1),
+                    task_registers.expand(x.shape[0], -1, -1),
+                    x[:, 1:],
+                ),
+                dim=1,
+            )   # b 1+4+s+hw c
+        return x
+
+    def forward_before(self, x):
+        ret = []
+        for i in range(len(self.before_stages)):
+            x = self.downsample_layers[i](x)
+            x = self.before_stages[i](x)
+            ret.append(x.contiguous())
+        return ret
+    
+    def forward_after(self, registers, x):
+        ret = []
+        for i in range(len(self.after_stages)):
+            registers, x = self.downsample_layers[i+len(self.before_stages)+1](registers, x)
+            _, H, W, _ = x.shape
+            input = torch.cat([registers, x.flatten(1,2)], dim=1) # b reg_hw c
+            input = self.after_stages[i](input)
+            registers, x = input.split([registers.shape[1], H*W], dim=1)
+            x = x.view(x.shape[0], H, W, -1)
+            ret.append((registers, x))
+        return ret
+
+    # NestTensor?
+    def forward_dino_ssl(self, x, local_regs, last_x, masks=None,): # b c h w -> ms: {'res2', 'res3', 'res4, 'res5}, reg: {'reg2', 'reg3', 'reg4', 'reg5'}
+        batch_size, _, H, W = x.shape # b c h w
+        patch_size = [H // self.ssl.patch_size, W // self.ssl.patch_size]
+        x = self.ssl.patch_embed(x) # b c h w -> b hw c
+        x = x.view(x.shape[0], patch_size[0], patch_size[1], x.shape[-1]) # b h w c
+ 
+        last_x = F.interpolate(last_x.permute(0, 3, 1, 2), patch_size, mode='bilinear', align_corners=False).contiguous() # b c h w
+        last_x = self.alias_norm(self.alias_conv(last_x).permute(0, 2, 3, 1)) # b h w c
+        # x = self.alias_norm(self.alias_conv(x + last_x).permute(0, 2, 3, 1).flatten(1,2).contiguous())
+        x = (x + last_x).flatten(1, 2) # b hw c
+        if masks is not None:
+            x = torch.where(masks.unsqueeze(-1), self.ssl.mask_token.to(x.dtype).unsqueeze(0), x)    
+        x_poses = self.ssl.interpolate_pos_encoding_hw(x, W, H) # b hw c
+        x = x + x_poses
+                
+        global_regs, global_reg_poses = self.get_global_registers()
+        global_regs = global_regs + global_reg_poses
+        x = torch.cat([local_regs, global_regs, x], dim=1) # b reg_hw c
         
-        self.multiscale_shapes = multiscale_shapes
-        self.max_stride = 32
+        for blk in self.ssl.blocks:
+            x = blk(x)
+        if self.use_dino_norm:
+            x = self.ssl.norm(x)
 
-    def forward(self, x,): # b c h w -> ms: {'res2', 'res3', 'res4, 'res5}, reg: {'reg2', 'reg3', 'reg4', 'reg5'}
+        reg, x = x.split([x.shape[1] - patch_size[0]*patch_size[1], patch_size[0]*patch_size[1]], dim=1) # b reg_hw c -> b reg c; b hw c
+        x = x.view(x.shape[0], patch_size[0], patch_size[1], -1).contiguous()
+        return reg, x
+    
+    
+    def forward(self, x, masks=None):
+        
+        masks = None # b t h w
+        x = x # b c t h w
+        # masks = masks.squeeze(1).flatten(1) # b hw
+        x = x.squeeze(2) # b c h w
         batch_size, _, H, W = x.shape
-        task_registers = torch.cat([self.task_registers[t_name] for t_name in self.input_tasks], dim=1) # 1 s_t c
-        output = self.ssl({'x': x, 'task_registers': task_registers})
-        pass
-
+        # stage1
+        ret = []
+        before_feats = self.forward_before(x) # [b h/4 w/4 c, b reg_h/8*w/8 2c]
+        ret.extend(before_feats)
+        
+        last_feat = before_feats[-1] # b reg_hw c
+        
+        num_local_regs = sum([self.task_to_num_regs[haosen] for haosen in self.local_tasks])
+        # reg, hw
+        local_regs, last_x = last_feat.split([num_local_regs, last_feat.shape[1] - num_local_regs], dim=1)
+        before_stride = 4 * (2 ** (len(self.before_stages) - 1))
+        last_x = last_x.view(batch_size, H//before_stride, W//before_stride, -1)
+        local_regs, last_x = self.downsample_layers[len(self.before_stages)](local_regs, last_x) 
+        
+        registers, x = self.forward_dino_ssl(x, local_regs=local_regs, last_x=last_x, masks=masks)
+        ret.append((registers, x))
+        
+        after_feats = self.forward_after(registers=registers, x=x)
+        ret.extend(after_feats)
+        
+        return {key: feat for key, feat in zip(list(self.multiscale_shapes.keys()), ret)}
 
 
 class Instance_Detection_Head(nn.Module):
@@ -429,7 +595,6 @@ class ClassificationHead(nn.Module):
         pass
 
 
-
 class DinoVisionTransformer(nn.Module):
     def __init__(
         self,
@@ -445,6 +610,7 @@ class DinoVisionTransformer(nn.Module):
         proj_bias=True,
         drop_path_rate=0.0,
         drop_path_uniform=False,
+        drop_path_rate_list=None,
         init_values=None,  # for layerscale: None or 0 => no layerscale
         embed_layer=PatchEmbed,
         act_layer=nn.GELU,
@@ -507,6 +673,10 @@ class DinoVisionTransformer(nn.Module):
         else:
             dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
 
+        if drop_path_rate_list is not None:
+            assert depth == len(drop_path_rate_list)
+            dpr = drop_path_rate_list
+        
         if ffn_layer == "mlp":
             logging.debug("using MLP layer as FFN")
             ffn_layer = Mlp
@@ -569,6 +739,7 @@ class DinoVisionTransformer(nn.Module):
         named_apply(init_weights_vit_timm, self)
 
     def interpolate_pos_encoding(self, x, w, h):
+        # b 1_hw c
         previous_dtype = x.dtype
         npatch = x.shape[1] - 1
         N = self.pos_embed.shape[1] - 1
@@ -602,65 +773,40 @@ class DinoVisionTransformer(nn.Module):
         patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).view(1, -1, dim)
         return torch.cat((class_pos_embed.unsqueeze(0), patch_pos_embed), dim=1).to(previous_dtype)
 
-    # def prepare_tokens_with_masks(self, x, masks=None):
-    #     B, nc, w, h = x.shape
-    #     x = self.patch_embed(x)
-    #     if masks is not None:
-    #         x = torch.where(masks.unsqueeze(-1), self.mask_token.to(x.dtype).unsqueeze(0), x)
+    def interpolate_pos_encoding_hw(self, x, w, h):
+        # b hw c
+        previous_dtype = x.dtype
+        npatch = x.shape[1]
+        N = self.pos_embed.shape[1] - 1
+        if npatch == N and w == h:
+            return self.pos_embed
+        pos_embed = self.pos_embed.float()
+        patch_pos_embed = pos_embed[:, 1:]
+        dim = x.shape[-1]
+        w0 = w // self.patch_size
+        h0 = h // self.patch_size
+        M = int(math.sqrt(N))  # Recover the number of patches in each dimension
+        assert N == M * M
+        kwargs = {}
+        if self.interpolate_offset:
+            # Historical kludge: add a small number to avoid floating point error in the interpolation, see https://github.com/facebookresearch/dino/issues/8
+            # Note: still needed for backward-compatibility, the underlying operators are using both output size and scale factors
+            sx = float(w0 + self.interpolate_offset) / M
+            sy = float(h0 + self.interpolate_offset) / M
+            kwargs["scale_factor"] = (sx, sy)
+        else:
+            # Simply specify an output size instead of a scale factor
+            kwargs["size"] = (w0, h0)
+        patch_pos_embed = nn.functional.interpolate(
+            patch_pos_embed.reshape(1, M, M, dim).permute(0, 3, 1, 2),
+            mode="bicubic",
+            antialias=self.interpolate_antialias,
+            **kwargs,
+        )
+        assert (w0, h0) == patch_pos_embed.shape[-2:]
+        patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).view(1, -1, dim) # b hw c
+        return patch_pos_embed.to(previous_dtype)
 
-    #     x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1)
-    #     x = x + self.interpolate_pos_encoding(x, w, h)
-
-    #     if self.register_tokens is not None:
-    #         x = torch.cat(
-    #             (
-    #                 x[:, :1],
-    #                 self.register_tokens.expand(x.shape[0], -1, -1),
-    #                 x[:, 1:],
-    #             ),
-    #             dim=1,
-    #         )
-
-    #     return x
-
-    def prepare_tokens_with_masks(self, x, masks=None):
-        x, task_registers = x['x'], x['task_registers']  # 1 s c
-        B, nc, w, h = x.shape
-        x = self.patch_embed(x)
-        if masks is not None:
-            x = torch.where(masks.unsqueeze(-1), self.mask_token.to(x.dtype).unsqueeze(0), x)
-
-        x = torch.cat((self.cls_token.expand(x.shape[0], -1, -1), x), dim=1) # b s c
-        x = x + self.interpolate_pos_encoding(x, w, h)
-
-        if self.register_tokens is not None:
-            x = torch.cat(
-                (
-                    x[:, :1],
-                    self.register_tokens.expand(x.shape[0], -1, -1),
-                    task_registers.expand(x.shape[0], -1, -1),
-                    x[:, 1:],
-                ),
-                dim=1,
-            )   # b 1+4+s+hw c
-        return x
-
-    def forward_features(self, x, masks=None):
-        num_task_registers = x['task_registers'].shape[1] if x['task_registers'] is not None else 0
-        x = self.prepare_tokens_with_masks(x, masks)
-
-        for blk in self.blocks:
-            x = blk(x)
-
-        x_norm = self.norm(x)
-        return {
-            "x_norm_clstoken": x_norm[:, 0],
-            "x_norm_regtokens": x_norm[:, 1 : self.num_register_tokens + 1],
-            "x_norm_task_regs": x_norm[:, self.num_register_tokens+1: (num_task_registers+self.num_register_tokens+1)],
-            "x_norm_patchtokens": x_norm[:, (num_task_registers+self.num_register_tokens+1) :],
-            "x_prenorm": x,
-            "masks": masks,
-        }
 
     def _get_intermediate_layers_not_chunked(self, x, n=1):
         x = self.prepare_tokens_with_masks(x)
@@ -714,12 +860,11 @@ class DinoVisionTransformer(nn.Module):
             return tuple(zip(outputs, class_tokens))
         return tuple(outputs)
 
-    def forward(self, *args, is_training=True, **kwargs):
-        ret = self.forward_features(*args, **kwargs)
-        if is_training:
-            return ret
-        else:
-            return self.head(ret["x_norm_clstoken"])
+    def forward(self, x, masks=None):
+        # b s c -> b s c
+        for blk in self.blocks:
+            x = blk(x)
+        return x
 
 
 def init_weights_vit_timm(module: nn.Module, name: str = ""):

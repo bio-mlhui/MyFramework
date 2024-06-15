@@ -163,8 +163,9 @@ class VideoToTensor:
 @VIS_EVAL_AUG_REGISTRY.register()
 class WeakPolyP_EvalAug:
     def __init__(self, configs) -> None:
+        size = configs.pop('size', 352)
         self.resize = RandomResize(
-            sizes=[[352, 352]],
+            sizes=[[size, size]],
         )
         self.tensor_video = VideoToTensor() # 先进行tensor
 

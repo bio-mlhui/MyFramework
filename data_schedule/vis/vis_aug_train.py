@@ -180,8 +180,9 @@ class Compose:
 @VIS_TRAIN_AUG_REGISTRY.register()
 class WeakPolyP_TrainAug:
     def __init__(self, configs) -> None:
+        size = configs.pop('size', 352)
         self.transform = A.ReplayCompose([
-            A.Resize(352, 352),
+            A.Resize(size, size),
             A.HorizontalFlip(p=0.5),
             A.VerticalFlip(p=0.5),
             A.RandomRotate90(p=0.5),
