@@ -14,7 +14,7 @@ class Weights(Enum):
 from detectron2.modeling import BACKBONE_REGISTRY
 import torch.nn.functional as F
 import logging
-
+import detectron2.utils.comm as comm
  
 def _make_dinov2_model(
     *,
@@ -252,7 +252,8 @@ class Dinov2_LORA_REG(nn.Module):
                        norm_layers=partial(LayerNormWithoutBias, eps=1e-6), # partial(LayerNormGeneral, eps=1e-6, bias=False),
                        layer_scale_init_values=None,               
                  ):
-        meta_configs, ssl_configs = configs.pop('meta_configs'), configs.pop('ssl_configs')
+        meta_configs= configs.pop('meta_configs')
+        ssl_configs= meta_configs.pop('ssl_configs')
         name_to_configs = {
             'dinov2_vits14_reg': {
                 'img_size': 518,
@@ -333,7 +334,8 @@ class Dinov2_LORA_REG(nn.Module):
         dino_stage_idx, num_stage = depths.index(None), len(depths)
         dims[dino_stage_idx], depths[dino_stage_idx] = dino_configs['embed_dim'], dino_configs['depth']
         self.dims = dims
-        name_to_token_mixers = {'conv': SepConv, 'attn': Attention, 'first_attn': partial(Attention_REG, reg_cls=self), 'iden': nn.Identity}
+        name_to_token_mixers = {'conv': SepConv, 'attn_32': Attention, 'first_attn_32': partial(Attention_REG, reg_cls=self),\
+            'iden': nn.Identity, 'attn_64': partial(Attention, head_dim=64), 'first_attn_64': partial(Attention_REG, reg_cls=self, head_dim=64),  }
         
         down_dims = [3] + dims
         self.downsample_layers = nn.ModuleList([downsample_layers[i](down_dims[i], down_dims[i+1]) for i in range(num_stage)])
@@ -398,7 +400,15 @@ class Dinov2_LORA_REG(nn.Module):
         self.before_stages.apply(_init_weights)
         self.after_stages.apply(_init_weights)
         self.downsample_layers.apply(_init_weights)
-
+        self.dino_stage_idx = dino_stage_idx
+        stage_to_level_embed = [None] * self.first_attn_stage_idx
+        for haosen in range(self.first_attn_stage_idx, len(depths)):
+            level_embed = nn.Embedding(1, self.dims[haosen])
+            torch.nn.init.normal_(level_embed.weight)
+            stage_to_level_embed.append(level_embed)
+        
+        self.stage_to_level_embed = nn.ModuleList(stage_to_level_embed)
+        
     def __init__(self, configs,):
         super().__init__()
         self.has_metaformer(configs=configs)    
@@ -442,11 +452,23 @@ class Dinov2_LORA_REG(nn.Module):
         #     # task_heads[t_name] = task_name_to_head_cls[t_name](t_config)
         # self.task_heads = nn.ModuleDict(task_heads)
         ms_configs = configs.pop('ms_configs')
-        self.ms_fusion = META_ARCH_REGISTRY.get(ms_configs['name'])(d_model=256,
-                                                                    configs=ms_configs,
+        ms_configs['deform_configs']['cls_ssl_num_scales'] = len(self.downsample_layers) - self.dino_stage_idx
+        ms_configs['deform_configs']['tasks'] = self.local_tasks + self.global_tasks
+        self.ms_fusion = META_ARCH_REGISTRY.get(ms_configs['name'])(configs=ms_configs,
                                                                     multiscale_shapes=multiscale_shapes,
                                                                     task_to_num_regs=self.task_to_num_regs)
-    
+        if comm.is_main_process():
+            logging.debug(f'SSL的总参数数量:{sum(p.numel() for p in self.ssl.parameters())}')
+            logging.debug(f'MS的总参数数量:{sum(p.numel() for p in self.ms_fusion.parameters())}')
+            logging.debug(f'before的总参数数量:{sum(p.numel() for p in self.before_stages.parameters())}')
+            logging.debug(f'after的总参数数量:{sum(p.numel() for p in self.after_stages.parameters())}')
+            logging.debug(f'downsample的总参数数量:{sum(p.numel() for p in self.downsample_layers.parameters())}')
+            logging.debug(f'ssl_reg_pos的总参数数量:{sum(p.numel() for p in [self.ssl_reg_pos,])}')
+            logging.debug(f'task_registers的总参数数量:{sum(p.numel() for p in [self.ins_det_reg, self.sem_seg_reg])}')
+            logging.debug(f'task_registers_pos的总参数数量:{sum(p.numel() for p in [self.ins_det_reg_pos, self.sem_seg_reg_pos])}')
+            logging.debug(f'alias_conv_norm的总参数数量:{sum(p.numel() for p in self.alias_conv.parameters())}') # 5M
+            logging.debug(f'alias_conv_norm的总参数数量:{sum(p.numel() for p in self.alias_norm.parameters())}')
+            pass
     def get_local_registers(self,):
         register_toks = torch.cat([self.task_to_reg_ptr[haosen]  for haosen in self.local_tasks], dim=1) # 1 s c
         # 1 c -> 1 1 c,  1 s c
@@ -459,6 +481,9 @@ class Dinov2_LORA_REG(nn.Module):
         register_tok_poses = torch.cat([self.task_to_reg_pos_ptr[haosen] if haosen != 'cls' else self.ssl.pos_embed[:, 0].unsqueeze(0)\
             for haosen in self.global_tasks], dim=1) 
         return  register_toks,  register_tok_poses  
+
+    def get_first_attn_level_embed(self,):
+        return self.stage_to_level_embed[self.first_attn_stage_idx].weight
 
     def prepare_tokens_with_masks(self, x, masks=None):
         x, task_registers = x['x'], x['task_registers']  # 1 s c
@@ -487,15 +512,17 @@ class Dinov2_LORA_REG(nn.Module):
         for i in range(len(self.before_stages)):
             x = self.downsample_layers[i](x)
             x = self.before_stages[i](x)
-            ret.append(x.contiguous())
+            ret.append(x.contiguous()) # b hw c / b reg_hw c
         return ret
     
     def forward_after(self, registers, x):
         ret = []
         for i in range(len(self.after_stages)):
-            registers, x = self.downsample_layers[i+len(self.before_stages)+1](registers, x)
+            registers, x = self.downsample_layers[i+self.dino_stage_idx+1](registers, x)
             _, H, W, _ = x.shape
             input = torch.cat([registers, x.flatten(1,2)], dim=1) # b reg_hw c
+            input = input + self.stage_to_level_embed[i+self.dino_stage_idx+1].weight
+            
             input = self.after_stages[i](input)
             registers, x = input.split([registers.shape[1], H*W], dim=1)
             x = x.view(x.shape[0], H, W, -1)
@@ -517,6 +544,7 @@ class Dinov2_LORA_REG(nn.Module):
             x = torch.where(masks.unsqueeze(-1), self.ssl.mask_token.to(x.dtype).unsqueeze(0), x)    
         x_poses = self.ssl.interpolate_pos_encoding_hw(x, W, H) # b hw c
         x = x + x_poses
+        x = x + self.stage_to_level_embed[self.dino_stage_idx].weight
                 
         global_regs, global_reg_poses = self.get_global_registers()
         global_regs = global_regs + global_reg_poses
@@ -541,25 +569,43 @@ class Dinov2_LORA_REG(nn.Module):
         batch_size, _, H, W = x.shape
         # stage1
         ret = []
-        before_feats = self.forward_before(x) # [b h/4 w/4 c, b reg_h/8*w/8 2c]
-        ret.extend(before_feats)
-        
-        last_feat = before_feats[-1] # b reg_hw c
+        ret.extend( self.forward_before(x)) # # [b h/4 w/4 c, b reg_h/8*w/8 2c]
+        assert self.first_attn_stage_idx == 1 and len(self.before_stages) == 2
+        last_feat = ret[-1] # b reg_hw c
         
         num_local_regs = sum([self.task_to_num_regs[haosen] for haosen in self.local_tasks])
         # reg, hw
         local_regs, last_x = last_feat.split([num_local_regs, last_feat.shape[1] - num_local_regs], dim=1)
         before_stride = 4 * (2 ** (len(self.before_stages) - 1))
-        last_x = last_x.view(batch_size, H//before_stride, W//before_stride, -1)
-        local_regs, last_x = self.downsample_layers[len(self.before_stages)](local_regs, last_x) 
+        last_x = last_x.view(batch_size, H//before_stride, W//before_stride, -1).contiguous()
+        ret[-1] = (local_regs, last_x) # b s c, b h w c
         
-        registers, x = self.forward_dino_ssl(x, local_regs=local_regs, last_x=last_x, masks=masks)
-        ret.append((registers, x))
+        local_regs, last_x = self.downsample_layers[len(self.before_stages)](local_regs, last_x) 
+        registers, x = self.forward_dino_ssl(x, local_regs=local_regs, last_x=last_x, masks=masks) # b s c, b h w c
+        ret.append((registers, x.contiguous()))
         
         after_feats = self.forward_after(registers=registers, x=x)
         ret.extend(after_feats)
         
-        return {key: feat for key, feat in zip(list(self.multiscale_shapes.keys()), ret)}
+        output = {}
+        for haosen in range(self.first_attn_stage_idx):
+            assert isinstance(ret[haosen], torch.Tensor)
+            output[f'res{haosen+2}'] = {'hw': ret[haosen]}
+        for haosen in range(self.first_attn_stage_idx, self.dino_stage_idx):
+            stage_output = {'hw': ret[haosen][1]}
+            reg_feats = ret[haosen][0].split([self.task_to_num_regs[haosen] for haosen in self.local_tasks], dim=1)
+            for idx, ltask in enumerate(self.local_tasks):
+                stage_output[ltask] = reg_feats[idx]
+            output[f'res{haosen+2}'] = stage_output
+        for haosen in range(self.dino_stage_idx, len(ret)):
+            stage_output = {'hw': ret[haosen][1]}
+            reg_feats = ret[haosen][0].split([self.task_to_num_regs[haosen] for haosen in self.local_tasks+self.global_tasks], dim=1)
+            for idx, ltask in enumerate(self.local_tasks+self.global_tasks):
+                stage_output[ltask] = reg_feats[idx]
+            output[f'res{haosen+2}'] = stage_output
+
+        ret = self.ms_fusion(output)
+        pass
 
 
 class Instance_Detection_Head(nn.Module):

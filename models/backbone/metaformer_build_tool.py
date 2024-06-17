@@ -191,6 +191,9 @@ class Attention_REG(nn.Module):
         x_poses = torch.cat([register_poses, x_2d_poses.flatten(1, 2)], dim=1) # b reg_hw c
         x = x + x_poses
         
+        level_embed = self.reg_cls[0].get_first_attn_level_embed() # 1 c
+        x = x + level_embed
+        
         N = x.shape[1]
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)   # make torchscript happy (cannot use tensor as tuple)

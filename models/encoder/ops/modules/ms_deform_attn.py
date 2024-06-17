@@ -117,7 +117,7 @@ class MSDeformAttn(nn.Module):
         return output, sampling_locations, attention_weights
 
 
-
+from einops import rearrange
 
 class MSDeformAttn_with_GlobalRegisters(nn.Module):
     def __init__(self, 
@@ -152,15 +152,16 @@ class MSDeformAttn_with_GlobalRegisters(nn.Module):
 
         # key = register的情况
         self.task_to_num_regs = task_to_num_regs
-        # hw_reg c -> hw_reg head L REGs
-        self.cls_weights = nn.Parameter(torch.zeros([d_model, n_heads, n_levels, self.task_to_num_regs['cls']]))
-        self.cls_bias = nn.Parameter(torch.zeros([n_heads, n_levels, self.task_to_num_regs['cls']]))
-        self.ssl_weights = nn.Parameter(torch.zeros([d_model, n_heads, n_levels, self.task_to_num_regs['ssl']]))
-        self.ssl_bias = nn.Parameter(torch.zeros([n_heads, n_levels, self.task_to_num_regs['ssl']]))
-        self.sem_seg_weights = nn.Parameter(torch.zeros([d_model, n_heads, n_levels, self.task_to_num_regs['sem_seg']]))
-        self.sem_seg_bias = nn.Parameter(torch.zeros([n_heads, n_levels, self.task_to_num_regs['sem_seg']]))
-        self.ins_det_weights = nn.Parameter(torch.zeros([d_model, n_heads, n_levels, self.task_to_num_regs['ins_det']]))
-        self.ins_det_bias = nn.Parameter(torch.zeros([n_heads, n_levels, self.task_to_num_regs['ins_det']]))
+        # ssl_num_scales
+        self.cls_ssl_num_scales = deform_configs['cls_ssl_num_scales']
+        self.scale_linear_cls = nn.Linear(d_model, n_heads*self.task_to_num_regs['cls']*self.cls_ssl_num_scales)
+        self.scale_linear_ssl = nn.Linear(d_model, n_heads*self.task_to_num_regs['ssl']*self.cls_ssl_num_scales)
+        # task
+        self.scale_linear_sem_seg = nn.Linear(d_model, n_heads*self.task_to_num_regs['sem_seg']*n_levels)
+        self.scale_linear_ins_det = nn.Linear(d_model, n_heads*self.task_to_num_regs['ins_det']*n_levels)
+        
+        self.task_to_linear = {'cls': self.scale_linear_cls, 'ssl': self.scale_linear_ssl, 'sem_seg': self.scale_linear_sem_seg, 'ins_det': self.scale_linear_ins_det}
+        
         self.local_global_lambda = local_global_lambda
         self.value_proj = nn.Linear(d_model, d_model)
         self.output_proj = nn.Linear(d_model, d_model)
@@ -177,22 +178,21 @@ class MSDeformAttn_with_GlobalRegisters(nn.Module):
             self.sampling_offsets.bias = nn.Parameter(grid_init.view(-1))
         constant_(self.attention_weights.weight.data, 0.)
         constant_(self.attention_weights.bias.data, 0.)
-        
-        constant_(self.cls_weights.data, 0.)
-        constant_(self.cls_bias.data, 0.)
-        constant_(self.ssl_weights.data, 0.)
-        constant_(self.ssl_bias.data, 0.)
-        constant_(self.sem_seg_weights.data, 0.)
-        constant_(self.sem_seg_bias.data, 0.)
-        constant_(self.ins_det_weights.data, 0.)
-        constant_(self.ins_det_bias.data, 0.)
-        
         xavier_uniform_(self.value_proj.weight.data)
         constant_(self.value_proj.bias.data, 0.)
         xavier_uniform_(self.output_proj.weight.data)
         constant_(self.output_proj.bias.data, 0.)
-
-    def forward(self, query, reference_points, input_flatten, input_spatial_shapes, input_level_start_index, input_padding_mask=None):
+                
+        constant_(self.scale_linear_cls.weight, 0.)
+        constant_(self.scale_linear_cls.bias, 0.)
+        constant_(self.scale_linear_ssl.weight, 0.)
+        constant_(self.scale_linear_ssl.bias, 0.)
+        constant_(self.scale_linear_sem_seg.weight, 0.)
+        constant_(self.scale_linear_sem_seg.bias, 0.)
+        constant_(self.scale_linear_ins_det.weight, 0.)
+        constant_(self.scale_linear_ins_det.bias, 0.) 
+               
+    def forward(self, query, key_splits, reference_points, input_flatten, input_spatial_shapes, input_level_start_index, input_padding_mask=None):
         """
         :param query                       (N, Length_{query}, C)
         :param reference_points            (N, Length_{query}, n_levels, 2), range in [0, 1], top-left (0,0), bottom-right (1, 1), including padding area
@@ -206,19 +206,15 @@ class MSDeformAttn_with_GlobalRegisters(nn.Module):
         """
         N, Len_q, _ = query.shape
         N, Len_in, _ = input_flatten.shape
-
-        # reg_hw c -> reg_hw head dim
+        
         value = self.value_proj(input_flatten) 
         if input_padding_mask is not None:
             value = value.masked_fill(input_padding_mask[..., None], float(0))
         value = value.view(N, Len_in, self.n_heads, self.d_model // self.n_heads)
 
-        split_lens = list(zip([self.num_registers] * len(input_spatial_shapes), 
-                              [(haosen[0] * haosen[1]) for haosen in input_spatial_shapes]))
-        assert sum(split_lens) == Len_q
-        reg_hw_scale_values = value.split(split_lens)
-        reg_values, hw_values = torch.cat(reg_hw_scale_values[0::2], dim=1), torch.cat(reg_hw_scale_values[1::2], dim=1)
-        assert (input_spatial_shapes[:, 0] * input_spatial_shapes[:, 1]).sum() == hw_values.shape[1]
+        # reg_key, hw_key
+        assert key_splits[-1][0] == 'hw'
+        reg_values, hw_values = value.split([value.shape[1] - key_splits[-1][-1], key_splits[-1][-1]], dim=1)
 
         # key == hw, local self-awareness
         sampling_offsets = self.sampling_offsets(query).view(N, Len_q, self.n_heads, self.n_levels, self.n_points, 2)
@@ -227,8 +223,8 @@ class MSDeformAttn_with_GlobalRegisters(nn.Module):
         # N, Len_q, n_heads, n_levels, n_points, 2
         if reference_points.shape[-1] == 2:
             # L 2
-            offset_normalizer = torch.stack([input_spatial_shapes[..., 1], input_spatial_shapes[..., 0]], -1) # h, w的max值
-            # b reg_hw_sigma L 2 -> b reg_hw_sigma 1 L 1 2 + b reg_hw_sigma head L N 2 / 
+            offset_normalizer = torch.stack([input_spatial_shapes[..., 1], input_spatial_shapes[..., 0]], -1) # h, w的max值, L 2
+            # b Nq L 2 -> b Nq 1 L 1 2 + b Nq head L N 2 / 1 1 1 L 1 2
             sampling_locations = reference_points[:, :, None, :, None, :] \
                                  + sampling_offsets / offset_normalizer[None, None, None, :, None, :] # offset/max_h  + 相对坐标, 那么offset输出的是绝对坐标
         # elif reference_points.shape[-1] == 4:
@@ -238,22 +234,34 @@ class MSDeformAttn_with_GlobalRegisters(nn.Module):
             raise ValueError(
                 'Last dim of reference_points must be 2 or 4, but get {} instead.'.format(reference_points.shape[-1]))
         
-        # b reg_hw_sigma c
-        output = MSDeformAttnFunction.apply(
-            hw_values, input_spatial_shapes, input_level_start_index, sampling_locations, attention_weights, self.im2col_step)
+        # b Nq c
+        hw_key_info = MSDeformAttnFunction.apply(hw_values, input_spatial_shapes, input_level_start_index, sampling_locations, attention_weights, self.im2col_step)
 
         # key == reg, global self-awareness
-        # b reg_hw_sigma head L*REG
-        register_weights = self.register_weights(query).view(N, Len_q, self.n_heads, self.n_levels * self.num_registers)
-        register_weights = F.softmax(register_weights, -1)
+        task_weight_liear, task_weight_bias = self.get_task_linear_proj(key_splits) # head reg c, head reg
+        reg_key_weights = torch.einsum('bNc,hRc->bNhR', query, task_weight_liear) + task_weight_bias # b N h REG
+        reg_key_weights = F.softmax(reg_key_weights, -1)
         # b reg_hw_sigma head dim
-        output_reg_value = torch.einsum('bshi,bihc->bshc', register_weights, reg_values)
-        output_reg_value = output_reg_value.flatten(2).contiguous()
-
+        reg_key_info = torch.einsum('bNhR,bRhc -> bNhc', reg_key_weights, reg_values)
+        reg_key_info = reg_key_info.flatten(2) # b Nq c
 
         # sum
-        output = self.local_global_lambda[0] * output + self.local_global_lambda[1] * output_reg_value
-
+        output = self.local_global_lambda[0] * hw_key_info + self.local_global_lambda[1] * reg_key_info
         output = self.output_proj(output)
 
-        return output, sampling_locations, attention_weights
+        return output
+
+    def get_task_linear_proj(self,key_splits):
+        # ('name', scale * SIN_REG)
+        linear_weights = []
+        linear_bias = []
+        for task_name, length in key_splits[:-1]: # no hw
+            wei, bias = self.task_to_linear[task_name].weight, self.task_to_linear[task_name].bias # head * scale * SIN_REG, in
+            assert (wei.shape[0]  == length * self.n_heads) and ( bias.shape[0] == self.n_heads *length)
+            wei = rearrange(wei, '(head scale REG) c -> head (scale REG) c', head=self.n_heads, REG=self.task_to_num_regs[task_name])
+            bias = rearrange(bias, '(head scale REG) -> head (scale REG)', head=self.n_heads, REG=self.task_to_num_regs[task_name])
+            linear_weights.append(wei)
+            linear_bias.append(bias)
+        linear_weights = torch.cat(linear_weights, dim=1) # head reg_sigma c 
+        linear_bias = torch.cat(linear_bias, dim=1) # head reg_siga
+        return linear_weights, linear_bias
