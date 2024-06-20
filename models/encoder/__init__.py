@@ -7,6 +7,4 @@ from . import msdeformattn, msdeformattn_temporal, swinattn, input_projs, multis
 # )
 
 
-# tmi & cvpr
-from . import msdeformattn_registers
 

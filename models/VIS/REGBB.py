@@ -109,7 +109,7 @@ class REGBB(OptimizeModel):
                 'pred_masks': torch.cat([haosen['pred_masks'] for haosen in clip_outputs], dim=1), # b t n h w
                 'pred_class':  torch.cat([haosen['pred_class'] for haosen in clip_outputs], dim=1),
             }]
-        return  self.video_backbone(x=videos)
+        return self.video_backbone(x=videos)
 
     def forward(self, batch_dict):
         assert self.training

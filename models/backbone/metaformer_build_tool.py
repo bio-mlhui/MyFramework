@@ -70,14 +70,39 @@ class Downsampling_REG(nn.Module):
     def forward(self, reg, x):
         num_reg = reg.shape[1]
         batch_size, H, W, _ = x.shape
-        reg_x = self.pre_norm(torch.cat([reg, x.flatten(1,2)], dim=1)) # b s+hw c
-        reg, x = reg_x.split([num_reg, H*W], dim=1)
-        x = x.view(batch_size, H, W, -1).permute(0, 3, 1, 2).contiguous()
-        x = self.conv(x)
+        reg = self.pre_norm(reg)
+        x = self.pre_norm(x).permute(0, 3, 1, 2).contiguous()
+        x = self.conv(x).permute(0, 2, 3, 1)
         reg = self.linear(reg)
-        x = x.permute(0, 2, 3, 1) # b h w c
         return reg, x
 
+class Downsampling_REG_FirstInterpolate(nn.Module):
+    """
+    Downsampling implemented by a layer of convolution.
+    """
+    def __init__(self, in_channels, out_channels, 
+        kernel_size, stride=1, padding=0, 
+        in_stride=8, out_stride=14,
+        pre_norm=None, pre_permute=None):
+        super().__init__()
+        assert pre_permute
+        self.pre_norm = pre_norm(in_channels) if pre_norm else nn.Identity()
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, 
+                              stride=stride, padding=padding)
+        self.linear = nn.Linear(in_channels, out_channels)
+
+        self.in_stride, self.out_stride = in_stride, out_stride
+
+    def forward(self, reg, x):
+        num_reg = reg.shape[1]
+        batch_size, H, W, _ = x.shape
+        interpolate_size = [H * self.in_stride // (self.out_stride // 2), W * self.in_stride // (self.out_stride // 2)]
+        reg = self.pre_norm(reg)
+        x = self.pre_norm(x).permute(0, 3, 1, 2).contiguous()
+        x = F.interpolate(x, size=interpolate_size, mode='bilinear', align_corners=False) 
+        x = self.conv(x).permute(0, 2, 3, 1)
+        reg = self.linear(reg)
+        return reg, x
 
 class Scale(nn.Module):
     """
@@ -185,13 +210,13 @@ class Attention_REG(nn.Module):
     def forward(self, x):
         B, H, W, C = x.shape
         x_2d_poses = self.pos_2d(torch.zeros_like(x[..., 0]).bool(), hidden_dim=x.shape[-1]).permute(0, 2, 3, 1) # b h w c
-        registers, register_poses = self.reg_cls[0].get_local_registers() # 1 s c
-        
-        x = torch.cat([registers, x.flatten(1, 2)], dim=1) # b reg_hw c
-        x_poses = torch.cat([register_poses, x_2d_poses.flatten(1, 2)], dim=1) # b reg_hw c
-        x = x + x_poses
-        
-        level_embed = self.reg_cls[0].get_first_attn_level_embed() # 1 c
+        x = x + x_2d_poses
+
+
+        registers = self.reg_cls[0].first_attn_get_registers() # 1 s c
+        registers = registers.repeat(B, 1, 1)
+        level_embed = self.reg_cls[0].first_attn_level_embed() # 1 c
+        x = torch.cat([registers, x.flatten(1, 2)], dim=1) # b s+hw c
         x = x + level_embed
         
         N = x.shape[1]
@@ -425,10 +450,10 @@ class MetaFormerBlock(nn.Module):
                     self.token_mixer(self.norm1(x))
                 )
             )
-        if res_x.shape != trans_x.shape:
+        if res_x.shape != trans_x.shape: # b h w c -> b reg_hw c
             # b s_hw c, b h w c  
             res_x = res_x.flatten(1,2)
-            res_x = torch.cat([res_x.new_zeros([1, trans_x.shape[1] - res_x.shape[1], res_x.shape[-1]]),res_x], dim=1)
+            res_x = torch.cat([res_x.new_zeros([res_x.shape[0], trans_x.shape[1] - res_x.shape[1], res_x.shape[-1]]),res_x], dim=1)
         x = res_x + trans_x
         x = self.res_scale2(x) + \
             self.layer_scale2(
@@ -465,17 +490,24 @@ DOWNSAMPLE_LAYERS_FOUR_STAGES_LAST_REG = [partial(Downsampling,
                 pre_norm=partial(LayerNormGeneral, bias=False, eps=1e-6), pre_permute=True
             )]
 
-DOWNSAMPLE_LAYERS_FOUR_STAGES_LASTTWO_REG = [partial(Downsampling,
-            kernel_size=7, stride=4, padding=2,
-            post_norm=partial(LayerNormGeneral, bias=False, eps=1e-6)
+DOWNSAMPLE_LAYERS_FOUR_STAGES_LASTTWO_REG = \
+            [partial(Downsampling, 
+                kernel_size=7, stride=4, padding=2,
+                post_norm=partial(LayerNormGeneral, bias=False, eps=1e-6)
             )] + \
             [partial(Downsampling,
                 kernel_size=3, stride=2, padding=1, 
                 pre_norm=partial(LayerNormGeneral, bias=False, eps=1e-6), pre_permute=True
-            )] +[partial(Downsampling_REG,
+            )] + \
+            [partial(Downsampling_REG_FirstInterpolate,
+                kernel_size=3, stride=2, padding=1, 
+                in_stride=8, out_stride=14,
+                pre_norm=partial(LayerNormGeneral, bias=False, eps=1e-6), pre_permute=True)
+            ] + \
+            [partial(Downsampling_REG,
                 kernel_size=3, stride=2, padding=1, 
                 pre_norm=partial(LayerNormGeneral, bias=False, eps=1e-6), pre_permute=True
-            )]*2
+            )]
             
 DOWNSAMPLE_LAYERS_FIVE_STAGES_LASTTWO_REG = [partial(Downsampling,
             kernel_size=7, stride=4, padding=2,
