@@ -17,11 +17,11 @@ from einops import rearrange, repeat
 
 
 # metaforer
-from models.backbone.metaformer_build_tool import SepConv, Attention,  Attention_REG, \
+from models.backbone.metaformer_build_tool_video import SepConv, Attention,  Attention_REG, \
     DOWNSAMPLE_LAYERS_FOUR_STAGES_LAST_REG, LayerNormWithoutBias, LayerNormGeneral, MetaFormerBlock,\
         DOWNSAMPLE_LAYERS_FOUR_STAGES_LASTTWO_REG, DOWNSAMPLE_LAYERS_FIVE_STAGES_LASTTWO_REG, StarReLU
-from models.backbone.metaformer_build_tool import Mlp as Meta_MLP
-from models.backbone.metaformer_build_tool import MlpHead 
+from models.backbone.metaformer_build_tool_video import Mlp as Meta_MLP
+from models.backbone.metaformer_build_tool_video import MlpHead 
 # dino
 from models.backbone.dino.layers import Mlp, PatchEmbed, SwiGLUFFNFused, MemEffAttention, NestedTensorBlock as Block
 from kan import KANLayer
@@ -94,9 +94,9 @@ DINO_NAME_TO_CONFIGS = {
     },
 }
 
-@BACKBONE_REGISTRY.register()
-class Dinov2_LORA_REG_Video(nn.Module):
 
+@BACKBONE_REGISTRY.register()
+class Dinov2_LORA_REG_Video(nn.Module): 
     def build_peft_dino(self, dino_configs, meta_configs):
         dino_name, freeze, lora_configs = meta_configs['dino_name'], meta_configs['dino_freeze'], meta_configs['dino_lora']
         self.ssl = DinoVisionTransformer(**dino_configs)
@@ -121,8 +121,8 @@ class Dinov2_LORA_REG_Video(nn.Module):
         self.first_attn_stage_idx = meta_configs['first_attn_stage_idx']
         depths, dims, drop_path_rate = meta_configs['depths'], meta_configs['dims'], meta_configs['drop_path_rate']
         res_scale_init_values = meta_configs.pop('res_scale_init_values')
-        self.dino_stage_idx, self.num_stages = depths.index(None), len(depths)
-        dims[self.dino_stage_idx], depths[self.dino_stage_idx] = dino_configs['embed_dim'], dino_configs['depth']
+        self.dino_stage_idx, self.num_stages = dims.index(None), len(depths)
+        dims[self.dino_stage_idx] = dino_configs['embed_dim']
         dp_rates=[x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]
         
         self.backbone_dims = dims
@@ -144,20 +144,24 @@ class Dinov2_LORA_REG_Video(nn.Module):
         
         # very hacky
         name_to_token_mixers = {'conv': SepConv, 'attn_32': Attention, 'first_attn_32': partial(Attention_REG, reg_cls=self),\
-            'iden': nn.Identity, 'attn_64': partial(Attention, head_dim=64), 'first_attn_64': partial(Attention_REG, reg_cls=self, head_dim=64),}        
+                                'iden': nn.Identity, 'attn_64': partial(Attention, head_dim=64), 
+                                'first_attn_64': partial(Attention_REG, reg_cls=self, head_dim=64),}        
         depth_token_mixers = []
         for stage_idx, (haosen_dep, haosen_mixer) in enumerate(zip(depths, token_mixers)):
             if isinstance(haosen_mixer, str):
                 depth_token_mixers.extend([name_to_token_mixers[haosen_mixer]] * haosen_dep)
             elif isinstance(haosen_mixer, list):
                 for hhsen_mixer, hhsen_depth in haosen_mixer:
-                    assert isinstance(hhsen_mixer, str) and isinstance(hhsen_depth, int)
-                    depth_token_mixers.extend([name_to_token_mixers[hhsen_mixer]] * hhsen_depth)
-            elif haosen_mixer is None:
-                depth_token_mixers.extend([None] * haosen_dep)
+                    if hhsen_mixer is None:
+                        assert hhsen_depth == dino_configs['depth']
+                        depth_token_mixers.extend([None] * hhsen_depth)
+                    else:
+                        assert isinstance(hhsen_mixer, str) and isinstance(hhsen_depth, int)
+                        depth_token_mixers.extend([name_to_token_mixers[hhsen_mixer]] * hhsen_depth)
             else:
                 raise ValueError()
         assert len(depth_token_mixers) == sum(depths)
+        
         
         if not isinstance(mlps, (list, tuple)):
             mlps = [mlps] * self.num_stages
@@ -188,10 +192,19 @@ class Dinov2_LORA_REG_Video(nn.Module):
                 elif i > self.dino_stage_idx:
                     self.after_stages.append(stage)   
             else:
-                dino_configs['drop_path_rate_list'] = dp_rates[cur: (cur+depths[i])]
+                dino_configs['drop_path_rate_list'] = dp_rates[cur: (cur+dino_configs['depth'])]
                 self.build_peft_dino(dino_configs=dino_configs, meta_configs=meta_configs)
-                self.alias_conv = nn.Conv2d(self.ssl.embed_dim, self.ssl.embed_dim, kernel_size=3, padding=1,)
-                self.alias_norm = partial(LayerNormGeneral, bias=False, eps=1e-6)(self.ssl.embed_dim)
+                dino_same_stage_depth = depths[i] - len(self.ssl.blocks)
+                self.dino_same_stage = nn.Sequential(                    
+                    *[MetaFormerBlock(dim=dims[i],
+                        token_mixer=depth_token_mixers[cur+len(self.ssl.blocks)+j],
+                        mlp=mlps[i],
+                        norm_layer=norm_layers[i],
+                        drop_path=dp_rates[cur+len(self.ssl.blocks) + j],
+                        layer_scale_init_value=layer_scale_init_values[i],
+                        res_scale_init_value=res_scale_init_values[i],
+                    ) for j in range(dino_same_stage_depth)]
+                )
             cur += depths[i]
         def _init_weights(m):
             if isinstance(m, (nn.Conv2d, nn.Linear)):
@@ -201,6 +214,7 @@ class Dinov2_LORA_REG_Video(nn.Module):
         self.before_stages.apply(_init_weights)
         self.after_stages.apply(_init_weights)
         self.downsample_layers.apply(_init_weights)
+        self.dino_same_stage.apply(_init_weights)
         
         stage_to_level_embed = [None] * self.first_attn_stage_idx
         for haosen in range(self.first_attn_stage_idx, len(depths)):
@@ -256,7 +270,6 @@ class Dinov2_LORA_REG_Video(nn.Module):
     def __init__(self, configs,):
         super().__init__()
         self.has_metaformer(configs=configs)    
-        self.num_classes = configs['num_classes']
         multiscale_shapes = {}
         for idx, _ in enumerate(self.before_stages):
             multiscale_shapes[f'res{idx+2}'] = ImageMultiscale_Shape(2**(idx+2), self.backbone_dims[idx])
@@ -271,88 +284,112 @@ class Dinov2_LORA_REG_Video(nn.Module):
         num_pt_registers = configs['num_pt_registers']
         self.is_finetuning = configs['is_finetuning']
         # global_registers
-        self.ssl_reg_poses = nn.Parameter(torch.zeros(1, self.ssl.num_register_tokens, self.ssl.embed_dim))
-        # local_registers
-        self.pt_task_regs = nn.Parameter(torch.zeros(1, num_pt_registers, self.backbone_dims[self.first_attn_stage_idx]))
-        self.pt_task_regs_poses = nn.Parameter(torch.zeros(1, num_pt_registers, self.backbone_dims[self.first_attn_stage_idx]))
-        trunc_normal_(self.pt_task_regs_poses, std=0.02)
-        trunc_normal_(self.ssl_reg_poses, std=0.02)
-        nn.init.normal_(self.pt_task_regs, std=1e-6)
-        
-        self.task_num_regs = [num_pt_registers, self.ssl.cls_token.shape[1], self.ssl.register_tokens.shape[1]]
+        pass
+        # local_registers, in dino_dim
+        self.pt_task_regs = nn.Parameter(torch.zeros(1, num_pt_registers, self.ssl.embed_dim))
+        pass
+        assert (self.dino_stage_idx - self.first_attn_stage_idx) == 1
 
-        self.has_multiscale(configs.pop('ms_configs'))       
-         
+        self.register_projs = [None] * self.first_attn_stage_idx
+        for stage_idx in range(self.first_attn_stage_idx, self.num_stages):
+            reg_proj = nn.Linear(self.ssl.embed_dim, self.backbone_dims[stage_idx], bias=False)
+            nn.init.orthogonal_(reg_proj.weight)
+            self.register_projs.append(reg_proj)
+        self.register_projs = nn.ModuleList(self.register_projs)
+        self.num_pt_registers = num_pt_registers
+        self.task_num_regs = [num_pt_registers, self.ssl.cls_token.shape[1], self.ssl.register_tokens.shape[1]]
+        self.num_registers = sum(self.task_num_regs)
+        self.forward_ms = False
         if not self.is_finetuning: 
+            # 在预训练
             pretrain_configs = configs['pretrain_configs']
-            self.class_head = MlpHead(self.ms_d_model, 1000, head_dropout=pretrain_configs['cls']['head_dropout'])
-            self.chosen_cls_index = self.task_num_regs[0] * (self.dino_stage_idx - self.first_attn_stage_idx) +\
-                (self.task_num_regs[0] + self.task_num_regs[1] + self.task_num_regs[2]) * (self.num_stages - self.dino_stage_idx - 1) +\
-                    self.task_num_regs[0]
+            if pretrain_configs['pretrain_ms']:
+                self.has_multiscale(configs.pop('ms_configs'))
+                class_in_dim = self.ms_d_model
+                logging.debug(f'MS的总参数数量:{sum(p.numel() for p in self.deform_layers.parameters())}')
+                self.forward_ms = True
+                # b reg_sigma_hw_sigma
+                self.chosen_cls_index = self.task_num_regs[0] * (self.dino_stage_idx - self.first_attn_stage_idx) +\
+                    (self.task_num_regs[0] + self.task_num_regs[1] + self.task_num_regs[2]) * (self.num_stages - self.dino_stage_idx - 1) +\
+                        self.task_num_regs[0]
+            else:
+                class_in_dim = self.backbone_dims[-1]
+            self.num_classes = configs['pretrain_configs']['num_classes']
+            self.class_head = MlpHead(class_in_dim, self.num_classes, head_dropout=pretrain_configs['cls']['head_dropout'])
+
         else:
+            self.has_multiscale(configs.pop('ms_configs'))
+            logging.debug(f'MS的总参数数量:{sum(p.numel() for p in self.deform_layers.parameters())}') 
             finetune_configs = configs.pop('finetune_configs') # task_name: {'num_registers': }
             self.finetune_num_regs = [(task_name, task_cf['num_registers']) for task_name, task_cf in finetune_configs.items()]
             assert sum([haosen[1] for haosen in self.finetune_num_regs]) == num_pt_registers
             # TODO: build head for each finetune task
+            self.forward_ms = True
         
         if comm.is_main_process():
             logging.debug(f'before的总参数数量:{sum(p.numel() for p in self.before_stages.parameters())}')
             logging.debug(f'DINO的总参数数量:{sum(p.numel() for p in self.ssl.parameters())}')
             logging.debug(f'after的总参数数量:{sum(p.numel() for p in self.after_stages.parameters())}')
             logging.debug(f'downsample的总参数数量:{sum(p.numel() for p in self.downsample_layers.parameters())}')
-
-            logging.debug(f'MS的总参数数量:{sum(p.numel() for p in self.deform_layers.parameters())}')
-
-            logging.debug(f'ssl_reg_pos的总参数数量:{sum(p.numel() for p in [self.ssl_reg_poses,])}')
+            logging.debug(f'dino_same_stage的总参数数量:{sum(p.numel() for p in self.dino_same_stage.parameters())}')
             logging.debug(f'task_registers的总参数数量:{self.pt_task_regs.numel()}')
-            logging.debug(f'task_registers_pos的总参数数量:{self.pt_task_regs_poses.numel()}')
-            logging.debug(f'alias_conv_norm的总参数数量:{sum(p.numel() for p in self.alias_conv.parameters())}') # 5M
-            logging.debug(f'alias_conv_norm的总参数数量:{sum(p.numel() for p in self.alias_norm.parameters())}')
     
+        assert self.first_attn_stage_idx < len(self.before_stages)
 
-    def get_dense_registers(self,):
-        return self.pt_task_regs, self.pt_task_regs_poses
-    
+    def first_attn_get_registers(self):
+        clsssl_regs = self.get_clsssl_registers()
+        pt_regs = self.pt_task_regs
+
+        regs = torch.cat([pt_regs, clsssl_regs], dim=1)
+        return self.register_projs[self.first_attn_stage_idx](regs)
+
+    def first_attn_level_embed(self):
+        return self.stage_to_level_embed[self.first_attn_stage_idx].weight
+
     def get_clsssl_registers(self, ):
         cls_toks = self.ssl.cls_token
         ssl_toks = self.ssl.register_tokens
         cls_pos = self.ssl.pos_embed[:, 0].unsqueeze(0)
-        ssl_pos = self.ssl_reg_poses
-        return torch.cat([cls_toks, ssl_toks], dim=1), torch.cat([cls_pos, ssl_pos], dim=1)
+        cls_toks += cls_pos
+        return torch.cat([cls_toks, ssl_toks], dim=1)
 
-    def get_first_attn_level_embed(self):
-        return self.stage_to_level_embed[self.first_attn_stage_idx].weight
+    def get_registers(self):
+        clsssl_regs = self.get_clsssl_registers()
+        pt_regs = self.pt_task_regs
+
+        regs = torch.cat([pt_regs, clsssl_regs], dim=1)
+        return regs
 
     def forward_before(self, x):
-        assert self.first_attn_stage_idx < len(self.before_stages)
         _, _, H, W = x.shape
         ret = []
         for i in range(len(self.before_stages)):
             scale_name = f'res{i+2}'
-
             x = self.downsample_layers[i](x)
             x = self.before_stages[i](x)
             
             if i < self.first_attn_stage_idx:
                 ret.append((None, x.contiguous())) # b h w c
             else:
-                reg_feats, hw_feats = x.contiguous().split([self.task_num_regs[0], x.shape[1] - self.task_num_regs[0]], dim=1) # b reg_hw_c
+                reg_feats, hw_feats = x.contiguous().split([self.num_registers, x.shape[1] - self.num_registers], dim=1) # b reg_hw_c
                 last_H, last_W = H//self.multiscale_shapes[scale_name].spatial_stride, W//self.multiscale_shapes[scale_name].spatial_stride
-                hw_feats = rearrange(hw_feats, 'b (h w) c -> b h w c',h=last_H,  w=last_W)
-                ret.append((reg_feats, hw_feats))
+                hw_feats = rearrange(hw_feats, 'b (h w) c -> b h w c',h=last_H,  w=last_W).contiguous()
+                ret.append((reg_feats.contiguous(), hw_feats))
         return ret
     
     def forward_after(self, registers, x):
         ret = []
         for i in range(len(self.after_stages)):
             registers, x = self.downsample_layers[i+self.dino_stage_idx+1](registers, x)
+            registers += self.register_projs[i+self.dino_stage_idx+1](self.get_registers())
+
             _, H, W, _ = x.shape
             input = torch.cat([registers, x.flatten(1,2)], dim=1) # b reg_hw c
             input = input + self.stage_to_level_embed[i+self.dino_stage_idx+1].weight
             
             input = self.after_stages[i](input)
             registers, x = input.split([registers.shape[1], H*W], dim=1)
-            x = x.view(x.shape[0], H, W, -1)
+            x = x.view(x.shape[0], H, W, -1).contiguous()
             ret.append((registers, x))
         return ret
 
@@ -361,25 +398,22 @@ class Dinov2_LORA_REG_Video(nn.Module):
         batch_size, _, H, W = x.shape # b c h w
         patch_size = [H // self.ssl.patch_size, W // self.ssl.patch_size]
         x = self.ssl.patch_embed(x) # b c h w -> b hw c
-        x = x.view(x.shape[0], patch_size[0], patch_size[1], x.shape[-1]) # b h w c
- 
-        last_hw = F.interpolate(last_hw.permute(0, 3, 1, 2), patch_size, mode='bilinear', align_corners=False).contiguous() # b c h w
-        last_hw = self.alias_norm(self.alias_conv(last_hw).permute(0, 2, 3, 1)) # b h w c
+        x = x.view(x.shape[0], patch_size[0], patch_size[1], x.shape[-1]).contiguous() # b h w c
+
         x = (x + last_hw).flatten(1, 2) # b hw c
         if masks is not None:
             x = torch.where(masks.unsqueeze(-1), self.ssl.mask_token.to(x.dtype).unsqueeze(0), x)    
         x_poses = self.ssl.interpolate_pos_encoding_hw(x, W, H) # b hw c
         x = x + x_poses
                 
-        clsssl_regs, clsssl_reg_poses = self.get_clsssl_registers()
-        clsssl_regs = clsssl_regs + clsssl_reg_poses
-        x = torch.cat([last_regs, clsssl_regs.repeat(x.shape[0], 1, 1), x], dim=1) # b reg_hw c
+        x = torch.cat([last_regs, x], dim=1) # b reg_hw c
 
         x = x + self.stage_to_level_embed[self.dino_stage_idx].weight
         for blk in self.ssl.blocks:
             x = blk(x)
         x = self.ssl.norm(x)
-        
+        x = self.dino_same_stage(x)
+
         reg_feats, hw_feats = x.split([sum(self.task_num_regs), x.shape[1] - sum(self.task_num_regs)], dim=1)
         hw_feats = rearrange(hw_feats, 'b (h w) c -> b h w c', h=patch_size[0], w=patch_size[1])
             
@@ -449,18 +483,22 @@ class Dinov2_LORA_REG_Video(nn.Module):
         
         last_regs, last_hw = ret[-1]
         last_regs, last_hw = self.downsample_layers[len(self.before_stages)](last_regs, last_hw) 
+        last_regs = last_regs + self.register_projs[len(self.before_stages)](self.get_registers()) # b s c + b s c
+
         ret.append(self.forward_dino_ssl(x, last_regs=last_regs, last_hw=last_hw, masks=masks))
         
         last_regs, last_hw = ret[-1]
         ret.extend(self.forward_after(last_regs, last_hw))
 
-        
-        predictions_by_layer = self.forward_multiscale(ret)
-
-        if not self.is_finetuning:
-            return predictions_by_layer[-1]['cls'] # b class
+        if self.forward_ms:
+            predictions_by_layer = self.forward_multiscale(ret)
+            if not self.is_finetuning:
+                return predictions_by_layer[-1]['cls'] # b class
+            else:
+                raise NotImplementedError()
         else:
-            raise NotImplementedError()
+            assert not self.is_finetuning
+            return self.class_head(ret[-1][0][:, self.num_pt_registers])
 
 
     # @staticmethod
@@ -685,7 +723,7 @@ class DinoVisionTransformer(nn.Module):
         return torch.cat((class_pos_embed.unsqueeze(0), patch_pos_embed), dim=1).to(previous_dtype)
 
     def interpolate_pos_encoding_hw(self, x, w, h):
-        # b hw c
+        # b h/14 w/14 c
         previous_dtype = x.dtype
         npatch = x.shape[1]
         N = self.pos_embed.shape[1] - 1

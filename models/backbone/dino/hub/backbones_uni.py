@@ -548,17 +548,9 @@ class Dinov2_LORA_REG(nn.Module):
         _, _, H, W = x.shape
         ret = []
         for i in range(len(self.before_stages)):
-            scale_name = f'res{i+2}'
             x = self.downsample_layers[i](x)
             x = self.before_stages[i](x)
-            
-            if i < self.first_attn_stage_idx:
-                ret.append((None, x.contiguous())) # b h w c
-            else:
-                reg_feats, hw_feats = x.contiguous().split([self.num_registers, x.shape[1] - self.num_registers], dim=1) # b reg_hw_c
-                last_H, last_W = H//self.multiscale_shapes[scale_name].spatial_stride, W//self.multiscale_shapes[scale_name].spatial_stride
-                hw_feats = rearrange(hw_feats, 'b (h w) c -> b h w c',h=last_H,  w=last_W).contiguous()
-                ret.append((reg_feats.contiguous(), hw_feats))
+            ret.append((None, x.contiguous())) # b h w c
         return ret
     
     def forward_after(self, registers, x):
