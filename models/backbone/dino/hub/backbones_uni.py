@@ -19,7 +19,7 @@ from einops import rearrange, repeat
 # metaforer
 from models.backbone.metaformer_build_tool import SepConv, Attention,  Attention_REG, \
     DOWNSAMPLE_LAYERS_FOUR_STAGES_LAST_REG, LayerNormWithoutBias, LayerNormGeneral, MetaFormerBlock,\
-        DOWNSAMPLE_LAYERS_FOUR_STAGES_LASTTWO_REG, DOWNSAMPLE_LAYERS_FIVE_STAGES_LASTTWO_REG, StarReLU
+        DOWNSAMPLE_LAYERS_FOUR_STAGES_LASTTWO_REG, DOWNSAMPLE_LAYERS_FIVE_STAGES_LASTTWO_REG, StarReLU, DOWNSAMPLE_LAYERS_FOUR_STAGES_LASTONE_REG
 from models.backbone.metaformer_build_tool import Mlp as Meta_MLP
 from models.backbone.metaformer_build_tool import MlpHead 
 # dino
@@ -320,6 +320,8 @@ class Dinov2_LORA_REG(nn.Module):
             downsample_layers = DOWNSAMPLE_LAYERS_FOUR_STAGES_LASTTWO_REG
         elif downsample_layer_name == 'five_stage_lasttwo_reg':
             downsample_layers = DOWNSAMPLE_LAYERS_FIVE_STAGES_LASTTWO_REG
+        elif downsample_layer_name == 'four_stage_lastone_reg':
+            downsample_layers = DOWNSAMPLE_LAYERS_FOUR_STAGES_LASTONE_REG
         else:
             raise ValueError()
         assert len(token_mixers) == self.num_stages
@@ -400,17 +402,17 @@ class Dinov2_LORA_REG(nn.Module):
         self.downsample_layers.apply(_init_weights)
         self.dino_same_stage.apply(_init_weights)
         
-        stage_to_level_embed = [None] * self.first_attn_stage_idx
-        for haosen in range(self.first_attn_stage_idx, len(depths)):
-            level_embed = nn.Embedding(1, self.backbone_dims[haosen])
-            torch.nn.init.normal_(level_embed.weight)
-            stage_to_level_embed.append(level_embed)
+        # stage_to_level_embed = [None] * self.first_attn_stage_idx
+        # for haosen in range(self.first_attn_stage_idx, len(depths)):
+        #     level_embed = nn.Embedding(1, self.backbone_dims[haosen])
+        #     torch.nn.init.normal_(level_embed.weight)
+        #     stage_to_level_embed.append(level_embed)
             
-        self.stage_to_level_embed = nn.ModuleList(stage_to_level_embed)
+        # self.stage_to_level_embed = nn.ModuleList(stage_to_level_embed)
     
     @property
     def device(self):
-        return self.stage_to_level_embed[-1].weight.device
+        return self.ssl.register_tokens.device
     
     def has_multiscale(self, configs,):  
         ms_d_model, proj_add_norm, proj_add_star_relu, proj_bias, proj_dropout = configs['d_model'], configs['proj_add_norm'], \
@@ -471,15 +473,7 @@ class Dinov2_LORA_REG(nn.Module):
         pass
         # local_registers, in dino_dim
         self.pt_task_regs = nn.Parameter(torch.zeros(1, num_pt_registers, self.ssl.embed_dim))
-        pass
-        assert (self.dino_stage_idx - self.first_attn_stage_idx) == 1
-
-        self.register_projs = [None] * self.first_attn_stage_idx
-        for stage_idx in range(self.first_attn_stage_idx, self.num_stages):
-            reg_proj = nn.Linear(self.ssl.embed_dim, self.backbone_dims[stage_idx], bias=False)
-            nn.init.orthogonal_(reg_proj.weight)
-            self.register_projs.append(reg_proj)
-        self.register_projs = nn.ModuleList(self.register_projs)
+        nn.init.normal_(self.pt_task_regs, std=1e-6)
         self.num_pt_registers = num_pt_registers
         self.task_num_regs = [num_pt_registers, self.ssl.cls_token.shape[1], self.ssl.register_tokens.shape[1]]
         self.num_registers = sum(self.task_num_regs)
@@ -517,32 +511,6 @@ class Dinov2_LORA_REG(nn.Module):
             logging.debug(f'downsample的总参数数量:{sum(p.numel() for p in self.downsample_layers.parameters())}')
             logging.debug(f'dino_same_stage的总参数数量:{sum(p.numel() for p in self.dino_same_stage.parameters())}')
             logging.debug(f'task_registers的总参数数量:{self.pt_task_regs.numel()}')
-    
-        assert self.first_attn_stage_idx < len(self.before_stages)
-
-    def first_attn_get_registers(self):
-        clsssl_regs = self.get_clsssl_registers()
-        pt_regs = self.pt_task_regs
-
-        regs = torch.cat([pt_regs, clsssl_regs], dim=1)
-        return self.register_projs[self.first_attn_stage_idx](regs)
-
-    def first_attn_level_embed(self):
-        return self.stage_to_level_embed[self.first_attn_stage_idx].weight
-
-    def get_clsssl_registers(self, ):
-        cls_toks = self.ssl.cls_token
-        ssl_toks = self.ssl.register_tokens
-        cls_pos = self.ssl.pos_embed[:, 0].unsqueeze(0)
-        cls_toks += cls_pos
-        return torch.cat([cls_toks, ssl_toks], dim=1)
-
-    def get_registers(self):
-        clsssl_regs = self.get_clsssl_registers()
-        pt_regs = self.pt_task_regs
-
-        regs = torch.cat([pt_regs, clsssl_regs], dim=1)
-        return regs
 
     def forward_before(self, x):
         _, _, H, W = x.shape
@@ -557,20 +525,18 @@ class Dinov2_LORA_REG(nn.Module):
         ret = []
         for i in range(len(self.after_stages)):
             registers, x = self.downsample_layers[i+self.dino_stage_idx+1](registers, x)
-            registers += self.register_projs[i+self.dino_stage_idx+1](self.get_registers())
 
             _, H, W, _ = x.shape
             input = torch.cat([registers, x.flatten(1,2)], dim=1) # b reg_hw c
-            input = input + self.stage_to_level_embed[i+self.dino_stage_idx+1].weight
-            
             input = self.after_stages[i](input)
+
             registers, x = input.split([registers.shape[1], H*W], dim=1)
             x = x.view(x.shape[0], H, W, -1).contiguous()
             ret.append((registers, x))
         return ret
 
     # NestTensor?
-    def forward_dino_ssl(self, x, last_regs, last_hw, masks=None,): # b c h w -> ms: {'res2', 'res3', 'res4, 'res5}, reg: {'reg2', 'reg3', 'reg4', 'reg5'}
+    def forward_dino_ssl(self, x, last_hw, masks=None,): # b c h w -> ms: {'res2', 'res3', 'res4, 'res5}, reg: {'reg2', 'reg3', 'reg4', 'reg5'}
         batch_size, _, H, W = x.shape # b c h w
         patch_size = [H // self.ssl.patch_size, W // self.ssl.patch_size]
         x = self.ssl.patch_embed(x) # b c h w -> b hw c
@@ -581,10 +547,11 @@ class Dinov2_LORA_REG(nn.Module):
             x = torch.where(masks.unsqueeze(-1), self.ssl.mask_token.to(x.dtype).unsqueeze(0), x)    
         x_poses = self.ssl.interpolate_pos_encoding_hw(x, W, H) # b hw c
         x = x + x_poses
-                
-        x = torch.cat([last_regs, x], dim=1) # b reg_hw c
+        
+        clsssl_regs = torch.cat([self.ssl.cls_token + self.ssl.pos_embed[:, 0].unsqueeze(0), self.ssl.register_tokens], dim=1)
+        registers = torch.cat([self.pt_task_regs, clsssl_regs], dim=1)
+        x = torch.cat([registers.repeat(x.shape[0], 1, 1), x], dim=1) # b reg_hw c
 
-        x = x + self.stage_to_level_embed[self.dino_stage_idx].weight
         for blk in self.ssl.blocks:
             x = blk(x)
         x = self.ssl.norm(x)
@@ -657,11 +624,9 @@ class Dinov2_LORA_REG(nn.Module):
         #  (None/b reg c; b h w c)
         ret = self.forward_before(x)
         
-        last_regs, last_hw = ret[-1]
-        last_regs, last_hw = self.downsample_layers[len(self.before_stages)](last_regs, last_hw) 
-        last_regs = last_regs + self.register_projs[len(self.before_stages)](self.get_registers()) # b s c + b s c
+        last_hw = self.downsample_layers[len(self.before_stages)](ret[-1][1]) 
 
-        ret.append(self.forward_dino_ssl(x, last_regs=last_regs, last_hw=last_hw, masks=masks))
+        ret.append(self.forward_dino_ssl(x, last_hw=last_hw, masks=masks))
         
         last_regs, last_hw = ret[-1]
         ret.extend(self.forward_after(last_regs, last_hw))

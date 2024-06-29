@@ -11,6 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+from diffusers.models import UNet2DConditionModel
 def seed_everything(seed):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
