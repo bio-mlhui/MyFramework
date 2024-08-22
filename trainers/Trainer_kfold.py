@@ -19,8 +19,8 @@ from data_schedule import build_schedule
 from models import model_entrypoint
 from utils.misc import to_device
 
-__all__ = ['Trainer']
-class Trainer:
+__all__ = ['Trainer_kfold']
+class Trainer_kfold:
     def __init__(self, configs):
         torch.autograd.set_detect_anomaly(False)
         torch.backends.cuda.matmul.allow_tf32 = True
@@ -95,7 +95,7 @@ class Trainer:
                 sample_idxs = [taylor for cardib in sample_idxs for taylor in cardib]
                 self.num_samples += len(sample_idxs)
                 self.num_iterations += 1
-                loss_dict_unscaled_item = {key: torch.tensor(value.detach().item() if isinstance(value, torch.Tensor) else value , 
+                loss_dict_unscaled_item = {key: torch.tensor(value.detach().item(), 
                                                              device=self.device) for key, value in loss_dict_unscaled.items()}
                 del loss_dict_unscaled # delete graph
                 self._log(loss_dict_unscaled=loss_dict_unscaled_item,

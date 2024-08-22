@@ -12,6 +12,8 @@ elif os.getenv('CURRENT_TASK') == 'PSC':
     from . import psc
 elif os.getenv('CURRENT_TASK') == 'VIDVID':
     from . import vidvid
+elif os.getenv('CURRENT_TASK') == 'UN_IMG_SEM':
+    from . import unsupervised_image_semantic_seg
 else:
     raise ValueError()
 # 合并多个训练集成一个train set，每次eval对每个eval dataset进行测试
@@ -23,6 +25,7 @@ def build_schedule(configs, model_input_mapper, model_input_collate_fn):
     from .registry import MAPPER_REGISTRY, EVALUATOR_REGISTRY
     from detectron2.data import DatasetCatalog, DatasetFromList, MapDataset, MetadataCatalog
     from data_schedule.utils.sampler import Evaluate_ExactSampler_Distributed, Train_InfiniteSampler_Distributed
+    # from torch.utils.data import DistributedSampler
     DatasetCatalog.register('global_dataset', func=lambda: [])
     datasets = {'train': [], 'evaluate': []}
     meta_idx_shift = 0 # train, eval都对meta_idx进行shift, 每个set的idx都在独立的范围内
@@ -47,7 +50,7 @@ def build_schedule(configs, model_input_mapper, model_input_collate_fn):
                 datasets[mode].append(dataset)
             else:
                 datasets[mode].append((dataset_name, dataset))
-    MetadataCatalog.get('global_dataset').set(subset_list=list(configs['data'][mode].keys()))
+    MetadataCatalog.get('global_dataset').set(subset_list=list(configs['data']['evaluate'].keys()))
     train_dataset = ConcatDataset(datasets['train'])
     logging.debug(f'Total number of training meta: {len(train_dataset)}')
 
@@ -79,6 +82,9 @@ def build_schedule(configs, model_input_mapper, model_input_collate_fn):
         loader_sampler = Train_InfiniteSampler_Distributed(inf_stream_fn=inf_stream_fn,
                                                            start_idx=range_start,
                                                            end_idx=range_end,)
+        # loader_sampler =  DistributedSampler(inf_stream_fn=inf_stream_fn,
+        #                                         start_idx=range_start,
+        #                                         end_idx=range_end,)
         train_samplers.append(loader_sampler)
         train_loaders.append(DataLoader(train_dataset,
                                         batch_size=each_process_batch_size,
@@ -92,7 +98,7 @@ def build_schedule(configs, model_input_mapper, model_input_collate_fn):
     for eval_dataset_name, eval_dataset in datasets['evaluate']:
         logging.debug(f'Number of evaluate meta in {eval_dataset_name}: {len(eval_dataset)}')
         loader = DataLoader(eval_dataset, 
-                            batch_size=1, 
+                            batch_size=16, 
                             sampler=Evaluate_ExactSampler_Distributed(eval_dataset),
                             collate_fn=partial(model_input_collate_fn, mode='evaluate'),
                             num_workers=int(os.getenv('TORCH_NUM_WORKERS')),

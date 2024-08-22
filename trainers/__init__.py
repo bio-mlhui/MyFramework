@@ -6,6 +6,7 @@ task_to_trainer = {
     'VIS': Trainer,
     'RENDER': Trainer,
     'VIDVID': Trainer,
+    'UN_IMG_SEM': Trainer
 }
 
 # optimizer, schedule都交给model构建

@@ -377,6 +377,7 @@ class Video_MaskedAttn_MultiscaleMaskDecoder_v3(nn.Module):
                 multiscales, # b c t h w
                 video_aux_dict=None
                 ):
+        multiscales = multiscales[0]
         multiscales = self.inputs_projs(multiscales)
         # thw b c; b c t h w
         memories, memories_poses, mask_features, size_list = self.get_memories_and_mask_features(multiscales)
