@@ -1,152 +1,175 @@
-# ~/.bashrc: executed by bash(1) for non-login shells.
-# see /usr/share/doc/bash/examples/startup-files (in the package bash-doc)
-# for examples
+class PredsmIoU_DynamicQueries(Metric):
+    """
+    Subclasses Metric. Computes mean Intersection over Union (mIoU) given ground-truth and predictions.
+    .update() can be called repeatedly to add data from multiple validation loops.
+    """
 
-# If not running interactively, don't do anything
-case $- in
-    *i*) ;;
-      *) return;;
-esac
+    def __init__(self,
+                 num_gt_classes: int):
+        """
+        :param num_gt_classes: The number of gt classes.
+        """
+        super().__init__(dist_sync_on_step=False, compute_on_step=False)
+        self.num_gt_classes = num_gt_classes
+        self.add_state("iou", [])
+        self.add_state("iou_excludeFirst", [])
+        self.n_jobs = -1
 
-# don't put duplicate lines or lines starting with space in the history.
-# See bash(1) for more options
-HISTCONTROL=ignoreboth
+    def update(self, gt: torch.Tensor, pred: torch.Tensor, many_to_one=True, precision_based=True, linear_probe=False):
+        pred = pred.cpu().numpy().astype(int)
+        gt = gt.cpu().numpy().astype(int)
+        self.num_pred_classes = len(np.unique(pred))
+        iou_all, iou_excludeFirst = self.compute_miou(gt, pred, self.num_pred_classes, len(np.unique(gt)),
+                                            many_to_one=many_to_one, precision_based=precision_based, linear_probe=linear_probe)
+        self.iou.append(iou_all)
+        self.iou_excludeFirst.append(iou_excludeFirst)
 
-# append to the history file, don't overwrite it
-shopt -s histappend
+    def compute(self):
+        """
+        Compute mIoU
+        """
+        mIoU = np.mean(self.iou)
+        mIoU_excludeFirst = np.mean(self.iou_excludeFirst)
+        print('---mIoU computed---', mIoU)
+        print('---mIoU exclude first---', mIoU_excludeFirst)
+        return mIoU
 
-# for setting history length see HISTSIZE and HISTFILESIZE in bash(1)
-HISTSIZE=1000
-HISTFILESIZE=2000
+    def compute_miou(self, gt: np.ndarray, pred: np.ndarray, num_pred: int, num_gt: int,
+                     many_to_one=False, precision_based=False, linear_probe=False):
+        """
+        Compute mIoU with optional hungarian matching or many-to-one matching (extracts information from labels).
+        :param gt: numpy array with all flattened ground-truth class assignments per pixel
+        :param pred: numpy array with all flattened class assignment predictions per pixel
+        :param num_pred: number of predicted classes
+        :param num_gt: number of ground truth classes
+        :param many_to_one: Compute a many-to-one mapping of predicted classes to ground truth instead of hungarian
+        matching.
+        :param precision_based: Use precision as matching criteria instead of IoU for assigning predicted class to
+        ground truth class.
+        :param linear_probe: Skip hungarian / many-to-one matching. Used for evaluating predictions of fine-tuned heads.
+        :return: mIoU over all classes, true positives per class, false negatives per class, false positives per class,
+        reordered predictions matching gt
+        """
+        assert pred.shape == gt.shape
+        # print(f"unique semantic class = {np.unique(gt)}")
+        gt_class = np.unique(gt).tolist()
+        tp = [0] * num_gt
+        fp = [0] * num_gt
+        fn = [0] * num_gt
+        iou = [0] * num_gt # 13个类别
 
-# check the window size after each command and, if necessary,
-# update the values of LINES and COLUMNS.
-shopt -s checkwinsize
+        if linear_probe:
+            reordered_preds = pred
+        else:
+            if many_to_one:
+                match = self._original_match(num_pred, num_gt, pred, gt, precision_based=precision_based) # gt->list[pred_cls]
+                # remap predictions
+                reordered_preds = np.zeros(len(pred))
+                for target_i, matched_preds in match.items():
+                    for pred_i in matched_preds:
+                        reordered_preds[pred == int(pred_i)] = int(target_i)
+            else:
+                match = self._hungarian_match(num_pred, num_gt, pred, gt)
+                # remap predictions
+                reordered_preds = np.zeros(len(pred))
+                for target_i, pred_i in zip(*match):
+                    reordered_preds[pred == int(pred_i)] = int(target_i)
+                # merge all unmatched predictions to background
+                # 1. gt>5, 但是pred因为softmax+max没有类2
+                # 2. gt<5, matched到的Pred没有2
+                for unmatched_pred in np.delete(np.arange(num_pred), np.array(match[1])):
+                    reordered_preds[pred == int(unmatched_pred)] = 0
 
-# If set, the pattern "**" used in a pathname expansion context will
-# match all files and zero or more directories and subdirectories.
-#shopt -s globstar
+        # tp, fp, and fn evaluation
+        for i_part in range(0, num_gt):
+            tmp_all_gt = (gt == gt_class[i_part])
+            tmp_pred = (reordered_preds == gt_class[i_part])
+            tp[i_part] += np.sum(tmp_all_gt & tmp_pred)
+            fp[i_part] += np.sum(~tmp_all_gt & tmp_pred)
+            fn[i_part] += np.sum(tmp_all_gt & ~tmp_pred)
 
-# make less more friendly for non-text input files, see lesspipe(1)
-[ -x /usr/bin/lesspipe ] && eval "$(SHELL=/bin/sh lesspipe)"
+        # Calculate IoU per class
+        for i_part in range(0, num_gt):
+            iou[i_part] = float(tp[i_part]) / max(float(tp[i_part] + fp[i_part] + fn[i_part]), 1e-8)
 
-# set variable identifying the chroot you work in (used in the prompt below)
-if [ -z "${debian_chroot:-}" ] && [ -r /etc/debian_chroot ]; then
-    debian_chroot=$(cat /etc/debian_chroot)
-fi
+        print('\tiou = ', iou, np.mean(iou[1:]))
+        if len(iou) > 1:
+            return np.mean(iou), np.mean(iou[1:])
+        else:
+            # return np.mean(iou), tp, fp, fn, reordered_preds.astype(int).tolist()
+            return np.mean(iou), np.mean(iou)
 
-# set a fancy prompt (non-color, unless we know we "want" color)
-case "$TERM" in
-    xterm-color|*-256color) color_prompt=yes;;
-esac
+    @staticmethod
+    def get_score(flat_preds: np.ndarray, flat_targets: np.ndarray, c1: int, c2: int, precision_based: bool = False) \
+            -> float:
+        """
+        Calculates IoU given gt class c1 and prediction class c2.
+        :param flat_preds: flattened predictions
+        :param flat_targets: flattened gt
+        :param c1: ground truth class to match
+        :param c2: predicted class to match
+        :param precision_based: flag to calculate precision instead of IoU.
+        :return: The score if gt-c1 was matched to predicted c2.
+        """
+        tmp_all_gt = (flat_targets == c1)
+        tmp_pred = (flat_preds == c2)
+        tp = np.sum(tmp_all_gt & tmp_pred)
+        fp = np.sum(~tmp_all_gt & tmp_pred)
+        if not precision_based:
+            fn = np.sum(tmp_all_gt & ~tmp_pred)
+            jac = float(tp) / max(float(tp + fp + fn), 1e-8)
+            return jac
+        else:
+            prec = float(tp) / max(float(tp + fp), 1e-8)
+            # print('\tgt, pred = ', c1, c2, ' | precision=', prec)
+            return prec
 
-# uncomment for a colored prompt, if the terminal has the capability; turned
-# off by default to not distract the user: the focus in a terminal window
-# should be on the output of commands, not on the prompt
-#force_color_prompt=yes
-
-if [ -n "$force_color_prompt" ]; then
-    if [ -x /usr/bin/tput ] && tput setaf 1 >&/dev/null; then
-	# We have color support; assume it's compliant with Ecma-48
-	# (ISO/IEC-6429). (Lack of such support is extremely rare, and such
-	# a case would tend to support setf rather than setaf.)
-	color_prompt=yes
-    else
-	color_prompt=
-    fi
-fi
-
-if [ "$color_prompt" = yes ]; then
-    PS1='${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
-else
-    PS1='${debian_chroot:+($debian_chroot)}\u@\h:\w\$ '
-fi
-unset color_prompt force_color_prompt
-
-# If this is an xterm set the title to user@host:dir
-case "$TERM" in
-xterm*|rxvt*)
-    PS1="\[\e]0;${debian_chroot:+($debian_chroot)}\u@\h: \w\a\]$PS1"
-    ;;
-*)
-    ;;
-esac
-
-# enable color support of ls and also add handy aliases
-if [ -x /usr/bin/dircolors ]; then
-    test -r ~/.dircolors && eval "$(dircolors -b ~/.dircolors)" || eval "$(dircolors -b)"
-    alias ls='ls --color=auto'
-    #alias dir='dir --color=auto'
-    #alias vdir='vdir --color=auto'
-
-    alias grep='grep --color=auto'
-    alias fgrep='fgrep --color=auto'
-    alias egrep='egrep --color=auto'
-fi
-
-# colored GCC warnings and errors
-#export GCC_COLORS='error=01;31:warning=01;35:note=01;36:caret=01;32:locus=01:quote=01'
-
-# some more ls aliases
-alias ll='ls -alF'
-alias la='ls -A'
-alias l='ls -CF'
-
-# Add an "alert" alias for long running commands.  Use like so:
-#   sleep 10; alert
-alias alert='notify-send --urgency=low -i "$([ $? = 0 ] && echo terminal || echo error)" "$(history|tail -n1|sed -e '\''s/^\s*[0-9]\+\s*//;s/[;&|]\s*alert$//'\'')"'
-
-# Alias definitions.
-# You may want to put all your additions into a separate file like
-# ~/.bash_aliases, instead of adding them here directly.
-# See /usr/share/doc/bash-doc/examples in the bash-doc package.
-
-if [ -f ~/.bash_aliases ]; then
-    . ~/.bash_aliases
-fi
-
-# enable programmable completion features (you don't need to enable
-# this, if it's already enabled in /etc/bash.bashrc and /etc/profile
-# sources /etc/bash.bashrc).
-if ! shopt -oq posix; then
-  if [ -f /usr/share/bash-completion/bash_completion ]; then
-    . /usr/share/bash-completion/bash_completion
-  elif [ -f /etc/bash_completion ]; then
-    . /etc/bash_completion
-  fi
-fi
-# CUDA_HOME=/usr/local/cuda-12.0/
-# export PATH=/usr/local/cuda/bin:$PATH
-# export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
-
-# >>> conda initialize >>>
-# !! Contents within this block are managed by 'conda init' !!
-__conda_setup="$('/home/xuhuihui/anaconda3/bin/conda' 'shell.bash' 'hook' 2> /dev/null)"
-if [ $? -eq 0 ]; then
-    eval "$__conda_setup"
-else
-    if [ -f "/home/xuhuihui/anaconda3/etc/profile.d/conda.sh" ]; then
-        . "/home/xuhuihui/anaconda3/etc/profile.d/conda.sh"
-    else
-        export PATH="/home/xuhuihui/anaconda3/bin:$PATH"
-    fi
-fi
-unset __conda_setup
-# <<< conda initialize <<<
-
-# export CUDA_HOME=/home/xuhuihui/software/cuda-11.7
-# export PATH=$PATH:/home/xuhuihui/software/cuda-11.7/bin
-# export LD_LIBRARY_PATH=/home/xuhuihui/software/cuda-11.7/lib64
-
-export CORENLP_HOME=/home/xuhuihui/software/stanford-corenlp-4.5.4
-export JAVA_HOME=/home/xuhuihui/software/jre1.8.0_371
-export CLASSPATH=/home/xuhuihui/software/jre1.8.0_371/lib
-export PATH=$PATH:$JAVA_HOME/bin
-export PATH=/home/xuhuihui/software/7z/bin:$PATH
-
-export DATASET_PATH=/home/xuhuihui/datasets
-export PT_PATH=/home/xuhuihui/pt
-export PATH=/home/xuhuihui/software/ImageMagick-7.1.1-29/bin:$PATH
-export LD_LIBRARY_PATH=/home/xuhuihui/software/ImageMagick-7.1.1-29/lib:$LD_LIBRARY_PATH
-export MAGICK_HOME=/home/xuhuihui/software/ImageMagick-7.1.1-29
-export IMAGEMAGICK_BINARY=/home/xuhuihui/software/ImageMagick-7.1.1-29/bin/magick
+    def compute_score_matrix(self, num_pred: int, num_gt: int, pred: np.ndarray, gt: np.ndarray,
+                             precision_based: bool = False) -> np.ndarray:
+        """
+        Compute score matrix. Each element i, j of matrix is the score if i was matched j. Computation is parallelized
+        over self.n_jobs.
+        :param num_pred: number of predicted classes
+        :param num_gt: number of ground-truth classes
+        :param pred: flattened predictions
+        :param gt: flattened gt
+        :param precision_based: flag to calculate precision instead of IoU.
+        :return: num_pred x num_gt matrix with A[i, j] being the score if ground-truth class i was matched to
+        predicted class j.
+        """
+        # print("Parallelizing iou computation")
+        # start = time.time()
+        score_mat = []
+        for c2 in range(num_pred):
+            for c1 in np.unique(gt):
+                score_mat.append(self.get_score(pred, gt, c1, c2, precision_based=precision_based))
+                
+        # score_mat = Parallel(n_jobs=self.n_jobs)(delayed(self.get_score)(pred, gt, c1, c2, precision_based=precision_based)
+        #                                          for c2 in range(num_pred) for c1 in np.unique(gt))
+        # print(f"took {time.time() - start} seconds")
+        score_mat = np.array(score_mat)
+        return score_mat.reshape((num_pred, num_gt)).T
+    def _hungarian_match(self, num_pred: int, num_gt: int, pred: np.ndarray, gt: np.ndarray):
+        # do hungarian matching. If num_pred > num_gt match will be partial only.
+        iou_mat = self.compute_score_matrix(num_pred, num_gt, pred, gt)
+        match = linear_sum_assignment(1 - iou_mat)  # pred中的类2因为softmax+max没有了, 那和2类Match到的gt类没有什么用, num_gt定义的是5
+        print("Matched clusters to gt classes:")
+        print(match)
+        return match
+    def _original_match(self, num_pred, num_gt, pred, gt, precision_based=False) -> Dict[int, list]:
+        score_mat = self.compute_score_matrix(num_pred, num_gt, pred, gt, precision_based=precision_based)
+        gt_class = np.unique(gt).tolist()
+        preds_to_gts = {}
+        preds_to_gt_scores = {}
+        # Greedily match predicted class to ground-truth class by best score.
+        for pred_c in range(num_pred):
+            for gt_i in range(num_gt):
+                score = score_mat[gt_i, pred_c]
+                if (pred_c not in preds_to_gts) or (score > preds_to_gt_scores[pred_c]):
+                    preds_to_gts[pred_c] = gt_class[gt_i]
+                    preds_to_gt_scores[pred_c] = score
+        gt_to_matches = defaultdict(list)
+        for k, v in preds_to_gts.items():
+            gt_to_matches[v].append(k)
+        # print('original match:', gt_to_matches)
+        return gt_to_matches

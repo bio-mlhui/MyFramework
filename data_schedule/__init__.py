@@ -25,7 +25,6 @@ def build_schedule(configs, model_input_mapper, model_input_collate_fn):
     from .registry import MAPPER_REGISTRY, EVALUATOR_REGISTRY
     from detectron2.data import DatasetCatalog, DatasetFromList, MapDataset, MetadataCatalog
     from data_schedule.utils.sampler import Evaluate_ExactSampler_Distributed, Train_InfiniteSampler_Distributed
-    # from torch.utils.data import DistributedSampler
     DatasetCatalog.register('global_dataset', func=lambda: [])
     datasets = {'train': [], 'evaluate': []}
     meta_idx_shift = 0 # train, eval都对meta_idx进行shift, 每个set的idx都在独立的范围内
@@ -82,9 +81,6 @@ def build_schedule(configs, model_input_mapper, model_input_collate_fn):
         loader_sampler = Train_InfiniteSampler_Distributed(inf_stream_fn=inf_stream_fn,
                                                            start_idx=range_start,
                                                            end_idx=range_end,)
-        # loader_sampler =  DistributedSampler(inf_stream_fn=inf_stream_fn,
-        #                                         start_idx=range_start,
-        #                                         end_idx=range_end,)
         train_samplers.append(loader_sampler)
         train_loaders.append(DataLoader(train_dataset,
                                         batch_size=each_process_batch_size,
@@ -98,7 +94,7 @@ def build_schedule(configs, model_input_mapper, model_input_collate_fn):
     for eval_dataset_name, eval_dataset in datasets['evaluate']:
         logging.debug(f'Number of evaluate meta in {eval_dataset_name}: {len(eval_dataset)}')
         loader = DataLoader(eval_dataset, 
-                            batch_size=16, 
+                            batch_size=1, 
                             sampler=Evaluate_ExactSampler_Distributed(eval_dataset),
                             collate_fn=partial(model_input_collate_fn, mode='evaluate'),
                             num_workers=int(os.getenv('TORCH_NUM_WORKERS')),
@@ -111,6 +107,71 @@ def build_schedule(configs, model_input_mapper, model_input_collate_fn):
         evaluators.append((eval_dataset_name, evaluator))
 
     return train_samplers, train_loaders, partial(evaluate_call, evaluators=evaluators)
+
+def build_singleProcess_schedule(configs, model_input_mapper, model_input_collate_fn):
+    import logging
+    from functools import partial
+    from torch.utils.data import DataLoader, ConcatDataset
+    from .registry import MAPPER_REGISTRY, EVALUATOR_REGISTRY
+    from detectron2.data import DatasetCatalog, DatasetFromList, MapDataset, MetadataCatalog
+    DatasetCatalog.register('global_dataset', func=lambda: [])
+    datasets = {'train': [], 'evaluate': []}
+    meta_idx_shift = 0 # train, eval都对meta_idx进行shift, 每个set的idx都在独立的范围内
+    for mode in ['train', 'evaluate']:
+        for dataset_name in configs['data'][mode].keys():
+            dataset_assume_mode = MetadataCatalog.get(dataset_name).get('mode')
+            # 注册的时候的mode只是一个预先的定义, meta(数据集), mapper(任务), model(任务)
+            # 由于train/test只和任务有关, meta不对meta有强制的要求
+            if (dataset_assume_mode != mode) and (dataset_assume_mode != 'all'): 
+                logging.warning(f'{dataset_name} 的预设是用于 {dataset_assume_mode} 而非{mode}')
+            dataset_dicts = DatasetFromList(DatasetCatalog.get(dataset_name), 
+                                            copy=configs['data'][mode][dataset_name].pop('dcopy', False), 
+                                            serialize=configs['data'][mode][dataset_name].pop('serialize', True))
+            mapper = MAPPER_REGISTRY.get(configs['data'][mode][dataset_name]['mapper']['name'])(mode=mode,
+                                                                                                dataset_name=dataset_name, 
+                                                                                                configs=configs,
+                                                                                                meta_idx_shift=meta_idx_shift if mode == 'train' else 0)
+            meta_idx_shift += len(dataset_dicts)
+            dataset = MapDataset(dataset_dicts, partial(composition, mappers=[mapper, 
+                                                                              partial(model_input_mapper, mode=mode)]))
+            if mode == 'train':
+                datasets[mode].append(dataset)
+            else:
+                datasets[mode].append((dataset_name, dataset))
+    train_dataset = ConcatDataset(datasets['train'])
+    logging.debug(f'Total number of training meta: {len(train_dataset)}')
+
+
+    batch_size = configs['optim']['batch_size']
+    pin_memory = configs['data'].pop('pin_memory', True)
+    train_loader = DataLoader(train_dataset,
+                                batch_size=batch_size,
+                                shuffle=True,
+                                num_workers=int(os.getenv('TORCH_NUM_WORKERS')),
+                                collate_fn=partial(model_input_collate_fn, mode='train'), 
+                                pin_memory=pin_memory,
+                                drop_last=False,
+                                persistent_workers=False)
+
+    evaluators = []
+    for eval_dataset_name, eval_dataset in datasets['evaluate']:
+        logging.debug(f'Number of evaluate meta in {eval_dataset_name}: {len(eval_dataset)}')
+        eval_batch_size = configs['data']['evaluate'][eval_dataset_name]['evaluator']['eval_batch_size']
+        loader = DataLoader(eval_dataset, 
+                            batch_size=eval_batch_size,
+                            shuffle=False,
+                            collate_fn=partial(model_input_collate_fn, mode='evaluate'),
+                            num_workers=int(os.getenv('TORCH_NUM_WORKERS')),
+                            pin_memory=pin_memory,
+                            drop_last=False, # If False and the size of dataset is not divisible by the batch size, then the last batch will be smaller.
+                            persistent_workers=True if int(os.getenv('TORCH_NUM_WORKERS')) > 0 else False)
+        evaluator = EVALUATOR_REGISTRY.get(configs['data']['evaluate'][eval_dataset_name]['evaluator']['name'])(configs=configs,
+                                                                                                                dataset_name=eval_dataset_name,
+                                                                                                                data_loader=loader)
+        evaluators.append((eval_dataset_name, evaluator))
+
+    return train_loader, partial(evaluate_call, evaluators=evaluators)
+
 
 def composition(data_dict, mappers):
     for mappper in mappers:

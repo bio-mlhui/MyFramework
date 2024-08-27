@@ -1,8 +1,10 @@
+
 from . import mapper
-from . import evaluator
+from . import evaluator_alignseg
+from . import augmentations
 
+from . import cocostuff27
 
-from . import potsdam
 
 # ssl_few_shot
 # from . import abd_ct

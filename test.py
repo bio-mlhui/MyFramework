@@ -446,45 +446,48 @@
 
 # sizes = torch.stack(sizes, dim=0) # L 2
 
-import cv2
-import pydicom
-import numpy as np
-import torch
-from torchvision.io import write_video
+# import cv2
+# import pydicom
+# import numpy as np
+# import torch
+# from torchvision.io import write_video
 
-# Function to read DICOM file and extract frames
-def read_dicom(file_path):
-    ds = pydicom.dcmread(file_path)
-    if 'NumberOfFrames' in ds:
-        frames = ds.pixel_array
-    else:
-        frames = np.expand_dims(ds.pixel_array, axis=0)
-    return frames, ds
+# # Function to read DICOM file and extract frames
+# def read_dicom(file_path):
+#     ds = pydicom.dcmread(file_path)
+#     if 'NumberOfFrames' in ds:
+#         frames = ds.pixel_array
+#     else:
+#         frames = np.expand_dims(ds.pixel_array, axis=0)
+#     return frames, ds
 
-# Function to save frames as a video
-def save_video(frames, output_path, frame_rate=30):
-    grayscale_frames = []
-    for frame in frames:
-        grayscale_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-        grayscale_frames.append(grayscale_frame)
-    grayscale_frames = np.array(grayscale_frames)
-    grayscale_frames = (grayscale_frames - grayscale_frames.min()) / (grayscale_frames.max() - grayscale_frames.min())
-    # t h w 1, 0-1
-    grayscale_frames = torch.from_numpy(grayscale_frames).float()
-    grayscale_frames = (grayscale_frames * 255).clamp(min=0, max=255).to(torch.uint8)
-    write_video(output_path, video_array=grayscale_frames.unsqueeze(-1).repeat(1,1,1,3), fps=frame_rate)
+# # Function to save frames as a video
+# def save_video(frames, output_path, frame_rate=30):
+#     grayscale_frames = []
+#     for frame in frames:
+#         grayscale_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+#         grayscale_frames.append(grayscale_frame)
+#     grayscale_frames = np.array(grayscale_frames)
+#     grayscale_frames = (grayscale_frames - grayscale_frames.min()) / (grayscale_frames.max() - grayscale_frames.min())
+#     # t h w 1, 0-1
+#     grayscale_frames = torch.from_numpy(grayscale_frames).float()
+#     grayscale_frames = (grayscale_frames * 255).clamp(min=0, max=255).to(torch.uint8)
+#     write_video(output_path, video_array=grayscale_frames.unsqueeze(-1).repeat(1,1,1,3), fps=frame_rate)
 
-# Main function
-def dicom_to_video(dicom_path, output_video_path, frame_rate=30):
-    frames, ds = read_dicom(dicom_path)
-    save_video(frames, output_video_path, frame_rate)
-    print(f"Video saved to {output_video_path}")
+# # Main function
+# def dicom_to_video(dicom_path, output_video_path, frame_rate=30):
+#     frames, ds = read_dicom(dicom_path)
+#     save_video(frames, output_video_path, frame_rate)
+#     print(f"Video saved to {output_video_path}")
 
-# Example usage
-dicom_path = '/home/xuhuihui/workspace/rvos_encoder/miccai_generate_Dir/folder/202405281648120003VAS.DCM'
-output_video_path = '/home/xuhuihui/workspace/rvos_encoder/miccai_generate_Dir/folder/202405281648120003VAS.mp4'
-dicom_to_video(dicom_path, output_video_path, frame_rate=30)
+# # Example usage
+# dicom_path = '/home/xuhuihui/workspace/rvos_encoder/miccai_generate_Dir/folder/202405281648120003VAS.DCM'
+# output_video_path = '/home/xuhuihui/workspace/rvos_encoder/miccai_generate_Dir/folder/202405281648120003VAS.mp4'
+# dicom_to_video(dicom_path, output_video_path, frame_rate=30)
     
+
+import torch
+dinov2_vitl14 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14')
 
     
     

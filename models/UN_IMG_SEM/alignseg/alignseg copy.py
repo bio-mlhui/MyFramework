@@ -7,7 +7,6 @@ from typing import Any, Optional, List, Dict, Set, Callable
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from data_schedule import build_schedule
 from torch import Tensor
 from models.optimization.utils import get_total_grad_norm
 from einops import repeat, rearrange, reduce
@@ -58,9 +57,9 @@ import torch.nn as nn
 import torch.nn.functional as F 
 import numpy as np
 import torch.distributed as dist
-from models.UN_IMG_SEM.hd.make_reference_pool import renew_reference_pool
+from .make_reference_pool import renew_reference_pool
 from detectron2.data import MetadataCatalog, DatasetCatalog
-from models.UN_IMG_SEM.hd.dino.DinoFeaturizer import DinoFeaturizer
+from .dino.DinoFeaturizer import DinoFeaturizer
 
 from models.UN_IMG_SEM.loss import StegoLoss, SupConLoss
 def build_criterion(n_classes: int, opt: dict):
@@ -455,47 +454,16 @@ class AUXMapper:
     
 
 @register_model
-def hidden_positive(configs, device):
+def alignseg(configs, device):
     aux_mapper = AUXMapper()
-    train_samplers, train_loaders, eval_function = build_schedule(configs, aux_mapper.mapper, partial(aux_mapper.collate))
-    assert len(MetadataCatalog.get('global_dataset').get('subset_list')) == 1
-    assert len(train_loaders) == 1 and len(train_loaders[0].dataset.datasets) == 1
+    from data_schedule import build_singleProcess_schedule
+    train_loader, eval_function = build_singleProcess_schedule(configs, aux_mapper.mapper, partial(aux_mapper.collate))
     model = HiddenPositive(configs)
-    if comm.is_main_process():
-        logging.debug(f'模型的总参数数量:{sum(p.numel() for p in model.parameters())}')
-        logging.debug(f'模型的可训练参数数量:{sum(p.numel() for p in model.parameters() if p.requires_grad)}')
         
     model.to(device)
     model.optimize_setup(configs)
-
-    from models.UN_IMG_SEM.hd.make_reference_pool import initialize_reference_pool
-    from detectron2.data import DatasetFromList, MapDataset
-    from data_schedule.registry import MAPPER_REGISTRY
-    from data_schedule import composition
-    train_dataset_name = list(configs['data']['train'].keys())[0]
-    assert len(list(configs['data']['train'].keys())) == 1
-    dataset_dicts = DatasetFromList(DatasetCatalog.get(train_dataset_name), 
-                                    copy=configs['data']['train'][train_dataset_name].pop('dcopy', True), 
-                                    serialize=configs['data']['train'][train_dataset_name].pop('serialize', True))
-    # 改变原始的seed
-    configs['data']['train'][train_dataset_name]['mapper']['seed'] = configs['data']['train'][train_dataset_name]['mapper']['seed'] - 1
-    mapper = MAPPER_REGISTRY.get(configs['data']['train'][train_dataset_name]['mapper']['name'])(mode='train', 
-                                                                                                 dataset_name=train_dataset_name, 
-                                                                                                 configs=configs, meta_idx_shift=0)
-    dataset = MapDataset(dataset_dicts, partial(composition, mappers=[mapper, partial(aux_mapper.mapper, mode='train')]))
-    model.dataset_memory = dataset
-    pool_ag_path, pool_sp_path = os.path.join(configs['out_dir'], 'pool_ag.pth'), os.path.join(configs['out_dir'], 'Pool_sp.pth')
-    if not (os.path.exists(pool_ag_path) and os.path.exists(pool_sp_path)):
-        if comm.is_main_process():
-            Pool_ag, Pool_sp = initialize_reference_pool(model.net_model,  dataset,  configs, model.feat_dim, device) 
-            torch.save(Pool_ag, pool_ag_path)
-            torch.save(Pool_sp, pool_sp_path)
-    comm.synchronize()
-    model.Pool_ag = torch.load(pool_ag_path, map_location=model.device)
-    model.Pool_sp = torch.load(pool_sp_path, map_location=model.device)
-
-    if comm.get_world_size() > 1:
-        # broadcast_buffers = False
-        model = DDP(model, device_ids=[comm.get_local_rank()], find_unused_parameters=False, broadcast_buffers = False)
-    return model, train_samplers, train_loaders, eval_function
+    
+    logging.debug(f'模型的总参数数量:{sum(p.numel() for p in model.parameters())}')
+    logging.debug(f'模型的可训练参数数量:{sum(p.numel() for p in model.parameters() if p.requires_grad)}')
+    return model, train_loader, eval_function
 

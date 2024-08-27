@@ -48,51 +48,32 @@ root = os.path.join(_root, 'POTSDAM/potsdam')
 
 visualize_meta_idxs = defaultdict(list)
 visualize_meta_idxs['potsdam3_train]'] = [] 
-visualize_meta_idxs['potsdam3_unlabelled_train]'] = [] 
 visualize_meta_idxs['potsdam3_val'] = [] 
-visualize_meta_idxs['potsdam3_train+val]'] = [] 
-visualize_meta_idxs['potsdam3_all'] = [] 
 potsdam3_meta = {
     'thing_classes': ['roads and cars', 'buildings and clutter', 'trees and vegetation'],
     'thing_colors': [(108, 109, 112), (152, 173, 237), (82, 237, 9)],
     'class_labels': ['roads and cars', 'buildings and clutter', 'trees and vegetation'],
-    'root': root,
     'num_classes': 3,
-    'coarse_labels': True,
+    'get_image_fn': partial(get_image, path=os.path.join(root, 'imgs',)),
+    'get_mask_fn': partial(get_image_mask, path=os.path.join(root, 'gt',),),
 }
 
-def return_dataset_meta(path, split_name):
-    sname = split_name[9:]
-    split_files = {
-        "train": ["labelled_train.txt"],
-        "unlabelled_train": ["unlabelled_train.txt"],
-        # "train": ["unlabelled_train.txt"],
-        "val": ["labelled_test.txt"],
-        "train+val": ["labelled_train.txt", "labelled_test.txt"],
-        "all": ["all.txt"]
-    }
-    assert sname in split_files.keys()
+split_files = {
+    "potsdam3_train": ["labelled_train.txt"],
+    "potsdam3_val": ["labelled_test.txt"],
+}
 
+def return_meta(path, split_name):
     files = []
-    for split_file in split_files[sname]:
+    for split_file in split_files[split_name]:
         with open(join(path, split_file), "r") as f:
             files.extend(fn.rstrip() for fn in f.readlines())
     files = [{'image_id': image_id, 'meta_idx': idx} for idx, image_id in enumerate(files)]
-    return files
+    return files    
 
-for name,mode in zip([
-             'potsdam3_train',
-             'potsdam3_unlabelled_train', 'potsdam3_val',
-             'potsdam3_train+val', 'potsdam3_all'], ['train', 'train', 'evaluate', 'all', 'all']):
+for name,mode in zip(['potsdam3_val', 'potsdam3_train',], ['evaluate', 'train']):
     dataset_meta = copy.deepcopy(potsdam3_meta)
-    dataset_meta.update({
-        'mode': mode,
-        'get_image_fn': partial(get_image, path=os.path.join(root, 'imgs',)),
-        'get_mask_fn': partial(get_image_mask, path=os.path.join(root, 'gt',),),
-        'name': name,
-
-    })
-    DatasetCatalog.register(name, partial(return_dataset_meta,path=root,
-                                          split_name=name))    
+    dataset_meta.update({'mode': mode, 'name': name,})
+    DatasetCatalog.register(name, partial(return_meta,path=root,split_name=name))    
     MetadataCatalog.get(name).set(**dataset_meta, 
                                   visualize_meta_idxs=visualize_meta_idxs[name]) 
