@@ -15,9 +15,136 @@ from data_schedule.registry import MAPPER_REGISTRY
 from PIL import Image
 from torchvision import transforms as T
 from .augmentations import UN_IMG_SEG_EVAL_AUG_REGISTRY, UN_IMG_SEG_TRAIN_AUG_REGISTRY
+import torch.nn.functional as F
+
+
+# nearest resize短边image, 然后centercrop到固定大小; 同样的mask; HP有normalize
+normalize = T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+@MAPPER_REGISTRY.register()
+class HP_TrainMapper_FiveCrop(Ori_Mapper):
+    def __init__(self,
+                 dataset_name, # potsdam3_train
+                 configs,
+                 mode, 
+                 meta_idx_shift,
+                 ): 
+        assert mode == 'train'
+        dataset_meta = MetadataCatalog.get(dataset_name)
+        assert dataset_meta.get('name') == dataset_name
+        mapper_config = configs['data'][mode][dataset_name]['mapper']
+        super().__init__(meta_idx_shift, dataset_meta)
+        self.get_image_fn = dataset_meta.get('get_image_fn')
+        self.num_classes = dataset_meta.get('num_classes')
+        self.get_mask_fn = dataset_meta.get('get_mask_fn')
+        resolution = mapper_config['res']
+
+        self.resolution = resolution
+        self.transform = T.Compose([
+            T.Resize(resolution, Image.NEAREST),
+            T.CenterCrop(resolution),
+            T.ToTensor(),
+            normalize
+        ])
+        self.target_transform = T.Compose([
+            T.Resize(resolution, Image.NEAREST),
+            T.CenterCrop(resolution),
+        ])
+        self.geometric_transforms = T.Compose([
+            T.RandomHorizontalFlip(),
+            T.RandomResizedCrop(size=resolution, scale=(0.8, 1.0))
+        ])
+        self.photometric_transforms = T.Compose([
+            T.ColorJitter(brightness=.3, contrast=.3, saturation=.3, hue=.1),
+            T.RandomGrayscale(.2),
+            T.RandomApply([T.GaussianBlur((5, 5))]),
+            # from dataset.photometric_aug import RandomLightingNoise
+            # RandomLightingNoise()
+        ])
+        self.path = os.path.join('/home/xuhuihui/workspace/UNMED/data/Datasets/cocostuff', "cropped", "cocostuff27_five_crop_0.5", "label", "train",)
+
+    def _call(self, data_dict):
+        image_id = data_dict['image_id']
+        image: Image = self.get_image_fn(image_id=image_id)  # PIL Image
+        mask = self.get_mask_fn(image_id=image_id) # h w, -1/0-27, long
+        mask = mask[None, None] # h w, -1, 0-27
+
+        image = self.transform(image) # 3 h w 
+        mask = self.target_transform(mask)[0, 0]
+
+        img_aug = self.photometric_transforms(image)
+        
+        ret = {
+            'image_id': image_id,
+            'image': image,
+            'mask': mask,
+            'img_aug': img_aug,
+        }
+        return ret
+
+# nearest resize短边image, crop到固定大小, 同样的 mask, 有normalize
+@MAPPER_REGISTRY.register()
+class HP_EvalMapper(Ori_Mapper):
+    def __init__(self,
+                 dataset_name, # potsdam_train
+                 configs,
+                 mode, 
+                 meta_idx_shift,
+                 ): 
+        dataset_meta = MetadataCatalog.get(dataset_name)
+        assert dataset_meta.get('name') == dataset_name
+        mapper_config = configs['data'][mode][dataset_name]['mapper']
+        super().__init__(meta_idx_shift, dataset_meta)
+        self.get_image_fn = dataset_meta.get('get_image_fn')
+        self.get_mask_fn = dataset_meta.get('get_mask_fn')
+        self.num_classes = dataset_meta.get('num_classes')
+        
+        # define your test augmentations
+        resolution = mapper_config['res']
+        self.transform = T.Compose([
+            T.Resize(resolution, Image.NEAREST), 
+            T.CenterCrop(resolution),
+            T.ToTensor(),
+            normalize,
+        ])
+        self.target_transform = T.Compose([
+            T.Resize(resolution, Image.NEAREST),
+            T.CenterCrop(resolution),
+        ])
+        pass
+    
+    def bilinear_resize_mask(self, mask, shape):
+        # h w, uint8, 0-255, label, bilinear
+        H, W = mask.shape
+        unique_labels = mask.unique()
+        lab_to_mask = []
+        for lab in unique_labels:
+            binary_mask = (mask == lab).float()
+            binary_mask = F.interpolate(binary_mask[None, None], size=shape, mode='bilinear', align_corners=False)[0, 0]
+            lab_to_mask.append(binary_mask)
+        lab_to_mask = torch.stack(lab_to_mask, dim=-1) # h w num_class
+        new_mask = lab_to_mask.max(dim=-1)[1] # h w, indices
+        new_label = unique_labels[new_mask.flatten()].reshape(shape)
+        return new_label
+    
+    def _call(self, data_dict):
+        image_id = data_dict['image_id']
+
+        image = self.get_image_fn(image_id=image_id)  # PIL Image
+        mask = self.get_mask_fn(image_id=image_id) # h w unin8, 255
+
+        image = self.transform(image)
+        mask = mask[None, None]
+        new_mask = self.target_transform(mask)
+        new_mask = new_mask[0, 0]
+        return {
+           'image': image,
+           'image_id': image_id,
+           'mask': new_mask
+       }
 
 
 
+# bilinear resize到固定大小，mask也是bilinear
 @MAPPER_REGISTRY.register()
 class UN_IMG_SEG_EvalMapper(Ori_Mapper):
     def __init__(self,
@@ -35,27 +162,50 @@ class UN_IMG_SEG_EvalMapper(Ori_Mapper):
         self.num_classes = dataset_meta.get('num_classes')
         
         # define your test augmentations
-        aug_config = mapper_config['augmentation']
-        self.eval_aug = UN_IMG_SEG_EVAL_AUG_REGISTRY.get(aug_config['name'])(aug_config)
+        resolution = mapper_config['res']
+        self.transform = T.Compose([
+            T.Resize((resolution,resolution), interpolation=Image.BILINEAR), 
+            T.ToTensor()
+        ])
+    
+    def bilinear_resize_mask(self, mask, shape):
+        # h w, uint8, 0-255, label, bilinear
+        H, W = mask.shape
+        unique_labels = mask.unique()
+        lab_to_mask = []
+        for lab in unique_labels:
+            binary_mask = (mask == lab).float()
+            binary_mask = F.interpolate(binary_mask[None, None], size=shape, mode='bilinear', align_corners=False)[0, 0]
+            lab_to_mask.append(binary_mask)
+        lab_to_mask = torch.stack(lab_to_mask, dim=-1) # h w num_class
+        new_mask = lab_to_mask.max(dim=-1)[1] # h w, indices
+        new_label = unique_labels[new_mask.flatten()].reshape(shape)
+        return new_label
     
     def _call(self, data_dict):
         image_id = data_dict['image_id']
 
         image = self.get_image_fn(image_id=image_id)  # PIL Image
-        mask = self.get_mask_fn(image_id=image_id) # unin8, 255
-        ret = {
-            'image_id': image_id,
-            'image': image,
-            'mask': mask
-        }
-        aug_ret = self.eval_aug(ret)        
-        return aug_ret
+        mask = self.get_mask_fn(image_id=image_id) # -1/0-26, long
+
+        image = self.transform(image)
+        new_mask = self.bilinear_resize_mask(mask, shape=image.shape[-2:])
+        # original_class = mask.unique().tolist()
+        # after_class = new_mask.unique().tolist()
+        # assert len(set(original_class) - set(after_class)) == 0
+        # assert len(set(after_class) - set(original_class)) == 0
+        return {
+           'image': image,
+           'image_id': image_id,
+           'mask': new_mask
+       }
 
 
+# bilinear resize到固定大小 没有mask
 @MAPPER_REGISTRY.register()
-class UN_IMG_SEG_TrainMapper(Ori_Mapper):
+class Common_TrainMapper(Ori_Mapper):
     def __init__(self,
-                 dataset_name, # potsdam3_train
+                 dataset_name,
                  configs,
                  mode, 
                  meta_idx_shift,
@@ -67,64 +217,30 @@ class UN_IMG_SEG_TrainMapper(Ori_Mapper):
         super().__init__(meta_idx_shift, dataset_meta)
         self.get_image_fn = dataset_meta.get('get_image_fn')
         self.num_classes = dataset_meta.get('num_classes')
-        
         self.get_mask_fn = dataset_meta.get('get_mask_fn')
-        aug_config = mapper_config['augmentation']
-        self.train_aug = UN_IMG_SEG_TRAIN_AUG_REGISTRY.get(aug_config['name'])(aug_config)
+        resolution = mapper_config['res']
+        self.transform = T.Compose([
+            T.Resize((resolution,resolution)), 
+            T.ToTensor(),
+        ])
         
     def _call(self, data_dict):
         image_id = data_dict['image_id']
         image = self.get_image_fn(image_id=image_id)  # PIL Image
-        
+        image = self.transform(image) # 3 h w 
         ret = {
             'image_id': image_id,
             'image': image,
         }
-        aug_ret = self.train_aug(ret)
-        
-        return aug_ret
+        return ret
 
 
-@MAPPER_REGISTRY.register()
-class UN_IMG_SEG_TrainMapper_withMask(Ori_Mapper):
-    def __init__(self,
-                 dataset_name, # potsdam3_train
-                 configs,
-                 mode, 
-                 meta_idx_shift,
-                 ): 
-        assert mode == 'train'
-        dataset_meta = MetadataCatalog.get(dataset_name)
-        assert dataset_meta.get('name') == dataset_name
-        mapper_config = configs['data'][mode][dataset_name]['mapper']
-        super().__init__(meta_idx_shift, dataset_meta)
-        self.get_image_fn = dataset_meta.get('get_image_fn')
-        self.num_classes = dataset_meta.get('num_classes')
-        
-        self.get_mask_fn = dataset_meta.get('get_mask_fn')
-        aug_config = mapper_config['augmentation']
-        self.train_aug = UN_IMG_SEG_TRAIN_AUG_REGISTRY.get(aug_config['name'])(aug_config)
-        
-    def _call(self, data_dict):
-        image_id = data_dict['image_id']
-        image = self.get_image_fn(image_id=image_id)  # PIL Image
-        mask = self.get_mask_fn(image_id=image_id) # h w, 
-        
-        ret = {
-            'image_id': image_id,
-            'image': image,
-            'mask': mask
-        }
-        aug_ret = self.train_aug(ret)
-        
-        return aug_ret
 
 
-import time
 @MAPPER_REGISTRY.register()
 class STEGO_TrainMapper(Ori_Mapper):
     def __init__(self,
-                 dataset_name, # potsdam3_train
+                 dataset_name, 
                  configs,
                  mode, 
                  meta_idx_shift,
@@ -134,7 +250,6 @@ class STEGO_TrainMapper(Ori_Mapper):
         assert dataset_meta.get('name') == dataset_name
         mapper_config = configs['data'][mode][dataset_name]['mapper']
         super().__init__(meta_idx_shift, dataset_meta)
-        from detectron2.data import DatasetFromList
         self.get_image_fn = dataset_meta.get('get_image_fn')
         self.num_classes = dataset_meta.get('num_classes')
         self.get_mask_fn = dataset_meta.get('get_mask_fn')
@@ -144,11 +259,6 @@ class STEGO_TrainMapper(Ori_Mapper):
         if not os.path.exists(nearest_neighbor_file):
             raise ValueError()
         self.nns = torch.load(nearest_neighbor_file)
-
-        features_path = mapper_config['features_path']
-        if not os.path.exists(features_path):
-            raise ValueError()
-        self.features_path = features_path 
 
         self.transform = T.Compose([
             T.Resize((resolution,resolution)), 
@@ -164,13 +274,6 @@ class STEGO_TrainMapper(Ori_Mapper):
         nn_image_id = self.nns[image_id][torch.randint(low=1, high=self.num_neighbors + 1, size=[]).item()]
         nn_image = self.get_image_fn(image_id=nn_image_id)
         nn_image = self.transform(nn_image)
-        # image_feat = np.fromfile(os.path.join(self.features_path, f'{image_id}.bin'))
-        # image_feat = np.fromfile(os.path.join(self.features_path, f'{image_id}.bin')).reshape([1536, 64, 64]) # c h w
-        # pos_image_feat = np.fromfile(os.path.join(self.features_path, f'{nn_image_id}.bin')).reshape([1536, 64, 64]) # c h w
-        # image_feat = torch.load(os.path.join(self.features_path, f'{image_id}.bin'))
-        # pos_image_feat = torch.load(os.path.join(self.features_path, f'{nn_image_id}.bin'))
-        # image_feat= torch.from_numpy(image_feat)
-        # pos_image_feat= torch.from_numpy(pos_image_feat)
 
         ret = {
             'image_id': image_id,
@@ -178,39 +281,6 @@ class STEGO_TrainMapper(Ori_Mapper):
             'image_pos': nn_image,
             # 'image_feat': image_feat,
             # 'image_pos_feat': pos_image_feat,
-        }
-        return ret
-
-@MAPPER_REGISTRY.register()
-class Common_TrainMapper(Ori_Mapper):
-    def __init__(self,
-                 dataset_name, # potsdam3_train
-                 configs,
-                 mode, 
-                 meta_idx_shift,
-                 ): 
-        assert mode == 'train'
-        dataset_meta = MetadataCatalog.get(dataset_name)
-        assert dataset_meta.get('name') == dataset_name
-        mapper_config = configs['data'][mode][dataset_name]['mapper']
-        super().__init__(meta_idx_shift, dataset_meta)
-        self.get_image_fn = dataset_meta.get('get_image_fn')
-        self.num_classes = dataset_meta.get('num_classes')
-        self.get_mask_fn = dataset_meta.get('get_mask_fn')
-        resolution = mapper_config['res']
-        
-        self.transform = T.Compose([
-            T.Resize((resolution,resolution)), 
-            T.ToTensor(),
-        ])
-        
-    def _call(self, data_dict):
-        image_id = data_dict['image_id']
-        image = self.get_image_fn(image_id=image_id)  # PIL Image
-        image = self.transform(image) # 3 h w 
-        ret = {
-            'image_id': image_id,
-            'image': image,
         }
         return ret
 

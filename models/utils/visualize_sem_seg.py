@@ -6,16 +6,10 @@ from detectron2.utils.visualizer import Visualizer
 from detectron2.structures import Instances
 from detectron2.data import MetadataCatalog
 
-from detectron2.config import configurable
-from detectron2.layers import Conv2d
 from detectron2.utils.visualizer import ColorMode
-import torchvision.transforms as transforms
 import torch
 import numpy as np
-from torch.nn import functional as F
 import os
-import matplotlib.pyplot as plt
-import networkx as nx
 
 import os
 import numpy as np

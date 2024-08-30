@@ -39,6 +39,119 @@ from torchmetrics import Metric
 # 最公平的方法, 现在采用的方法:
 # hug + allimage + fixed_query
 
+class UnsupervisedMetrics(Metric):
+    def __init__(self, prefix: str, n_classes: int, extra_clusters: int, compute_hungarian: bool,
+                 dist_sync_on_step=True):
+        super().__init__(dist_sync_on_step=dist_sync_on_step)
+
+        self.n_classes = n_classes
+        self.extra_clusters = extra_clusters
+        self.compute_hungarian = compute_hungarian
+        self.prefix = prefix
+        self.stats = torch.zeros(n_classes + self.extra_clusters, n_classes,
+                                           dtype=torch.int64, device="cuda")
+
+    def update(self, preds: torch.Tensor, target: torch.Tensor):
+        with torch.no_grad():
+            actual = target.reshape(-1) # 32*320*320
+            preds = preds.reshape(-1) # 32*320*320
+
+            mask = (actual >= 0) & (actual < self.n_classes) & (preds >= 0) & (preds < self.n_classes)
+            actual = actual[mask]
+            preds = preds[mask]
+            self.stats += torch.bincount(
+                (self.n_classes + self.extra_clusters) * actual + preds,
+                minlength=self.n_classes * (self.n_classes + self.extra_clusters)) \
+                .reshape(self.n_classes, self.n_classes + self.extra_clusters).t().to(self.stats.device)
+
+    def map_clusters(self, clusters):
+        if self.extra_clusters == 0:
+            return torch.tensor(self.assignments[1])[clusters]
+        else:
+            missing = sorted(list(set(range(self.n_classes + self.extra_clusters)) - set(self.assignments[0])))
+            cluster_to_class = self.assignments[1]
+            for missing_entry in missing:
+                if missing_entry == cluster_to_class.shape[0]:
+                    cluster_to_class = np.append(cluster_to_class, -1)
+                else:
+                    cluster_to_class = np.insert(cluster_to_class, missing_entry + 1, -1)
+            cluster_to_class = torch.tensor(cluster_to_class)
+            return cluster_to_class[clusters]
+
+    def compute(self):
+        if self.compute_hungarian:  # cluster
+            self.assignments = linear_sum_assignment(self.stats.detach().cpu(), maximize=True)  # row, col
+            if self.extra_clusters == 0:
+                self.histogram = self.stats[np.argsort(self.assignments[1]), :]
+
+            if self.extra_clusters > 0:
+                self.assignments_t = linear_sum_assignment(self.stats.detach().cpu().t(), maximize=True)
+                histogram = self.stats[self.assignments_t[1], :]
+                missing = list(set(range(self.n_classes + self.extra_clusters)) - set(self.assignments[0]))
+                new_row = self.stats[missing, :].sum(0, keepdim=True)
+                histogram = torch.cat([histogram, new_row], axis=0)
+                new_col = torch.zeros(self.n_classes + 1, 1, device=histogram.device)
+                self.histogram = torch.cat([histogram, new_col], axis=1)
+        else:  # linear
+            self.assignments = (torch.arange(self.n_classes).unsqueeze(1),
+                                torch.arange(self.n_classes).unsqueeze(1))
+            self.histogram = self.stats
+
+        tp = torch.diag(self.histogram)
+        fp = torch.sum(self.histogram, dim=0) - tp
+        fn = torch.sum(self.histogram, dim=1) - tp
+
+        iou = tp / (tp + fp + fn)
+        prc = tp / (tp + fn)
+        opc = torch.sum(tp) / torch.sum(self.histogram)
+
+        metric_dict = {self.prefix + "mIoU": iou[~torch.isnan(iou)].mean().item(),
+                       self.prefix + "Accuracy": opc.item()}
+        return {k: 100 * v for k, v in metric_dict.items()}
+
+
+@EVALUATOR_REGISTRY.register()
+class AllImages_FixedQueries_HugMatching_Evaluator:
+    def __init__(self,
+                 dataset_name,
+                 data_loader,
+                 configs) -> None:
+        dataset_meta = MetadataCatalog.get(dataset_name)
+        self.dataset_name = dataset_name
+        self.loader = data_loader
+        self.num_classes = dataset_meta.get('num_classes')
+        eval_configs: dict = configs['data']['evaluate'][dataset_name]['evaluator']
+        self.num_gt_classes = MetadataCatalog.get(dataset_name).get('num_classes')
+        
+    def visualize_path(self, meta_idxs, visualize, evaluator_path):
+        return [os.path.join(evaluator_path, f'meta_{meta_idx}') if vis else None for (meta_idx, vis) in zip(meta_idxs, visualize)]
+    
+    @torch.no_grad()
+    def __call__(self, model, output_dir):
+        # 假设: 固定输入输出大小, evaluate也在固定大小上测试
+        # b 3 h w -> b nq h w; N_eval nq h w -> N_eval h w, 0-num_nq-
+        model.eval()                    
+        evaluator_path = os.path.join(output_dir, f'eval_{self.dataset_name}')
+        os.makedirs(evaluator_path, exist_ok=True)
+        cluster_metrics = UnsupervisedMetrics("Cluster_", 
+                                              n_classes=self.num_gt_classes, 
+                                              extra_clusters=model.num_queries - self.num_gt_classes,
+                                              compute_hungarian=True)        
+        for batch_dict in tqdm(self.loader):
+            eval_metas = batch_dict.pop('metas') # image_ids: list[str]
+            image_ids = eval_metas['image_ids']
+            images = batch_dict['images'] # 3 h w
+            gt_masks = batch_dict['masks'].to(model.device, non_blocking=True) # b h w, 0-27, 255, uint8
+            model_out = model.sample(batch_dict) # dict{'pred_masks': }   
+            pred_masks: torch.Tensor = model_out['pred_masks'] # b nq h w, logits
+            
+            pred_masks = pred_masks.argmax(1) # b h w
+            cluster_metrics.update(pred_masks, gt_masks)             
+        eval_metrics = cluster_metrics.compute()
+        
+        return eval_metrics
+
+
 # region
 # alignseg
 class PredsmIoU_DynamicQueries(Metric):
@@ -212,6 +325,7 @@ class PredsmIoU_DynamicQueries(Metric):
         return gt_to_matches
 
 from models.utils.visualize_sem_seg import visualize_cluster
+from models.utils.visualize_cos_similarity import visualize_cos_similarity
 from PIL import Image
 @EVALUATOR_REGISTRY.register()
 class SingleImage_Evaluator:
@@ -239,25 +353,35 @@ class SingleImage_Evaluator:
         # 假设: B=1
         # 1 3 h w -> 1 nq h w, 然后单图matching
         model.eval()                    
-        evaluator_path = os.path.join(output_dir, f'eval_{self.dataset_name}')
-        os.makedirs(evaluator_path, exist_ok=True)
-        visualize_path = os.path.join(evaluator_path, 'visualizev1')
+        visualize_path = os.path.join(output_dir, f'eval_{self.dataset_name}', 'cluster_testset')
         os.makedirs(visualize_path, exist_ok=True)
         metric = PredsmIoU_DynamicQueries(num_gt_classes=self.num_gt_classes)
         for batch_dict in tqdm(self.loader):
             eval_metas = batch_dict.pop('metas') # image_ids: list[str]
             image_id = eval_metas['image_ids'][0]
             image = batch_dict['images'][0] # 3 h w
+            _, H, W = image.shape
             gt_masks = batch_dict['masks'] # b h w, 0-27, 255, uint8
-            model_out = model.sample(batch_dict) # dict{'pred_masks': b nq h w, logits}   
+            model_out = model.sample(batch_dict) # dict{'pred_masks': b nq h w, logits} 
+            image_path = os.path.join(visualize_path, f'{image_id}.jpg')
             pred_masks: torch.Tensor = model_out['pred_masks']  
             pred_masks = pred_masks.softmax(1)
             num_image_classes = pred_masks.shape[1]
             pred_masks = pred_masks.max(dim=1)[1].cpu() # b h w, 0-num_queries
-            
-            whole_image = visualize_cluster(image=image, gt=gt_masks[0].int(), pred=pred_masks[0], 
-                              num_image_classes=num_image_classes, num_gt_classes=self.num_classes)
-            Image.fromarray(whole_image.numpy()).save(os.path.join(visualize_path, f'{image_id}.jpg'))
+
+            _, num_image_classes = model_out['cluster_ids'], model_out['num_image_classes']
+            sampled_points, similarities = model_out['sampled_points'], model_out['similarities']
+            cluster_image = visualize_cluster(image, 
+                                                gt=gt_masks[0].cpu(), 
+                                                pred=pred_masks[0], 
+                                                num_image_classes=num_image_classes,
+                                                num_gt_classes=self.num_gt_classes) # H W*3 3
+            sim_image = visualize_cos_similarity(image=image,
+                                                  sampled_points=sampled_points, similarities=similarities,) #  H W*5 3
+            cluster_image = F.pad(cluster_image, pad=(0, 0, 0, 2*W, 0, 0), value=0)
+            whole_image = torch.cat([cluster_image, sim_image], dim=0) # 2H W*5 3
+            Image.fromarray(whole_image.numpy()).save(image_path)
+
             gt_masks = gt_masks.flatten()
             pred_masks = pred_masks.flatten()
             
@@ -273,126 +397,82 @@ class SingleImage_Evaluator:
 
 #endregion
 
+
 # region: stegeo的allimage + hug方法
-class UnsupervisedMetrics(Metric):
-    def __init__(self, 
-                 prefix: str, 
-                 num_queries: int, 
-                 num_gt_classes,
-                 compute_hungarian: bool,
-                 dist_sync_on_step=True):
-        super().__init__(dist_sync_on_step=dist_sync_on_step)
-        self.compute_hungarian = compute_hungarian
-        self.prefix = prefix
-        self.num_gt_classes = num_gt_classes
-        self.num_queries = num_queries
-        self.stats = torch.zeros(num_queries, num_gt_classes, dtype=torch.int64, device="cuda")
-        assert self.num_queries >= self.num_gt_classes
-        self.extra_clusters = self.num_queries - self.num_gt_classes
+# class UnsupervisedMetrics(Metric):
+#     def __init__(self, 
+#                  prefix: str, 
+#                  num_queries: int, 
+#                  num_gt_classes,
+#                  compute_hungarian: bool,
+#                  dist_sync_on_step=True):
+#         super().__init__(dist_sync_on_step=dist_sync_on_step)
+#         self.compute_hungarian = compute_hungarian
+#         self.prefix = prefix
+#         self.num_gt_classes = num_gt_classes
+#         self.num_queries = num_queries
+#         self.stats = torch.zeros(num_queries, num_gt_classes, dtype=torch.int64, device="cuda")
+#         assert self.num_queries >= self.num_gt_classes
+#         self.extra_clusters = self.num_queries - self.num_gt_classes
         
-    def update(self, preds: torch.Tensor, target: torch.Tensor):
-        # target: b h w, int, 0-num_gt_class-1, 255代表背景
-        with torch.no_grad():
-            target = target.reshape(-1)
-            preds = preds.reshape(-1) 
-            truth = target[target != 255]
-            preds = preds[target != 255]
-            assert truth.max() < self.num_gt_classes
-            assert preds.max() < self.num_queries
+#     def update(self, preds: torch.Tensor, target: torch.Tensor):
+#         # target: b h w, int, 0-num_gt_class-1, 255代表背景
+#         with torch.no_grad():
+#             target = target.reshape(-1)
+#             preds = preds.reshape(-1) 
+#             truth = target[target != 255]
+#             preds = preds[target != 255]
+#             assert truth.max() < self.num_gt_classes
+#             assert preds.max() < self.num_queries
             
-            self.stats += torch.bincount(
-                (self.num_queries) * truth + preds,
-                minlength=self.num_gt_classes * (self.num_queries)) \
-                .reshape(self.num_gt_classes, self.num_queries).t().to(self.stats.device)
+#             self.stats += torch.bincount(
+#                 (self.num_queries) * truth + preds,
+#                 minlength=self.num_gt_classes * (self.num_queries)) \
+#                 .reshape(self.num_gt_classes, self.num_queries).t().to(self.stats.device)
 
-    def map_clusters(self, clusters):
-        if self.extra_clusters == 0:
-            return torch.tensor(self.assignments[1])[clusters]
-        else:
-            missing = sorted(list(set(range(self.n_classes + self.extra_clusters)) - set(self.assignments[0])))
-            cluster_to_class = self.assignments[1]
-            for missing_entry in missing:
-                if missing_entry == cluster_to_class.shape[0]:
-                    cluster_to_class = np.append(cluster_to_class, -1)
-                else:
-                    cluster_to_class = np.insert(cluster_to_class, missing_entry + 1, -1)
-            cluster_to_class = torch.tensor(cluster_to_class)
-            return cluster_to_class[clusters]
+#     def map_clusters(self, clusters):
+#         if self.extra_clusters == 0:
+#             return torch.tensor(self.assignments[1])[clusters]
+#         else:
+#             missing = sorted(list(set(range(self.n_classes + self.extra_clusters)) - set(self.assignments[0])))
+#             cluster_to_class = self.assignments[1]
+#             for missing_entry in missing:
+#                 if missing_entry == cluster_to_class.shape[0]:
+#                     cluster_to_class = np.append(cluster_to_class, -1)
+#                 else:
+#                     cluster_to_class = np.insert(cluster_to_class, missing_entry + 1, -1)
+#             cluster_to_class = torch.tensor(cluster_to_class)
+#             return cluster_to_class[clusters]
 
-    def compute(self):
-        self.assignments = linear_sum_assignment(self.stats.detach().cpu(), maximize=True) 
-        if self.extra_clusters == 0:
-            # nq10 gt10 -> list[0,1,2], list[3, 5, 2]
-            self.histogram = self.stats[np.argsort(self.assignments[1]), :] # 第i行是和gt_i匹配到的query和各个gt的交集
+#     def compute(self):
+#         self.assignments = linear_sum_assignment(self.stats.detach().cpu(), maximize=True) 
+#         if self.extra_clusters == 0:
+#             # nq10 gt10 -> list[0,1,2], list[3, 5, 2]
+#             self.histogram = self.stats[np.argsort(self.assignments[1]), :] # 第i行是和gt_i匹配到的query和各个gt的交集
 
-        if self.extra_clusters > 0:
-            # gt10, nq20 -> list[0,1,2], list[3 ,4 2]
-            self.assignments_t = linear_sum_assignment(self.stats.detach().cpu().t(), maximize=True)
-            histogram = self.stats[self.assignments_t[1], :]
-            # nq20, gt10 -> list[2,1, 20], list[5,2,1]
-            missing = list(set(range(self.num_queries)) - set(self.assignments[0]))
-            new_row = self.stats[missing, :].sum(0, keepdim=True)
-            histogram = torch.cat([histogram, new_row], axis=0)
-            new_col = torch.zeros(self.num_gt_classes + 1, 1, device=histogram.device)
-            self.histogram = torch.cat([histogram, new_col], axis=1)
+#         if self.extra_clusters > 0:
+#             # gt10, nq20 -> list[0,1,2], list[3 ,4 2]
+#             self.assignments_t = linear_sum_assignment(self.stats.detach().cpu().t(), maximize=True)
+#             histogram = self.stats[self.assignments_t[1], :]
+#             # nq20, gt10 -> list[2,1, 20], list[5,2,1]
+#             missing = list(set(range(self.num_queries)) - set(self.assignments[0]))
+#             new_row = self.stats[missing, :].sum(0, keepdim=True)
+#             histogram = torch.cat([histogram, new_row], axis=0)
+#             new_col = torch.zeros(self.num_gt_classes + 1, 1, device=histogram.device)
+#             self.histogram = torch.cat([histogram, new_col], axis=1)
 
-        tp = torch.diag(self.histogram)
-        fp = torch.sum(self.histogram, dim=0) - tp
-        fn = torch.sum(self.histogram, dim=1) - tp
+#         tp = torch.diag(self.histogram)
+#         fp = torch.sum(self.histogram, dim=0) - tp
+#         fn = torch.sum(self.histogram, dim=1) - tp
 
-        iou = tp / (tp + fp + fn)
-        prc = tp / (tp + fn)
-        opc = torch.sum(tp) / torch.sum(self.histogram)
+#         iou = tp / (tp + fp + fn)
+#         prc = tp / (tp + fn)
+#         opc = torch.sum(tp) / torch.sum(self.histogram)
 
-        metric_dict = {self.prefix + "mIoU": iou[~torch.isnan(iou)].mean().item(),
-                       self.prefix + "Accuracy": opc.item()}
-        return {k: 100 * v for k, v in metric_dict.items()}
-
-@EVALUATOR_REGISTRY.register()
-class AllImages_FixedQueries_HugMatching_Evaluator:
-    def __init__(self,
-                 dataset_name,
-                 data_loader,
-                 configs) -> None:
-        dataset_meta = MetadataCatalog.get(dataset_name)
-        self.dataset_name = dataset_name
-        self.loader = data_loader
-        self.num_classes = dataset_meta.get('num_classes')
-        eval_configs: dict = configs['data']['evaluate'][dataset_name]['evaluator']
-        self.num_gt_classes = MetadataCatalog.get(dataset_name).get('num_classes')
-        
-    def visualize_path(self, meta_idxs, visualize, evaluator_path):
-        return [os.path.join(evaluator_path, f'meta_{meta_idx}') if vis else None for (meta_idx, vis) in zip(meta_idxs, visualize)]
-    
-    @torch.no_grad()
-    def __call__(self, model, output_dir):
-        # 假设: 固定输入输出大小, evaluate也在固定大小上测试
-        # b 3 h w -> b nq h w; N_eval nq h w -> N_eval h w, 0-num_nq-1
-        from .evaluator_utils import batched_crf, get_metrics
-        model.eval()                    
-        evaluator_path = os.path.join(output_dir, f'eval_{self.dataset_name}')
-        os.makedirs(evaluator_path, exist_ok=True)
-        cluster_metrics = UnsupervisedMetrics("Cluster_", num_gt_classes=self.num_gt_classes, num_queries=model.num_queries,
-                                              compute_hungarian=True)        
-        for batch_dict in tqdm(self.loader):
-            eval_metas = batch_dict.pop('metas') # image_ids: list[str]
-            image_id = eval_metas['image_ids'][0]
-            image = batch_dict['images'][0] # 3 h w
-            gt_masks = batch_dict['masks'].to(model.device, non_blocking=True) # b h w, 0-27, 255, uint8
-            model_out = model.sample(batch_dict) # dict{'pred_masks': }   
-            pred_masks: torch.Tensor = model_out['pred_masks'] # b nq h w, logits
-
-            # if self.crf:
-            #     cluster_preds = torch.log_softmax(pred_masks, dim=1)
-            #     cluster_preds = batched_crf(image, cluster_preds).argmax(1)
-            # else:
-            cluster_preds = pred_masks.argmax(1) # b h w
-                
-            cluster_metrics.update(cluster_preds, gt_masks) 
-
-        eval_metrics = cluster_metrics.compute()
-        
-        return eval_metrics
-
+#         metric_dict = {self.prefix + "mIoU": iou[~torch.isnan(iou)].mean().item(),
+#                        self.prefix + "Accuracy": opc.item()}
+#         return {k: 100 * v for k, v in metric_dict.items()}
 # endregion
+
+
 

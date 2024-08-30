@@ -1,9 +1,6 @@
 import torch
 from functools import partial
 import logging
-from detectron2.projects.deeplab import build_lr_scheduler
-from detectron2.solver import build_lr_scheduler as build_d2_lr_scheduler
-from detectron2.projects.deeplab.lr_scheduler import WarmupPolyLR
 import numpy as np
 def polynomial_decay_lambda(step, initial_learning_rate : float=8e-5, end_learning_rate: float=1.5e-5, decay_steps=25, power=1.0):
     step = min(step, decay_steps)
@@ -139,7 +136,7 @@ def build_scheduler(configs, optimizer):
         return scheduler
 
     else:
-        return build_d2_lr_scheduler(configs, optimizer), 'step'
+        raise ValueError()
 
 
 

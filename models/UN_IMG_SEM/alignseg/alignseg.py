@@ -416,7 +416,7 @@ class AlignSeg(OptimizeModel):
         self.backbone.eval()
         # b 3 h w
         images = batch_dict['images'].to(self.device) 
-        images = images - self.pixel_mean / self.pixel_std
+        images = (images - self.pixel_mean) / self.pixel_std
         
         results = self.model_outputs(images)
 
@@ -436,7 +436,7 @@ class AlignSeg(OptimizeModel):
 
         images = batch_dict['images'].to(self.device, non_blocking=True) # b 3 h w
         H, W = images.shape[-2:]
-        images = images - self.pixel_mean / self.pixel_std
+        images = (images - self.pixel_mean) / self.pixel_std
         all_queries, tokens, _, _, res, _ = self.model_outputs(images)
         pred_masks = torch.einsum("bnc,bqc->bnq", F.normalize(tokens, dim=-1, eps=1e-10), 
                                   F.normalize(all_queries[0], dim=-1, eps=1e-10))

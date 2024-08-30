@@ -109,7 +109,7 @@ def extract_features(configs, device):
             for i, batch_dict in tqdm(enumerate(train_loader)):
                 image_ids = batch_dict['image_ids']
                 images = batch_dict['images'].to('cuda:0')
-                images = images - pixel_mean / pixel_std
+                images = (images - pixel_mean) / pixel_std
                 with torch.autocast('cuda'):
                     features = backbone(images) # b c h w
                 for img_id, feat in zip(image_ids, features):
@@ -143,7 +143,7 @@ def nearest_neighbors(configs, device):
             for i, batch_dict in tqdm(enumerate(train_loader)):
                 image_ids = batch_dict['image_ids']
                 images = batch_dict['images'].to('cuda:0')
-                images = images - pixel_mean / pixel_std
+                images = (images - pixel_mean) / pixel_std
                 all_image_ids.extend(image_ids)
                 features = backbone(images) # b c h w
                 features = torch.nn.functional.normalize(features.mean([2, 3]), dim=1) # pos信息会影响语义信息

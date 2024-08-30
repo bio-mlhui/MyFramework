@@ -198,10 +198,10 @@ class Stego(OptimizeModel):
         assert self.training
         # b 3 3 h w
         img = batch_dict['images'].to(self.device) 
-        img = img - self.pixel_mean / self.pixel_std
+        img = (img - self.pixel_mean) / self.pixel_std
 
         img_pos = batch_dict['images_pos'].to(self.device) 
-        img_pos = img_pos - self.pixel_mean / self.pixel_std
+        img_pos = (img_pos - self.pixel_mean) / self.pixel_std
         
         with torch.autocast(device_type="cuda"):
             if self.use_salience:

@@ -1,5 +1,4 @@
 
-from detectron2.solver.build import maybe_add_gradient_clipping
 from collections import OrderedDict
 from typing import Any, Dict, List, Set, Union, Iterable, Callable, Type, Optional
 import copy

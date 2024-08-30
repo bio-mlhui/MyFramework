@@ -20,8 +20,8 @@ __all__ = ['Trainer']
 class Trainer_SingleProcess:
     def __init__(self, configs):
         #torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
+        # torch.backends.cuda.matmul.allow_tf32 = True
+        # torch.backends.cudnn.allow_tf32 = True
         torch.backends.cudnn.benchmark = True
         self.device = torch.device('cuda', 0)
         seed = configs['train_seed']
@@ -29,8 +29,7 @@ class Trainer_SingleProcess:
         np.random.seed(seed)
         torch.random.manual_seed(seed)
         with torch.cuda.device(self.device):
-            torch.cuda.manual_seed(seed)        
-        
+            torch.cuda.manual_seed(seed)     
         # model and data
         create_model_schedule = model_entrypoint(configs['model']['name'])
         self.model, self.train_loader, self.eval_function = create_model_schedule(configs, device=self.device,)
@@ -66,6 +65,7 @@ class Trainer_SingleProcess:
                 batch_dict = to_device(batch_dict, self.device)
                 batch_dict['visualize_paths'] = self.visualize_path(meta_idxs=meta_idxs, visualize=visualize) # visualize model训练过程
                 batch_dict['num_iterations'] = self.num_iterations
+                batch_dict['num_epoch'] = epoch
                 iteration_time = time.time()
 
                 loss_dict_unscaled = self.model.forward_backward(batch_dict)   
@@ -154,6 +154,7 @@ class Trainer_SingleProcess:
     def load_ckpt(self, 
                   ckpt_path=None, 
                   load_optimize=False,  
+                  load_schedule=None,
                   load_model=False,
                   load_random=False, # 随机状态
                   ):

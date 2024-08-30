@@ -13,9 +13,10 @@
 # limitations under the License.
 import torch
 from torchvision.models.resnet import resnet50
-
+from . import dinov1_adapter
 import models.backbone.dinos.dinov1.vision_transformer as vits
 from detectron2.modeling import BACKBONE_REGISTRY
+
 dependencies = ["torch", "torchvision"]
 
 
@@ -23,6 +24,7 @@ import torch.nn as nn
 import os
 
 from functools import partial
+from einops import rearrange
 
 @BACKBONE_REGISTRY.register()
 class Dinov1(nn.Module):
@@ -34,7 +36,7 @@ class Dinov1(nn.Module):
         self.ssl = VisionTransformer(**dino_configs)
         if configs['load_pt']:
             name_to_pt_path = {'dinov1_vits16': 'dinov1/dino_deitsmall16_pretrain.pth',
-                            'dinov1_vitb8': 'dinov1/dino_vitbase8_pretrain.pth',}
+                               'dinov1_vitb8': 'dinov1/dino_vitbase8_pretrain.pth',}
             state_dict = torch.load(os.path.join(os.getenv('PT_PATH'), name_to_pt_path[dino_name]), map_location='cpu')
             self.ssl.load_state_dict(state_dict, strict=True) 
         if configs['freeze_pt']:
@@ -42,6 +44,15 @@ class Dinov1(nn.Module):
                 p.requires_grad_(False)  
         self.embed_dim = self.ssl.embed_dim
         self.patch_size = self.ssl.patch_embed.patch_size
+
+    def get_intermediate_feats(self, x, masks=None):
+        return self.ssl.get_intermediate_feats(x)
+
+    def get_alignseg_feats(self, **kwargs):
+        return self.ssl.get_alignseg_feats(**kwargs)
+
+    def forward(self, x):
+        return self.ssl.forward_features(x)
 
     # NestTensor?
     def forward_dino_ssl(self, x, last_hw, masks=None,): # b c h w -> ms: {'res2', 'res3', 'res4, 'res5}, reg: {'reg2', 'reg3', 'reg4', 'reg5'}
@@ -70,14 +81,6 @@ class Dinov1(nn.Module):
             
         return (reg_feats, hw_feats)
 
-    def get_intermediate_feats(self, x, masks=None):
-        return self.ssl.get_intermediate_feats(x)
-
-    def get_alignseg_feats(self, **kwargs):
-        return self.ssl.get_alignseg_feats(**kwargs)
-
-    def forward(self, x):
-        feats = self.ssl.get_intermediate_feats(x)
 
 DINO_NAME_TO_CONFIGS = {
 # def vit_small(patch_size=16, **kwargs):
@@ -107,7 +110,7 @@ DINO_NAME_TO_CONFIGS = {
         'depth': 12,
         'num_heads': 12,
         'mlp_ratio': 4,
-'       qkv_bias': True,
+        'qkv_bias': True,
         'norm_layer': partial(nn.LayerNorm, eps=1e-6),              
     },
 }
@@ -191,6 +194,15 @@ class VisionTransformer(nn.Module):
 
         return self.pos_drop(x)
 
+    def forward_features(self, x):
+        B, _, H, W = x.shape
+        x = self.prepare_tokens(x)
+        for blk in self.blocks:
+            x = blk(x)
+        x = self.norm(x)
+        feats = x[:, 1:]
+        feats = feats.reshape(B, H//self.patch_embed.patch_size, W//self.patch_embed.patch_size, -1).permute(0, 3, 1, 2)
+        return feats
 
 
     def forward(self, x):

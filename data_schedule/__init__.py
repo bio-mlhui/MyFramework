@@ -114,7 +114,6 @@ def build_singleProcess_schedule(configs, model_input_mapper, model_input_collat
     from torch.utils.data import DataLoader, ConcatDataset
     from .registry import MAPPER_REGISTRY, EVALUATOR_REGISTRY
     from detectron2.data import DatasetCatalog, DatasetFromList, MapDataset, MetadataCatalog
-    DatasetCatalog.register('global_dataset', func=lambda: [])
     datasets = {'train': [], 'evaluate': []}
     meta_idx_shift = 0 # train, eval都对meta_idx进行shift, 每个set的idx都在独立的范围内
     for mode in ['train', 'evaluate']:
@@ -150,7 +149,7 @@ def build_singleProcess_schedule(configs, model_input_mapper, model_input_collat
                                 num_workers=int(os.getenv('TORCH_NUM_WORKERS')),
                                 collate_fn=partial(model_input_collate_fn, mode='train'), 
                                 pin_memory=pin_memory,
-                                drop_last=False,
+                                drop_last=True,
                                 persistent_workers=False)
 
     evaluators = []

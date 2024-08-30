@@ -5,8 +5,6 @@ import torch
 from torch import nn, Tensor
 from torch.nn import functional as F
 
-from detectron2.config import configurable
-from detectron2.layers import Conv2d
 from einops import repeat, rearrange
 from models.layers.decoder_layers import SelfAttentionLayer, CrossAttentionLayer, FFNLayer, CrossAttentionLayer_ww
 from models.layers.anyc_trans import MLP

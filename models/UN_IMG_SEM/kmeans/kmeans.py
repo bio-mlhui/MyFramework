@@ -150,7 +150,7 @@ class KMeans_SingleImage(OptimizeModel):
     
     def get_backbone_features(self, images):
         images = images.to(self.device) 
-        images = images - self.pixel_mean / self.pixel_std
+        images = (images - self.pixel_mean) / self.pixel_std
         # Extract feature
         with torch.no_grad():
             features = self.backbone(images) # b 3 h w -> b c h//patch w//patch
@@ -169,13 +169,13 @@ class KMeans_SingleImage(OptimizeModel):
         gt_masks = batch_dict['masks']
         features = self.get_backbone_features(images) # b c h w
         cluster_ids, cluster_logits, num_image_classes = self.self_cluster(features, gt_masks)
-        # sampled_points, similarities = self.sample_point_similarities(features, num_points=5)
+        sampled_points, similarities = self.sample_point_similarities(features, num_points=5)
         return {
             'pred_masks': cluster_logits, # 要测试kmeans的cluster miou
             'cluster_ids': cluster_ids,
             'num_image_classes': num_image_classes,
-            # 'sampled_points': sampled_points,
-            # 'similarities': similarities
+            'sampled_points': sampled_points,
+            'similarities': similarities
         }
         
     def optimize_state_dict(self,):
@@ -216,6 +216,7 @@ class KMeans_SingleImage(OptimizeModel):
     @torch.no_grad()
     def sample_point_similarities(self, features, num_points):
         H_P, W_P = features.shape[-2:]
+        H, W = H_P * self.patch_size, W_P * self.patch_size
         sampled_points = torch.rand(num_points, 2)
         sampled_points[:, 0] = sampled_points[:, 0] * H_P
         sampled_points[:, 1] = sampled_points[:, 1] * W_P
@@ -269,7 +270,7 @@ def kmeans_singleImage(configs, device):
                                   num_gt_classes=num_classes) # H W*3 3
                 sim_image = visualize_cos_similarity(image=images[0].cpu(), sampled_points=sampled_points, similarities=similarities,) #  H W*5 3
                 cluster_image = F.pad(cluster_image, pad=(0, 0, 0, 2*W, 0, 0), value=0)
-                whole_image = torch.cat([cluster_image, sim_image], dim=1) # 2H W*5 3
+                whole_image = torch.cat([cluster_image, sim_image], dim=0) # 2H W*5 3
                 Image.fromarray(whole_image.numpy()).save(img_path)
                 if i > eval_number:
                     exit()
@@ -365,7 +366,7 @@ class MiniBatchKMeans_AllEval(OptimizeModel):
 
     def get_backbone_features(self, images):
         images = images.to(self.device) 
-        images = images - self.pixel_mean / self.pixel_std
+        images = (images - self.pixel_mean) / self.pixel_std
         # Extract feature
         with torch.no_grad():
             features = self.backbone(images) # b 3 h w -> b c h//patch w//patch

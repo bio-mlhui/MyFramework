@@ -3,7 +3,7 @@ import argparse
 import logging
 import wandb
 import importlib
-from detectron2.engine import launch
+#from detectron2.engine import launch
 import detectron2.utils.comm as comm # deepspeed也能用
 # import deepspeed
 from termcolor import colored
@@ -12,7 +12,6 @@ import yaml
 import torch
 from utils.misc import setup_for_distributed
 import torch.distributed as dist
-from detectron2.utils.logger import setup_logger
 # laze import
 from trainers import task_to_trainer
 def _highlight(code, filename):
@@ -93,11 +92,11 @@ def init_process_group_and_set_device(world_size, process_id, device_id):
     return device
 
 def run(rank, configs, world_size):
-    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:512'
-    os.environ["TOKENIZERS_PARALLELISM"] = "false"  # this disables a huggingface tokenizer warning (printed every epoch)
-    os.environ['PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT'] = "4"
-    os.environ['PYDEVD_DISABLE_FILE_VALIDATION'] = "1"
-    os.environ["DGLBACKEND"] = "pytorch"
+    # os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:512'
+    # os.environ["TOKENIZERS_PARALLELISM"] = "false"  # this disables a huggingface tokenizer warning (printed every epoch)
+    # os.environ['PYDEVD_WARN_SLOW_RESOLVE_TIMEOUT'] = "4"
+    # os.environ['PYDEVD_DISABLE_FILE_VALIDATION'] = "1"
+    # os.environ["DGLBACKEND"] = "pytorch"
     logging.getLogger('penman').setLevel(logging.WARNING)    
     logging.getLogger('PIL').setLevel(logging.WARNING) 
     logging.getLogger('PIL.PngImagePlugin').setLevel(logging.WARNING)   
@@ -169,7 +168,6 @@ def run(rank, configs, world_size):
         wandb.finish()
 
 if __name__=="__main__":
-
     parser = argparse.ArgumentParser()
     parser.add_argument('--config_file', type=str, required=True)
     parser.add_argument('--trainer_mode', type=str, default='train_attmpt')  # train_attmpt train_resume eval

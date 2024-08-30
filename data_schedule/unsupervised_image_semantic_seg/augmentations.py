@@ -46,26 +46,3 @@ class KMeans_TrainAug:
         ret['image'] = image
         ret['mask'] = mask
         return ret
-
-@UN_IMG_SEG_EVAL_AUG_REGISTRY.register()
-class COCOStuff27_EvalAug:
-    def __init__(self, configs):
-        resolution = configs['res']
-        self.transform = T.Compose([
-            T.Resize((resolution,resolution)), 
-            T.ToTensor()
-        ])
-
-    def __call__(self, ret):
-        image, mask = ret['image'], ret['mask']
-        image = self.transform(image)
-        original_class = mask.unique().tolist()
-        mask = F.interpolate(mask[None, None], size=image.shape[-2:], mode='nearest')[0, 0]
-        after_class = mask.unique().tolist()
-        assert len(set(original_class) - set(after_class)) == 0
-        assert len(set(after_class) - set(original_class)) == 0
-        
-        ret['image'] = image
-        ret['mask'] = mask
-        return ret
-    

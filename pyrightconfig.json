@@ -2,6 +2,8 @@
     "exclude": [
         "output",
         "wandb",
-        "miccai_generate_Dir"
+        "miccai_generate_Dir",
+        "readme",
+        ".vscode",
     ]
 }
