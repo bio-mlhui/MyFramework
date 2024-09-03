@@ -133,13 +133,7 @@ class ContrastiveCorrelationLoss(nn.Module):
         neg_inter_loss = torch.cat(neg_losses, axis=0)
         neg_inter_cd = torch.cat(neg_cds, axis=0)
 
-        return (self.cfg["corr_loss"]["pos_intra_weight"] * pos_intra_loss.mean() +
-                self.cfg["corr_loss"]["pos_inter_weight"] * pos_inter_loss.mean() +
-                self.cfg["corr_loss"]["neg_inter_weight"] * neg_inter_loss.mean(),
-                {"self_loss": pos_intra_loss.mean().item(),
-                 "knn_loss": pos_inter_loss.mean().item(),
-                 "rand_loss": neg_inter_loss.mean().item()}
-                )
+        return pos_intra_loss, pos_inter_loss, neg_inter_loss
 
 
 class LinearLoss(nn.Module):

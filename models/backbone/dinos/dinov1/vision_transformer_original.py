@@ -83,50 +83,13 @@ class Attention(nn.Module):
         q, k, v = qkv[0], qkv[1], qkv[2]
 
         attn = (q @ k.transpose(-2, -1)) * self.scale
-        attn_hook = attn.clone()
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
 
         x = (attn @ v).transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
-        return x, attn_hook, qkv
-
-import os
-import warnings
-from torch import Tensor
-try:
-    if os.environ.get("USE_XFORMER") == 'true':
-        from xformers.ops import memory_efficient_attention, unbind
-
-        XFORMERS_AVAILABLE = True
-        warnings.warn("xFormers is available (Attention)")
-    else:
-        warnings.warn("xFormers is disabled (Attention)")
-        raise ImportError
-except ImportError:
-    XFORMERS_AVAILABLE = False
-    warnings.warn("xFormers is not available (Attention)")
-
-# class MemEffAttention(Attention):
-#     def forward(self, x: Tensor, attn_bias=None) -> Tensor:
-#         if not XFORMERS_AVAILABLE:
-#             if attn_bias is not None:
-#                 raise AssertionError("xFormers is required for using nested tensors")
-#             return super().forward(x)
-
-#         B, N, C = x.shape
-#         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads)
-
-#         q, k, v = unbind(qkv, 2)
-
-#         x = memory_efficient_attention(q, k, v, attn_bias=attn_bias)
-#         x = x.reshape([B, N, C])
-
-#         x = self.proj(x)
-#         x = self.proj_drop(x)
-#         return x, None, None
-
+        return x, attn
 
 
 class Block(nn.Module):
@@ -141,12 +104,90 @@ class Block(nn.Module):
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
 
-    def forward(self, x):
-        y, attn, qkv = self.attn(self.norm1(x))
+    def forward(self, x, return_attention=False):
+        y, attn = self.attn(self.norm1(x))
         x = x + self.drop_path(y)
         x = x + self.drop_path(self.mlp(self.norm2(x)))
-        return x, attn, qkv
+        if return_attention:
+            return x, attn
+        return x
 
+
+class PatchEmbed(nn.Module):
+    """ Image to Patch Embedding
+    """
+    def __init__(self, img_size=224, patch_size=16, in_chans=3, embed_dim=768):
+        super().__init__()
+        num_patches = (img_size // patch_size) * (img_size // patch_size)
+        self.img_size = img_size
+        self.patch_size = patch_size
+        self.num_patches = num_patches
+
+        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+        x = self.proj(x).flatten(2).transpose(1, 2)
+        return x
+
+
+
+def vit_tiny(patch_size=16, **kwargs):
+    model = VisionTransformer(
+        patch_size=patch_size, embed_dim=192, depth=12, num_heads=3, mlp_ratio=4,
+        qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
+    return model
+
+
+def vit_small(patch_size=16, **kwargs):
+    model = VisionTransformer(
+        patch_size=patch_size, embed_dim=384, depth=12, num_heads=6, mlp_ratio=4,
+        qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
+    return model
+
+
+def vit_base(patch_size=16, **kwargs):
+    model = VisionTransformer(
+        patch_size=patch_size, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4,
+        qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
+    return model
+
+
+class DINOHead(nn.Module):
+    def __init__(self, in_dim, out_dim, use_bn=False, norm_last_layer=True, nlayers=3, hidden_dim=2048, bottleneck_dim=256):
+        super().__init__()
+        nlayers = max(nlayers, 1)
+        if nlayers == 1:
+            self.mlp = nn.Linear(in_dim, bottleneck_dim)
+        else:
+            layers = [nn.Linear(in_dim, hidden_dim)]
+            if use_bn:
+                layers.append(nn.BatchNorm1d(hidden_dim))
+            layers.append(nn.GELU())
+            for _ in range(nlayers - 2):
+                layers.append(nn.Linear(hidden_dim, hidden_dim))
+                if use_bn:
+                    layers.append(nn.BatchNorm1d(hidden_dim))
+                layers.append(nn.GELU())
+            layers.append(nn.Linear(hidden_dim, bottleneck_dim))
+            self.mlp = nn.Sequential(*layers)
+        self.apply(self._init_weights)
+        self.last_layer = nn.utils.weight_norm(nn.Linear(bottleneck_dim, out_dim, bias=False))
+        self.last_layer.weight_g.data.fill_(1)
+        if norm_last_layer:
+            self.last_layer.weight_g.requires_grad = False
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        x = self.mlp(x)
+        x = nn.functional.normalize(x, dim=-1, p=2)
+        x = self.last_layer(x)
+        return x
 
 
 
@@ -225,115 +266,104 @@ class VisionTransformer(nn.Module):
 
         return self.pos_drop(x)
 
-    # def forward(self, x):
-    #     x = self.prepare_tokens(x)
-    #     for blk in self.blocks:
-    #         x = blk(x)
-    #     x = self.norm(x)
-    #     return x[:, 0]
-
-    # def forward_features(self, x):
-    #     B, _, H, W = x.shape
-    #     x = self.prepare_tokens(x)
-    #     for blk in self.blocks:
-    #         x = blk(x)
-    #     x = self.norm(x)
-    #     feats = x[:, 1:]
-    #     feats = feats.reshape(B, H//self.patch_embed.patch_size, W//self.patch_embed.patch_size, -1).permute(0, 3, 1, 2)
-    #     return feats
-
-
-    def forward(self, x, n=1):
-        assert n >=1
+    def forward_features(self, x):
+        B, _, H, W = x.shape
         x = self.prepare_tokens(x)
-        features = []
-        attentions = []
+        for blk in self.blocks:
+            x = blk(x)
+        x = self.norm(x)
+        feats = x[:, 1:]
+        feats = feats.reshape(B, H//self.patch_embed.patch_size, W//self.patch_embed.patch_size, -1).permute(0, 3, 1, 2)
+        return feats
+
+
+    def forward(self, x):
+        x = self.prepare_tokens(x)
+        for blk in self.blocks:
+            x = blk(x)
+        x = self.norm(x)
+        return x[:, 0]
+
+    def get_last_selfattention(self, x):
+        x = self.prepare_tokens(x)
+        for i, blk in enumerate(self.blocks):
+            if i < len(self.blocks) - 1:
+                x = blk(x)
+            else:
+                # return attention of the last block
+                return blk(x, return_attention=True)
+
+    def get_intermediate_layers(self, x, n=1):
+        x = self.prepare_tokens(x)
+        # we return the output tokens from the `n` last blocks
+        output = []
+        for i, blk in enumerate(self.blocks):
+            x = blk(x)
+            if len(self.blocks) - i <= n:
+                output.append(self.norm(x))
+        return output
+
+
+    def get_intermediate_feat(self, x, n=1):
+        x = self.prepare_tokens(x)
+        # we return the output tokens from the `n` last blocks
+        feat = []
+        attns = []
         qkvs = []
         for i, blk in enumerate(self.blocks):
-            x, attn, qkv = blk(x)
+            x, attn, qkv = blk(x, return_qkv=True)
             if len(self.blocks) - i <= n:
-                features.append(self.norm(x))
-                attentions.append(attn)
+                feat.append(self.norm(x))
                 qkvs.append(qkv)
-        return {
-            'features': features, # b cls+hw c
-            'attentions': attentions, # 
-            'qkvs': qkvs, # 
-        }
+                attns.append(attn)
+        return feat, attns, qkvs
 
-class PatchEmbed(nn.Module):
-    """ Image to Patch Embedding
-    """
-    def __init__(self, img_size=224, patch_size=16, in_chans=3, embed_dim=768):
-        super().__init__()
-        num_patches = (img_size // patch_size) * (img_size // patch_size)
-        self.img_size = img_size
-        self.patch_size = patch_size
-        self.num_patches = num_patches
 
-        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
-
-    def forward(self, x):
-        B, C, H, W = x.shape
-        x = self.proj(x).flatten(2).transpose(1, 2)
+    # region alignseg
+    def forward_backbone(self, x, last_self_attention=False):
+        x = self.prepare_tokens(x)
+        for i, blk in enumerate(self.blocks):
+            if i < len(self.blocks) - 1:
+                x = blk(x)
+            else:
+                x = blk(x, return_attention=last_self_attention)
+        if last_self_attention:
+            x, attn = x
+        x = self.norm(x)
+        if last_self_attention:
+            return x, attn[:, :, 0, 1:]  # [B, heads, cls, cls-patch]
         return x
+    
+    def get_alignseg_feats(self, inputs, nmb_crops=(1,0), last_self_attention=False): # num_crops[1,2]
+        if not isinstance(inputs, list):
+            inputs = [inputs]
+        idx_crops = [1, ]  # for inference
+        if sum(nmb_crops) > 1:
+            # for training
+            idx_crops.append(sum(nmb_crops))
+        # [1, 3]
+        assert len(idx_crops) <= 2, "Only supporting at most two different type of crops (global and local crops)"
+        start_idx = 0
+        for end_idx in idx_crops:
+            _out = torch.cat(inputs[start_idx:end_idx])
+            _out = self.forward_backbone(_out, last_self_attention=last_self_attention)
+            if last_self_attention:
+                _out, _attn = _out
+            spatial_tokens = _out[:, 1:]  # b hw c
+            spatial_tokens = spatial_tokens.reshape(-1, self.embed_dim)  # [bhw, embed_dim]
 
+            if start_idx == 0:
+                output_spatial = spatial_tokens
+                if last_self_attention:
+                    # only keep 1st global crop attention
+                    attentions = _attn
+            else:
+                output_spatial = torch.cat((output_spatial, spatial_tokens))
+                if last_self_attention:
+                    attentions = torch.cat((attentions, _attn))
+            start_idx = end_idx
 
-
-def vit_tiny(patch_size=16, **kwargs):
-    model = VisionTransformer(
-        patch_size=patch_size, embed_dim=192, depth=12, num_heads=3, mlp_ratio=4,
-        qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
-    return model
-
-
-def vit_small(patch_size=16, **kwargs):
-    model = VisionTransformer(
-        patch_size=patch_size, embed_dim=384, depth=12, num_heads=6, mlp_ratio=4,
-        qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
-    return model
-
-
-def vit_base(patch_size=16, **kwargs):
-    model = VisionTransformer(
-        patch_size=patch_size, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4,
-        qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
-    return model
-
-
-class DINOHead(nn.Module):
-    def __init__(self, in_dim, out_dim, use_bn=False, norm_last_layer=True, nlayers=3, hidden_dim=2048, bottleneck_dim=256):
-        super().__init__()
-        nlayers = max(nlayers, 1)
-        if nlayers == 1:
-            self.mlp = nn.Linear(in_dim, bottleneck_dim)
-        else:
-            layers = [nn.Linear(in_dim, hidden_dim)]
-            if use_bn:
-                layers.append(nn.BatchNorm1d(hidden_dim))
-            layers.append(nn.GELU())
-            for _ in range(nlayers - 2):
-                layers.append(nn.Linear(hidden_dim, hidden_dim))
-                if use_bn:
-                    layers.append(nn.BatchNorm1d(hidden_dim))
-                layers.append(nn.GELU())
-            layers.append(nn.Linear(hidden_dim, bottleneck_dim))
-            self.mlp = nn.Sequential(*layers)
-        self.apply(self._init_weights)
-        self.last_layer = nn.utils.weight_norm(nn.Linear(bottleneck_dim, out_dim, bias=False))
-        self.last_layer.weight_g.data.fill_(1)
-        if norm_last_layer:
-            self.last_layer.weight_g.requires_grad = False
-
-    def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            trunc_normal_(m.weight, std=.02)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-
-    def forward(self, x):
-        x = self.mlp(x)
-        x = nn.functional.normalize(x, dim=-1, p=2)
-        x = self.last_layer(x)
-        return x
-
+        result = output_spatial
+        if last_self_attention:
+            result = (result, attentions)
+        return result

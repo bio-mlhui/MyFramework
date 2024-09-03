@@ -487,7 +487,7 @@
     
 
 import torch
-dinov2_vitl14 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14')
+vits8 = torch.hub.load('facebookresearch/dino:main', 'dino_vitb16')
 
     
     

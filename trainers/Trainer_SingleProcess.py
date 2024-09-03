@@ -46,12 +46,13 @@ class Trainer_SingleProcess:
             self.load_ckpt(configs['initckpt']['path'], 
                            load_random=configs['initckpt']['load_random'], # 随机状态
                            load_model=configs['initckpt']['load_model'], 
+                           load_schedule=configs['initckpt']['load_schedule'], # 数据流idx
                            load_optimize=configs['initckpt']['load_optimizer'])
         self.save_ckpt()
         if configs['initckpt']['eval_init_ckpt']:
             self.evaluate() # 测试的随机状态独立于训练的状态
             self.load_ckpt(os.path.join(self.iteration_dir, 'ckpt.pth.tar'),  # 训练的随机状态
-                       load_random=True, load_model=False, load_optimize=False,)
+                       load_random=True, load_schedule=False, load_model=False, load_optimize=False,)
 
     def train(self):   
         manual_stop_train = False
@@ -154,7 +155,7 @@ class Trainer_SingleProcess:
     def load_ckpt(self, 
                   ckpt_path=None, 
                   load_optimize=False,  
-                  load_schedule=None,
+                  load_schedule=False,
                   load_model=False,
                   load_random=False, # 随机状态
                   ):
@@ -174,7 +175,12 @@ class Trainer_SingleProcess:
 
         if load_model:
             self.model.load_state_dict(checkpoint['model'], strict=True)
-            
+
+        if load_schedule:
+            self.num_samples = checkpoint['num_samples'] # 已经见过的sample的数量/下一次iteration的第一个sample的下标
+            self.num_iterations = checkpoint['num_iterations'] # model更新次数
+            logging.warning('保证你现在是在evaluate')
+
         if load_optimize:
             self.model.load_optimize_state_dict(checkpoint['optimizer'])
             
@@ -231,7 +237,7 @@ class Trainer_SingleProcess:
             self.save_ckpt()
             self.evaluate()
             self.load_ckpt(os.path.join(self.iteration_dir, 'ckpt.pth.tar'),  # 训练的随机状态
-                           load_random=True, load_model=False, load_optimize=False,)
+                           load_random=True, load_schedule=False, load_model=False, load_optimize=False,)
             # except:
             #     if comm.is_main_process():
             #         logging.error(f'Iteration {self.num_iterations} evaluate错误')

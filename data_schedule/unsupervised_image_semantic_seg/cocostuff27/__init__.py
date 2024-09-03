@@ -44,9 +44,9 @@ def get_image_mask(path, image_id):
 root = '/home/xuhuihui/workspace/UNMED/data/Datasets/cocostuff'
 visualize_meta_idxs = defaultdict(list)
 visualize_meta_idxs['cocostuff27_train]'] = [] 
-visualize_meta_idxs['cocostuff27-IIC_eval'] = [] 
-# visualize_meta_idxs['cocostuff27_iic_train_meta'] = [] 
-visualize_meta_idxs['cocostuff27_iic_train_meta_fivecrop'] = [] 
+visualize_meta_idxs['cocostuff27_iic_eval'] = [] 
+visualize_meta_idxs['cocostuff27_iic_train'] = [] 
+# visualize_meta_idxs['cocostuff27_iic_train_meta_fivecrop'] = [] 
 rbg_colors = [
     (156, 31, 23),
     (58, 90, 221),
@@ -85,31 +85,38 @@ cocostuff27_meta = {
     'num_classes': 27,
 }
 
-def cocostuff27_train_meta():
-    file_list = os.listdir(os.path.join(root, "images/train2017"))
-    return [{'image_id': os.path.splitext(image_id)[0], 'meta_idx': idx} for idx, image_id in enumerate(file_list)]
-
-def cocostuff27_iic_train_meta():
-    file_list = []
-    with open(os.path.join(root, "curated", "train2017", "Coco164kFull_Stuff_Coarse.txt"), "r") as f:
-        file_list = [fn.rstrip() for fn in f.readlines()]
-    return [{'image_id': image_id, 'meta_idx': idx, 'crop_idx': crop_idx} for idx, image_id in enumerate(file_list) for crop_idx in range(5)]
-
-def cocostuff27_iic_train_meta_fivecrop():
-    file_list = sorted(os.listdir(os.path.join(root, "cropped", "cocostuff27_five_crop_0.5", "img", "train")), key=lambda x: int(os.path.splitext(x)[0]))
-    return [{'image_id': os.path.splitext(image_id)[0], 'meta_idx': idx} for idx, image_id in enumerate(file_list)]
-
-def get_image_mask_fivecrop(path, image_id):
-    mask = torch.from_numpy(np.array(Image.open(os.path.join(path, f'{image_id}.png')))).long()
-    mask = mask - 1
-    return mask
-
-
+tep_meta = dcopy(cocostuff27_meta)
+tep_meta.update({'mode': 'evaluate', 'name': 'cocostuff27_iic_eval',})
+tep_meta.update({
+    'get_image_fn': partial(get_image, path=os.path.join(root, 'images/val2017',)),
+    'get_mask_fn': partial(get_image_mask, path=os.path.join(root, 'annotations/stuffthingmaps_trainval2017/val2017/',),),        
+})
 def cocostuff27_iic_eval_meta():
     file_list = []
     with open(os.path.join(root, "curated", "val2017", "Coco164kFull_Stuff_Coarse_7.txt"), "r") as f:
         file_list = [fn.rstrip() for fn in f.readlines()]
     return [{'image_id': image_id, 'meta_idx': idx} for idx, image_id in enumerate(file_list)]
+DatasetCatalog.register('cocostuff27_iic_eval', cocostuff27_iic_eval_meta)    
+MetadataCatalog.get('cocostuff27_iic_eval').set(**tep_meta, 
+                                               visualize_meta_idxs=visualize_meta_idxs['cocostuff27_iic_eval_meta']) 
+
+
+# 97702
+tep_meta = dcopy(cocostuff27_meta)
+tep_meta.update({'mode': 'train', 'name': 'cocostuff27_iic_train',})
+tep_meta.update({
+     'get_image_fn': partial(get_image, path=os.path.join(root, 'images/train2017',)),
+    'get_mask_fn': partial(get_image_mask, path=os.path.join(root, 'annotations/train2017/',),), 
+})
+def cocostuff27_iic_train_meta():
+    file_list = []
+    with open(os.path.join(root, "curated", "train2017", "Coco164kFull_Stuff_Coarse.txt"), "r") as f:
+        file_list = [fn.rstrip() for fn in f.readlines()]
+    return [{'image_id': image_id, 'meta_idx': idx} for idx, image_id in enumerate(file_list)]
+DatasetCatalog.register('cocostuff27_iic_train', cocostuff27_iic_train_meta)    
+MetadataCatalog.get('cocostuff27_iic_train').set(**tep_meta, 
+                                                  visualize_meta_idxs=visualize_meta_idxs['cocostuff27_iic_train']) 
+
 
 tep_meta = dcopy(cocostuff27_meta)
 tep_meta.update({'mode': 'train', 'name': 'cocostuff27_train',})
@@ -117,30 +124,34 @@ tep_meta.update({
      'get_image_fn': partial(get_image, path=os.path.join(root, 'images/train2017',)),
     'get_mask_fn': partial(get_image_mask, path=os.path.join(root, 'annotations/train2017/',),), 
 })
+def cocostuff27_train_meta():
+    file_list = os.listdir(os.path.join(root, "images/train2017"))
+    return [{'image_id': os.path.splitext(image_id)[0], 'meta_idx': idx} for idx, image_id in enumerate(file_list)]
 DatasetCatalog.register('cocostuff27_train', cocostuff27_train_meta)    
 MetadataCatalog.get('cocostuff27_train').set(**tep_meta, 
                                             visualize_meta_idxs=visualize_meta_idxs['cocostuff27_train']) 
 
 
-# 118287 <-> 97702
-tep_meta = dcopy(cocostuff27_meta)
-tep_meta.update({'mode': 'train', 'name': 'cocostuff27_iic_train_meta_fivecrop',})
-tep_meta.update({
-    'get_image_fn': partial(get_image, path=os.path.join(root, "cropped", "cocostuff27_five_crop_0.5", "img", "train")),
-    'get_mask_fn': partial(get_image_mask_fivecrop, path=os.path.join(root, "cropped", "cocostuff27_five_crop_0.5", "label", "train",), )
-})
-DatasetCatalog.register('cocostuff27_iic_train_meta_fivecrop', cocostuff27_iic_train_meta_fivecrop)    
-MetadataCatalog.get('cocostuff27_iic_train_meta_fivecrop').set(**tep_meta, 
-                                                  visualize_meta_idxs=visualize_meta_idxs['cocostuff27_iic_train_meta_fivecrop']) 
 
 
-tep_meta = dcopy(cocostuff27_meta)
-tep_meta.update({'mode': 'evaluate', 'name': 'cocostuff27-IIC_eval',})
-tep_meta.update({
-    'get_image_fn': partial(get_image, path=os.path.join(root, 'images/val2017',)),
-    'get_mask_fn': partial(get_image_mask, path=os.path.join(root, 'annotations/stuffthingmaps_trainval2017/val2017/',),),        
-})
-DatasetCatalog.register('cocostuff27-IIC_eval', cocostuff27_iic_eval_meta)    
-MetadataCatalog.get('cocostuff27-IIC_eval').set(**tep_meta, 
-                                               visualize_meta_idxs=visualize_meta_idxs['cocostuff27_iic_eval_meta']) 
 
+
+# def get_image_mask_fivecrop(path, image_id):
+#     mask = torch.from_numpy(np.array(Image.open(os.path.join(path, f'{image_id}.png')))).long()
+#     mask = mask - 1
+#     return mask
+
+# def cocostuff27_iic_train_meta_fivecrop():
+#     file_list = sorted(os.listdir(os.path.join(root, "cropped", "cocostuff27_five_crop_0.5", "img", "train")), key=lambda x: int(os.path.splitext(x)[0]))
+#     return [{'image_id': os.path.splitext(image_id)[0], 'meta_idx': idx} for idx, image_id in enumerate(file_list)]
+
+# # 118287 <-> 97702
+# tep_meta = dcopy(cocostuff27_meta)
+# tep_meta.update({'mode': 'train', 'name': 'cocostuff27_iic_train_meta_fivecrop',})
+# tep_meta.update({
+#     'get_image_fn': partial(get_image, path=os.path.join(root, "cropped", "cocostuff27_five_crop_0.5", "img", "train")),
+#     'get_mask_fn': partial(get_image_mask_fivecrop, path=os.path.join(root, "cropped", "cocostuff27_five_crop_0.5", "label", "train",), )
+# })
+# DatasetCatalog.register('cocostuff27_iic_train_meta_fivecrop', cocostuff27_iic_train_meta_fivecrop)    
+# MetadataCatalog.get('cocostuff27_iic_train_meta_fivecrop').set(**tep_meta, 
+#                                                   visualize_meta_idxs=visualize_meta_idxs['cocostuff27_iic_train_meta_fivecrop']) 

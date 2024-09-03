@@ -36,8 +36,6 @@ from torchmetrics import Metric
 # allimage/single_image
 # fixed_query/dynamic_query
 
-# 最公平的方法, 现在采用的方法:
-# hug + allimage + fixed_query
 
 class UnsupervisedMetrics(Metric):
     def __init__(self, prefix: str, n_classes: int, extra_clusters: int, compute_hungarian: bool,
@@ -109,7 +107,10 @@ class UnsupervisedMetrics(Metric):
                        self.prefix + "Accuracy": opc.item()}
         return {k: 100 * v for k, v in metric_dict.items()}
 
-
+from einops import rearrange
+import cv2
+from models.utils.visualize_cos_similarity import MyVisualizer, ColorMode
+from models.utils.visualize_sem_seg import rbg_colors, generate_semseg_canvas_uou
 @EVALUATOR_REGISTRY.register()
 class AllImages_FixedQueries_HugMatching_Evaluator:
     def __init__(self,
@@ -119,38 +120,145 @@ class AllImages_FixedQueries_HugMatching_Evaluator:
         dataset_meta = MetadataCatalog.get(dataset_name)
         self.dataset_name = dataset_name
         self.loader = data_loader
-        self.num_classes = dataset_meta.get('num_classes')
         eval_configs: dict = configs['data']['evaluate'][dataset_name]['evaluator']
         self.num_gt_classes = MetadataCatalog.get(dataset_name).get('num_classes')
-        
-    def visualize_path(self, meta_idxs, visualize, evaluator_path):
-        return [os.path.join(evaluator_path, f'meta_{meta_idx}') if vis else None for (meta_idx, vis) in zip(meta_idxs, visualize)]
-    
+        self.visualize_all = eval_configs.get('visualize_all', False)
+
     @torch.no_grad()
     def __call__(self, model, output_dir):
-        # 假设: 固定输入输出大小, evaluate也在固定大小上测试
-        # b 3 h w -> b nq h w; N_eval nq h w -> N_eval h w, 0-num_nq-
         model.eval()                    
-        evaluator_path = os.path.join(output_dir, f'eval_{self.dataset_name}')
-        os.makedirs(evaluator_path, exist_ok=True)
-        cluster_metrics = UnsupervisedMetrics("Cluster_", 
-                                              n_classes=self.num_gt_classes, 
-                                              extra_clusters=model.num_queries - self.num_gt_classes,
-                                              compute_hungarian=True)        
+        visualize_path = os.path.join(output_dir, f'eval_{self.dataset_name}')
+        os.makedirs(visualize_path, exist_ok=True)
+        cluster_metrics = UnsupervisedMetrics("Cluster_", compute_hungarian=True,
+                                              n_classes=self.num_gt_classes, extra_clusters=model.num_queries - self.num_gt_classes,) 
+        linear_metrics = UnsupervisedMetrics("Linear_", self.num_gt_classes, 0, False)  
+        self.num_cluster_classes = model.num_queries
+
         for batch_dict in tqdm(self.loader):
             eval_metas = batch_dict.pop('metas') # image_ids: list[str]
             image_ids = eval_metas['image_ids']
-            images = batch_dict['images'] # 3 h w
-            gt_masks = batch_dict['masks'].to(model.device, non_blocking=True) # b h w, 0-27, 255, uint8
-            model_out = model.sample(batch_dict) # dict{'pred_masks': }   
-            pred_masks: torch.Tensor = model_out['pred_masks'] # b nq h w, logits
-            
-            pred_masks = pred_masks.argmax(1) # b h w
-            cluster_metrics.update(pred_masks, gt_masks)             
+            images = batch_dict['images'] # b 3 h w
+            gt_masks = batch_dict['masks'].cuda() # b h w, -1/gt
+            model_out = model.sample(batch_dict, visualize_all=self.visualize_all)  
+
+            cluster_preds: torch.Tensor = model_out['cluster_preds'] # b nq h w, logits
+            assert cluster_preds.shape[1] == self.num_cluster_classes
+            cluster_preds = cluster_preds.argmax(1) # b h w
+            cluster_metrics.update(cluster_preds, gt_masks)  
+
+            linear_preds: torch.Tensor = model_out['linear_preds'] # b gt h w
+            assert linear_preds.shape[1] == self.num_gt_classes
+            linear_preds = linear_preds.argmax(1)
+            linear_metrics.update(linear_preds, gt_masks)
+ 
+
+            if self.visualize_all:
+                assert len(image_ids) == 1
+                image_path = os.path.join(visualize_path, f'{image_ids[0]}.jpg')
+                kmeans_preds, num_kmeans_classes, kmeans_preds_bb = model_out['kmeans_preds'], model_out['num_kmeans_classes'], model_out['kmeans_preds_bb']
+                sampled_points, similarities, backbone_similarities = \
+                    model_out['sampled_points'], model_out['similarities'], model_out['backbone_similarities']
+
+                # image, gt, cluster_pred, linear_pred, kmeans_pred, kmeans_pred_bb
+                # H 5*W 3 
+                first_row = visualize_cluster(image=images[0], gt=gt_masks[0].cpu(), linear_pred=linear_preds[0].cpu(), num_gt_classes=self.num_gt_classes,
+                                              cluster_pred=cluster_preds[0].cpu(), num_cluster_classes=self.num_cluster_classes,
+                                              kmeans_pred=kmeans_preds[0].cpu(), kmeans_pred_bb=kmeans_preds_bb[0].cpu(), num_kmeans_classes=num_kmeans_classes,) # H W*3 3
+                # 3*H N*W 3 point, transformed_sim, backbone_sim
+                sim_image = visualize_cos_similarity(image=images[0], sampled_points=sampled_points, 
+                                                     similarities=similarities, backbone_similarities=backbone_similarities)
+                first_row = F.pad(first_row, pad=(0, 0, 0, sim_image.shape[1]-first_row.shape[1], 0, 0),)
+                whole_image = torch.cat([first_row, sim_image], dim=0) # 4H 10W 3
+                Image.fromarray(whole_image.numpy()).save(image_path)  
+
         eval_metrics = cluster_metrics.compute()
-        
+        eval_metrics.update(linear_metrics.compute())
         return eval_metrics
 
+def visualize_cluster(image, gt, linear_pred, num_gt_classes,
+                    cluster_pred, num_cluster_classes,
+                    kmeans_pred, kmeans_pred_bb, num_kmeans_classes
+                    ):
+    """
+    image: 0-1 float, 3 h w
+    gt & linear_pred: gt/-1, long, h w ;
+    cluster_pred: cluster, long, h w
+    kmeans_pred: kmeans, long, hw
+    """
+    H, W = image.shape[-2:]
+    image = (image.permute(1,2,0).numpy() * 255).astype('uint8')
+    if num_gt_classes == 27:
+        gt_color_name = 'color_gt_27'
+    else:
+        raise NotImplementedError()
+    if num_cluster_classes > 27 or num_kmeans_classes > 27:
+        raise NotImplementedError()
+    cluster_color_name = f'cluster_color_{time.time()}'
+    MetadataCatalog.get(cluster_color_name).set(stuff_classes = [str(idx) for idx in range(num_cluster_classes)],
+                                                stuff_colors = rbg_colors[:num_cluster_classes])
+    kmeans_color_name = f'kmeans_color_{time.time()}'
+    MetadataCatalog.get(kmeans_color_name).set(stuff_classes = [str(idx) for idx in range(num_kmeans_classes)],
+                                                stuff_colors = rbg_colors[:num_kmeans_classes])
+
+    gt[gt==-1] = (num_gt_classes + 2000) # detectron2: for label in filter(lambda l: l < len(self.metadata.stuff_classes), labels):
+    gt_mask_image = torch.from_numpy(generate_semseg_canvas_uou(image=image, H=H, W=W, mask=gt, num_classes=num_gt_classes, 
+                                                        dataset_name=gt_color_name,))  
+    linear_pred_image = torch.from_numpy(generate_semseg_canvas_uou(image=image,  H=H, W=W, mask=linear_pred, num_classes=num_gt_classes, 
+                                                            dataset_name=gt_color_name,))  
+    cluster_pred_image = torch.from_numpy(generate_semseg_canvas_uou(image=image,  H=H, W=W, mask=cluster_pred, num_classes=num_cluster_classes, 
+                                                            dataset_name=cluster_color_name,))  
+    kmeans_pred_image = torch.from_numpy(generate_semseg_canvas_uou(image=image,  H=H, W=W, mask=kmeans_pred, num_classes=num_kmeans_classes, 
+                                                            dataset_name=kmeans_color_name,))  
+    kmeans_pred_bb_image = torch.from_numpy(generate_semseg_canvas_uou(image=image,  H=H, W=W, mask=kmeans_pred_bb, num_classes=num_kmeans_classes, 
+                                                            dataset_name=kmeans_color_name,))     
+    whole_image = torch.cat([torch.from_numpy(image), gt_mask_image, cluster_pred_image, linear_pred_image, kmeans_pred_image, kmeans_pred_bb_image], dim=1)
+    return whole_image
+
+
+def visualize_cos_similarity(image, 
+                             sampled_points,
+                             similarities,
+                             backbone_similarities):
+    """
+    image: 0-1, 3 h w, float
+    sampled_points: N 2, 0-H-1, H, W
+    similarities: N h w, [-1,1], float, -1=blue, 1=red
+    """
+    H, W = image.shape[-2:]
+    image = (image.permute(1,2,0).numpy() * 255).astype('uint8')
+    
+    point_images = []
+    superimposed_imgs = []
+    superimposed_imgs_bb = []
+    for point, sim, bb_sim in zip(sampled_points, similarities, backbone_similarities):
+        # 2, h w,
+        istce_canvas = MyVisualizer(img_rgb=image, metadata=None, instance_mode=ColorMode.SEGMENTATION)
+        istce_canvas.draw_circle(circle_coord=point.tolist()[::-1], color=(1.0, 0, 0), radius=10)
+        istce_canvas = istce_canvas.get_output()
+        point_image =  torch.from_numpy(istce_canvas.get_image())  # h w 3
+
+        heatmap = ((sim + 1) / 2).clamp(0, 1).numpy()
+        heatmap = np.uint8(255 * heatmap) 
+        heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)  
+        superimposed_img = cv2.addWeighted(heatmap, 0.7, image, 0.3, 0)
+        superimposed_img = torch.from_numpy(np.asarray(superimposed_img)) # h w 3
+
+        heatmap = ((bb_sim + 1) / 2).clamp(0, 1).numpy()
+        heatmap = np.uint8(255 * heatmap) 
+        heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)  
+        superimposed_img_bb = cv2.addWeighted(heatmap, 0.7, image, 0.3, 0)
+        superimposed_img_bb = torch.from_numpy(np.asarray(superimposed_img_bb)) # h w 3
+
+        point_images.append(point_image) # 
+        superimposed_imgs.append(superimposed_img)
+        superimposed_imgs_bb.append(superimposed_img_bb)
+ 
+        
+    whole_image = torch.cat([torch.cat(point_images, dim=1), 
+                             torch.cat(superimposed_imgs, dim=1),
+                             torch.cat(superimposed_imgs_bb, dim=1)], dim=0)
+    return whole_image
+    # Image.fromarray(whole_image.numpy()).save(save_dir)
 
 # region
 # alignseg
@@ -324,9 +432,9 @@ class PredsmIoU_DynamicQueries(Metric):
         # print('original match:', gt_to_matches)
         return gt_to_matches
 
-from models.utils.visualize_sem_seg import visualize_cluster
-from models.utils.visualize_cos_similarity import visualize_cos_similarity
-from PIL import Image
+# from models.utils.visualize_sem_seg import visualize_cluster
+# from models.utils.visualize_cos_similarity import visualize_cos_similarity
+# from PIL import Image
 @EVALUATOR_REGISTRY.register()
 class SingleImage_Evaluator:
     """

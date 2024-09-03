@@ -18,8 +18,9 @@ from torch import nn
 logger = logging.getLogger("dinov2")
 
 
+XFORMERS_ENABLED = os.environ.get("XFORMERS_DISABLED") is None
 try:
-    if os.environ.get("USE_XFORMER") == 'true':
+    if XFORMERS_ENABLED:
         from xformers.ops import memory_efficient_attention, unbind
 
         XFORMERS_AVAILABLE = True
@@ -58,14 +59,14 @@ class Attention(nn.Module):
 
         q, k, v = qkv[0] * self.scale, qkv[1], qkv[2]
         attn = q @ k.transpose(-2, -1)
-        attn_hook = attn.clone()
+
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
 
         x = (attn @ v).transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
-        return x, attn_hook, qkv
+        return x
 
 
 class MemEffAttention(Attention):
@@ -85,4 +86,4 @@ class MemEffAttention(Attention):
 
         x = self.proj(x)
         x = self.proj_drop(x)
-        return x, None, None
+        return x

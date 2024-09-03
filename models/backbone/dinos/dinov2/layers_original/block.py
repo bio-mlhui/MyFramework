@@ -88,20 +88,17 @@ class Block(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         def attn_residual_func(x: Tensor) -> Tensor:
-            feat, attn, qkv = self.attn(self.norm1(x))
-            feat = self.ls1(feat)
-            return feat, attn, qkv
+            return self.ls1(self.attn(self.norm1(x)))
 
         def ffn_residual_func(x: Tensor) -> Tensor:
             return self.ls2(self.mlp(self.norm2(x)))
 
         if self.training and self.sample_drop_ratio > 0.1:
             # the overhead is compensated only for a drop path rate larger than 0.1
-            x, attn, qkv = drop_add_residual_stochastic_depth(
+            x = drop_add_residual_stochastic_depth(
                 x,
                 residual_func=attn_residual_func,
                 sample_drop_ratio=self.sample_drop_ratio,
-                split=True
             )
             x = drop_add_residual_stochastic_depth(
                 x,
@@ -109,21 +106,18 @@ class Block(nn.Module):
                 sample_drop_ratio=self.sample_drop_ratio,
             )
         elif self.training and self.sample_drop_ratio > 0.0:
-            x_tmp, attn, qkv = attn_residual_func(x)
-            x = x + self.drop_path1(x_tmp)
+            x = x + self.drop_path1(attn_residual_func(x))
             x = x + self.drop_path1(ffn_residual_func(x))  # FIXME: drop_path2
         else:
-            x_tmp, attn, qkv = attn_residual_func(x)
-            x = x + x_tmp
+            x = x + attn_residual_func(x)
             x = x + ffn_residual_func(x)
-        return x, attn, qkv
+        return x
 
 
 def drop_add_residual_stochastic_depth(
     x: Tensor,
     residual_func: Callable[[Tensor], Tensor],
     sample_drop_ratio: float = 0.0,
-    split=False
 ) -> Tensor:
     # 1) extract subset using permutation
     b, n, d = x.shape
@@ -132,10 +126,7 @@ def drop_add_residual_stochastic_depth(
     x_subset = x[brange]
 
     # 2) apply residual_func to get residual
-    if split:
-        residual, attn, qkv = residual_func(x_subset)
-    else:
-        residual = residual_func(x_subset)
+    residual = residual_func(x_subset)
 
     x_flat = x.flatten(1)
     residual = residual.flatten(1)
@@ -144,10 +135,7 @@ def drop_add_residual_stochastic_depth(
 
     # 3) add the residual
     x_plus_residual = torch.index_add(x_flat, 0, brange, residual.to(dtype=x.dtype), alpha=residual_scale_factor)
-    if split:
-        return x_plus_residual.view_as(x), attn, qkv
-    else:
-        return x_plus_residual.view_as(x)
+    return x_plus_residual.view_as(x)
 
 
 def get_branges_scales(x, sample_drop_ratio=0.0):
@@ -260,3 +248,13 @@ class NestedTensorBlock(Block):
             x = x + attn_residual_func(x, attn_bias=attn_bias)
             x = x + ffn_residual_func(x)
             return attn_bias.split(x)
+
+    def forward(self, x_or_x_list):
+        if isinstance(x_or_x_list, Tensor):
+            return super().forward(x_or_x_list)
+        elif isinstance(x_or_x_list, list):
+            if not XFORMERS_AVAILABLE:
+                raise AssertionError("xFormers is required for using nested tensors")
+            return self.forward_nested(x_or_x_list)
+        else:
+            raise AssertionError

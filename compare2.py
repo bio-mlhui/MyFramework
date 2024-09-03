@@ -1,37 +1,11 @@
-def initialize_reference_pool(net_model, train_loader_memory, opt, feat_dim, device, pixel_mean, pixel_std,):
-    with torch.no_grad():
-        Pool_ag = torch.zeros((opt["model"]["pool_size"], feat_dim), dtype=torch.float16).cuda()
-        Pool_sp = torch.zeros((opt["model"]["pool_size"], opt["model"]["dim"]), dtype=torch.float16).cuda()
-        Pool_iter = iter(train_loader_memory)
+class Attention(nn.Module):
+    def __init__(self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0.):
+        super().__init__()
+        self.num_heads = num_heads
+        head_dim = dim // num_heads
+        self.scale = qk_scale or head_dim ** -0.5
 
-        for _iter in range(len(train_loader_memory)):
-            data = next(Pool_iter)
-            img: torch.Tensor = data['img'].to(device, non_blocking=True)
-            img = img - pixel_mean / pixel_std
-            
-            if _iter >= opt["model"]["pool_size"] / opt["dataloader"]["batch_size"]:
-                break
-            img = img.cuda()
-            with torch.cuda.amp.autocast(enabled=True):
-                model_output = net_model(img)
-
-                modeloutput_f = model_output[0].clone().detach()
-                modeloutput_f = modeloutput_f.view(modeloutput_f.size(0), modeloutput_f.size(1), -1)
-
-                modeloutput_s_pr = model_output[2].clone().detach()
-                modeloutput_s_pr = modeloutput_s_pr.view(modeloutput_s_pr.size(0), modeloutput_s_pr.size(1), -1)
-
-            for _iter2 in range(modeloutput_f.size(0)):
-                randidx = np.random.randint(0, model_output[0].size(-1) * model_output[0].size(-2))
-                Pool_ag[_iter * opt["dataloader"]["batch_size"] + _iter2] = modeloutput_f[_iter2][:, randidx]
-
-            for _iter2 in range(modeloutput_s_pr.size(0)):
-                randidx = np.random.randint(0, model_output[2].size(-1) * model_output[2].size(-2))
-                Pool_sp[_iter * opt["dataloader"]["batch_size"] + _iter2] = modeloutput_s_pr[_iter2][:, randidx]
-            if _iter % 10 == 0:
-                print("Filling Pool Memory [{} / {}]".format((_iter + 1) * opt["dataloader"]["batch_size"],
-                                                             opt["model"]["pool_size"]))
-
-        Pool_ag = F.normalize(Pool_ag, dim=1)
-        Pool_sp = F.normalize(Pool_sp, dim=1)
-    return Pool_ag, Pool_sp
+        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.proj = nn.Linear(dim, dim)
+        self.proj_drop = nn.Dropout(proj_drop)

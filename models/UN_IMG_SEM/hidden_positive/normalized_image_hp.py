@@ -96,8 +96,9 @@ class AUXMapper:
             return {
                 # list[3 3 h w] -> b 3 3 h w
                 'img': torch.stack([item['image'] for item in batch_dict], dim=0),
-                'label': torch.stack([item['mask'] for item in batch_dict], dim=0),
                 'img_aug': torch.stack([item['img_aug'] for item in batch_dict], dim=0),
+                'label': torch.stack([item['mask'] for item in batch_dict], dim=0),
+                # 'images_pos_feats': torch.stack([item['image_pos_feat'] for item in batch_dict], dim=0),
                 'meta_idxs': [item['meta_idx'] for item in batch_dict],
                 'visualize': [item['visualize'] for item in batch_dict],
                 'image_ids':[item['image_id'] for item in batch_dict],
@@ -127,7 +128,6 @@ from models.UN_IMG_SEM.stego.utils.common_utils import freeze_bn, zero_grad_bn
 from models.UN_IMG_SEM.stego.utils.seg_utils import UnsupervisedMetrics, batched_crf, get_metrics
 from .LambdaLayer import LambdaLayer
 from .loss import StegoLoss
-
 class STEGOmodel(nn.Module):
     # opt["model"]
     def __init__(self,
@@ -243,7 +243,6 @@ class HP(OptimizeModel):
         self.net_model, self.linear_model, self.cluster_model = build_model(opt=model_configs,
                                                                             n_classes=num_classes,
                                                                             is_direct=configs["eval"]["is_direct"]) 
-        self.patch_size = self.net_model.patch_size
         self.criterion = build_criterion(n_classes=num_classes, opt=configs["loss"]) 
         self.net_model.to(device)
         self.linear_model.to(device)
@@ -264,7 +263,6 @@ class HP(OptimizeModel):
         self.freeze_all_bn = configs["train"]["freeze_all_bn"]
         self.grad_norm = configs["train"]["grad_norm"]
         self.num_queries = num_classes
-        self.kmeans_strategy = 'adaptive'
 
     @property
     def device(self):
@@ -298,8 +296,9 @@ class HP(OptimizeModel):
 
         img_aug = batch_dict['img_aug'].to(device, non_blocking=True)
 
-        with torch.no_grad():
-            img = (img - self.pixel_mean) / self.pixel_std
+        # with torch.no_grad():
+        #     img = (img - self.pixel_mean) / self.pixel_std
+        #     img_aug = (img_aug - self.pixel_mean) / self.pixel_std
 
         if self.freeze_encoder_bn:
             freeze_bn(self.net_model.model)
@@ -357,7 +356,7 @@ class HP(OptimizeModel):
                                                     cluster_output=cluster_output
                                                     )
 
-            loss = loss + loss_supcon + loss_consistency * self.configs['alpha'] 
+            loss = loss + loss_supcon + loss_consistency*self.configs["alpha"]
 
 
         self.scaler.scale(loss).backward()
@@ -381,48 +380,42 @@ class HP(OptimizeModel):
 
         loss_dict['loss'] = loss.cpu().item()
         loss_dict['loss_supcon'] = loss_supcon.cpu().item()
-        loss_dict['loss_consistency'] = loss_consistency.cpu().item()
+        loss_dict['loss_consistency'] = loss_consistency.cpu().item()*self.configs["alpha"]
         return loss_dict
 
     @torch.no_grad()
-    def sample(self, batch_dict, visualize_all=False):
+    def sample(self, batch_dict, is_crf=False):
         assert not self.training
         img: torch.Tensor = batch_dict['images'].to(self.device, non_blocking=True)
-        img = (img - self.pixel_mean) / self.pixel_std
+        # img = (img - self.pixel_mean) / self.pixel_std
         label: torch.Tensor = batch_dict['masks'].to(self.device, non_blocking=True)
 
         with torch.cuda.amp.autocast(enabled=True):
             output = self.net_model(img)
-
-        backbone_feats = output[0] # b c h w
-        head_code = output[1].float() # b c h w
-
-        sampled_points, similarities, backbone_similarities = None, None, None
-        kmeans_preds, num_kmeans_classes, kmeans_preds_backbone = None, None, None,
-        if visualize_all:
-            sampled_points, similarities, backbone_similarities = self.sample_point_similarities(code_features=head_code,
-                                                                                                 backbone_features=backbone_feats, 
-                                                                                                 num_points=10)
-            kmeans_preds, _ , num_kmeans_classes = self.self_cluster(head_code, label)
-            kmeans_preds_backbone, _ , _ = self.self_cluster(backbone_feats, label)
+        feats = output[0]
+        head_code = output[1]
 
         head_code = F.interpolate(head_code, label.shape[-2:], mode='bilinear', align_corners=False)
-        with torch.cuda.amp.autocast(enabled=True):
-            linear_preds = self.linear_model(head_code)
-        with torch.cuda.amp.autocast(enabled=True):
-            _, cluster_preds = self.cluster_model(head_code, None, is_direct=self.configs["eval"]["is_direct"])
+
+        if is_crf:
+            with torch.cuda.amp.autocast(enabled=True):
+                linear_preds = torch.log_softmax(self.linear_model(head_code), dim=1)
+
+            with torch.cuda.amp.autocast(enabled=True):
+                cluster_loss, cluster_preds = self.cluster_model(head_code, 2, log_probs=True, is_direct=self.configs["eval"]["is_direct"])
+            linear_preds = batched_crf(img, linear_preds).argmax(1).cuda()
+            cluster_preds = batched_crf(img, cluster_preds)
+
+        else:
+            with torch.cuda.amp.autocast(enabled=True):
+                linear_preds = self.linear_model(head_code).argmax(1)
+
+            with torch.cuda.amp.autocast(enabled=True):
+                cluster_loss, cluster_preds = self.cluster_model(head_code, None, is_direct=self.configs["eval"]["is_direct"])
+            cluster_preds = cluster_preds
 
         return  {
-            'linear_preds': linear_preds,
-            'cluster_preds': cluster_preds,
-
-            'sampled_points': sampled_points,
-            'similarities': similarities,
-            'backbone_similarities': backbone_similarities,
-
-            'kmeans_preds': kmeans_preds,
-            'kmeans_preds_bb': kmeans_preds_backbone,
-            'num_kmeans_classes': num_kmeans_classes,
+            'pred_masks': cluster_preds,
         }
 
     def optimize_state_dict(self,):
@@ -439,59 +432,6 @@ class HP(OptimizeModel):
                  f'lr_cluster': self.cluster_probe_optimizer.param_groups[0]["lr"],
                  f'lr_linear': self.linear_probe_optimizer.param_groups[0]["lr"]}
 
-    @torch.no_grad()
-    def sample_point_similarities(self, backbone_features, code_features, num_points):
-        # b c h w, num_points
-        H_P, W_P = code_features.shape[-2:]
-        H, W = H_P * self.patch_size, W_P * self.patch_size
-        sampled_points = torch.rand(num_points, 2)
-        sampled_points[:, 0] = sampled_points[:, 0] * H_P
-        sampled_points[:, 1] = sampled_points[:, 1] * W_P
-        sampled_points = sampled_points.long()
-        sampled_points[:, 0].clamp_(0, H_P-1)
-        sampled_points[:, 1].clamp_(0, W_P-1)
-        similarities = []
-        for point in sampled_points:
-            query = code_features[:, :, point[0], point[1]] # 1 c
-            sim = torch.einsum('c,chw->hw',
-                                F.normalize(query[0], dim=0, eps=1e-10),
-                                F.normalize(code_features[0], dim=0, eps=1e-10),).cpu() # -1, 1
-            sim = F.interpolate(sim[None, None, ...], size=(H, W), align_corners=False, mode='bilinear').clamp(-1, 1)[0, 0]
-            similarities.append(sim)
-
-        backbone_similarities = []
-        for point in sampled_points:
-            query = backbone_features[:, :, point[0], point[1]] # 1 c
-            sim = torch.einsum('c,chw->hw',
-                                F.normalize(query[0], dim=0, eps=1e-10),
-                                F.normalize(backbone_features[0], dim=0, eps=1e-10),).cpu() # -1, 1
-            sim = F.interpolate(sim[None, None, ...], size=(H, W), align_corners=False, mode='bilinear').clamp(-1, 1)[0, 0]
-            backbone_similarities.append(sim)
-
-        sampled_points = sampled_points * self.patch_size
-        return sampled_points, similarities, backbone_similarities
-
-
-    @torch.no_grad()
-    def self_cluster(self, features, gt_masks):
-        from models.UN_IMG_SEM.kmeans.kmeans import kmeans
-        # b c h w -> b
-        _, _, H_P, W_P = features.shape
-        assert features.shape[0] == 1
-        if self.kmeans_strategy == 'adaptive':
-            num_image_classes = len(set(gt_masks.unique().tolist()) - set([-1]))
-        else:
-            raise ValueError()
-        features = features.permute(0, 2,3,1).flatten(0,2) # bhw c
-        _, cluster_centers = kmeans(X=features, num_clusters=num_image_classes, device=self.device) # num c
-        cluster_logits = torch.einsum('sc,nc->sn', 
-                                    F.normalize(features, dim=-1, eps=1e-10),
-                                    F.normalize(cluster_centers.to(self.device), dim=-1, eps=1e-10))
-        # 把和cluster_center最近的点标注出来
-        cluster_logits = rearrange(cluster_logits, '(b h w) n -> b n h w', b=1,h=H_P, w=W_P)
-        cluster_logits = F.interpolate(cluster_logits, size=(H_P*self.patch_size, W_P*self.patch_size), mode='bilinear', align_corners=False)
-        cluster_ids = cluster_logits.max(dim=1)[1].cpu()
-        return cluster_ids, cluster_logits, num_image_classes
 
 @register_model
 def hp(configs, device):

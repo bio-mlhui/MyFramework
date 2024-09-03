@@ -73,28 +73,32 @@ rbg_colors = [
     (112, 202, 216),
     (44, 214, 110)
 ]
-
-color_gt = MetadataCatalog.get('color_gt').set(stuff_classes = [str(idx) for idx in range(27)],
-                                               stuff_colors = rbg_colors)
+MetadataCatalog.get('color_gt_27').set(stuff_classes = [str(idx) for idx in range(27)],
+                                        stuff_colors = rbg_colors)
 import time
 def visualize_cluster(image, gt, pred, 
                       num_image_classes, 
                       num_gt_classes,):
     """
     image: 0-1, 3 h w, float
-    gt: 0-num_gt_class-1, 255代表背景, h w, int/long
+    gt: 0-num_gt_class-1, -1代表背景, h w, long
     pred: 0-num_image_class-1, h w, int/long
-    save_dir: ../image_id.png
+    save_dgtir: ../image_id.png
     """
     H, W = image.shape[-2:]
     image = (image.permute(1,2,0).numpy() * 255).astype('uint8')
     random_name = f'color_pred_{time.time()}'
     MetadataCatalog.get(random_name).set(stuff_classes = [str(idx) for idx in range(num_image_classes)],
                                          stuff_colors = rbg_colors[:num_image_classes])
+    if num_gt_classes == 27:
+        gt_metalog_name = 'color_gt_27'
+    else:
+        raise NotImplementedError()
     
+    gt[gt==-1] = (num_image_classes + 2000) # detectron2: for label in filter(lambda l: l < len(self.metadata.stuff_classes), labels):
     # detectron2
     gt_image = torch.from_numpy(generate_semseg_canvas_uou(image=image, 
-                                                           H=H, W=W, mask=gt, num_classes=num_gt_classes, dataset_name='color_gt',))  
+                                                           H=H, W=W, mask=gt, num_classes=num_gt_classes, dataset_name=gt_metalog_name,))  
     pred_image = torch.from_numpy(generate_semseg_canvas_uou(image=image,  H=H, W=W, mask=pred, 
                                                              num_classes=num_image_classes, dataset_name=random_name,))  
     

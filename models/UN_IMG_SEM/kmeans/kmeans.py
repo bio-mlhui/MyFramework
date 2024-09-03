@@ -151,9 +151,12 @@ class KMeans_SingleImage(OptimizeModel):
     def get_backbone_features(self, images):
         images = images.to(self.device) 
         images = (images - self.pixel_mean) / self.pixel_std
+        B, _, H, W = images.shape
         # Extract feature
         with torch.no_grad():
             features = self.backbone(images) # b 3 h w -> b c h//patch w//patch
+            features = features['features'][0][:, 1:, :] # b cls_hw c
+            features = features.reshape(B, H//self.patch_size, W//self.patch_size, features.shape[-1])
         return features
             
     @property

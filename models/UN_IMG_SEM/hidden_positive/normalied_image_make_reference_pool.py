@@ -1,18 +1,18 @@
 import torch
 import numpy as np
 import torch.nn.functional as F
-from tqdm import tqdm
-def initialize_reference_pool(net_model, train_loader_memory, opt, feat_dim, device):
+def initialize_reference_pool(net_model, train_loader_memory, opt, feat_dim, device, pixel_mean, pixel_std,):
     with torch.no_grad():
-        Pool_ag = torch.zeros((opt["model"]["pool_size"], feat_dim), dtype=torch.float16).cuda() # 1024
+        Pool_ag = torch.zeros((opt["model"]["pool_size"], feat_dim), dtype=torch.float16).cuda()
         Pool_sp = torch.zeros((opt["model"]["pool_size"], opt["model"]["dim"]), dtype=torch.float16).cuda()
         Pool_iter = iter(train_loader_memory)
 
-        for _iter in tqdm(range(len(train_loader_memory))):
+        for _iter in range(len(train_loader_memory)):
             data = next(Pool_iter)
-            img: torch.Tensor = data['image'].unsqueeze(0).to(device, non_blocking=True)
-
-            if _iter >= opt["model"]["pool_size"]:
+            img: torch.Tensor = data['img'].to(device, non_blocking=True)
+            # img = (img - pixel_mean) / pixel_std
+            
+            if _iter >= opt["model"]["pool_size"] / opt["dataloader"]["batch_size"]:
                 break
             img = img.cuda()
             with torch.cuda.amp.autocast(enabled=True):
@@ -26,25 +26,27 @@ def initialize_reference_pool(net_model, train_loader_memory, opt, feat_dim, dev
 
             for _iter2 in range(modeloutput_f.size(0)):
                 randidx = np.random.randint(0, model_output[0].size(-1) * model_output[0].size(-2))
-                Pool_ag[_iter + _iter2] = modeloutput_f[_iter2][:, randidx]
+                Pool_ag[_iter * opt["dataloader"]["batch_size"] + _iter2] = modeloutput_f[_iter2][:, randidx]
 
             for _iter2 in range(modeloutput_s_pr.size(0)):
                 randidx = np.random.randint(0, model_output[2].size(-1) * model_output[2].size(-2))
-                Pool_sp[_iter + _iter2] = modeloutput_s_pr[_iter2][:, randidx]
+                Pool_sp[_iter * opt["dataloader"]["batch_size"] + _iter2] = modeloutput_s_pr[_iter2][:, randidx]
+            if _iter % 10 == 0:
+                print("Filling Pool Memory [{} / {}]".format((_iter + 1) * opt["dataloader"]["batch_size"],
+                                                             opt["model"]["pool_size"]))
 
         Pool_ag = F.normalize(Pool_ag, dim=1)
         Pool_sp = F.normalize(Pool_sp, dim=1)
     return Pool_ag, Pool_sp
 
-def renew_reference_pool(net_model, train_loader_memory, opt, device):
+def renew_reference_pool(net_model, train_loader_memory, opt, device, pixel_mean, pixel_std):
     with torch.no_grad():
         Pool_sp = torch.zeros((opt["model"]["pool_size"], opt["model"]["dim"]), dtype=torch.float16).cuda()
-        pool_idxs = torch.randperm(len(train_loader_memory))[:opt['model']['pool_size']]
-        for _iter, p_idx in tqdm(enumerate(pool_idxs)):
-            if _iter >= opt["model"]["pool_size"]:
+        for _iter, data in enumerate(train_loader_memory):
+            if _iter >= opt["model"]["pool_size"] / opt["dataloader"]["batch_size"]:
                 break
-            img_net: torch.Tensor = train_loader_memory[p_idx]['image'].unsqueeze(0).to(device, non_blocking=True)
-
+            img_net: torch.Tensor = data['img'].to(device, non_blocking=True)
+            # img_net = (img_net - pixel_mean) / pixel_std
             with torch.cuda.amp.autocast(enabled=True):
                 model_output = net_model(img_net)
 
@@ -53,10 +55,11 @@ def renew_reference_pool(net_model, train_loader_memory, opt, device):
 
             for _iter2 in range(modeloutput_s_pr.size(0)):
                 randidx = np.random.randint(0, model_output[2].size(-1) * model_output[2].size(-2))
-                Pool_sp[_iter + _iter2] = modeloutput_s_pr[_iter2][:, randidx]
+                Pool_sp[_iter * opt["dataloader"]["batch_size"] + _iter2] = modeloutput_s_pr[_iter2][:, randidx]
 
-            # print("Filling Pool Memory [{} / {}]".format(
-            #     (_iter + 1), opt["model"]["pool_size"]))
+            if _iter == 0:
+                print("Filling Pool Memory [{} / {}]".format(
+                    (_iter + 1) * opt["dataloader"]["batch_size"], opt["model"]["pool_size"]))
 
         Pool_sp = F.normalize(Pool_sp, dim=1)
 

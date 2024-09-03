@@ -10,7 +10,7 @@ def initialize_reference_pool(net_model, train_loader_memory, opt, feat_dim, dev
         for _iter in range(len(train_loader_memory)):
             data = next(Pool_iter)
             img: torch.Tensor = data['img'].to(device, non_blocking=True)
-            # img = (img - pixel_mean) / pixel_std
+            img = (img - pixel_mean) / pixel_std
             
             if _iter >= opt["model"]["pool_size"] / opt["dataloader"]["batch_size"]:
                 break
@@ -46,7 +46,7 @@ def renew_reference_pool(net_model, train_loader_memory, opt, device, pixel_mean
             if _iter >= opt["model"]["pool_size"] / opt["dataloader"]["batch_size"]:
                 break
             img_net: torch.Tensor = data['img'].to(device, non_blocking=True)
-            # img_net = (img_net - pixel_mean) / pixel_std
+            img_net = (img_net - pixel_mean) / pixel_std
             with torch.cuda.amp.autocast(enabled=True):
                 model_output = net_model(img_net)
 

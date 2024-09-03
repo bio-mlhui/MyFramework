@@ -150,7 +150,6 @@ class DinoVisionTransformer(nn.Module):
             )
             for i in range(depth)
         ]
-        assert block_chunks == 0
         if block_chunks > 0:
             self.chunked_blocks = True
             chunked_blocks = []
@@ -232,6 +231,44 @@ class DinoVisionTransformer(nn.Module):
 
         return x
 
+    def forward_features_list(self, x_list, masks_list):
+        x = [self.prepare_tokens_with_masks(x, masks) for x, masks in zip(x_list, masks_list)]
+        for blk in self.blocks:
+            x = blk(x)
+
+        all_x = x
+        output = []
+        for x, masks in zip(all_x, masks_list):
+            x_norm = self.norm(x)
+            output.append(
+                {
+                    "x_norm_clstoken": x_norm[:, 0],
+                    "x_norm_regtokens": x_norm[:, 1 : self.num_register_tokens + 1],
+                    "x_norm_patchtokens": x_norm[:, self.num_register_tokens + 1 :],
+                    "x_prenorm": x,
+                    "masks": masks,
+                }
+            )
+        return output
+
+    def forward_features(self, x, masks=None):
+        if isinstance(x, list):
+            return self.forward_features_list(x, masks)
+
+        x = self.prepare_tokens_with_masks(x, masks)
+
+        for blk in self.blocks:
+            x = blk(x)
+
+        x_norm = self.norm(x)
+        return {
+            "x_norm_clstoken": x_norm[:, 0],
+            "x_norm_regtokens": x_norm[:, 1 : self.num_register_tokens + 1],
+            "x_norm_patchtokens": x_norm[:, self.num_register_tokens + 1 :],
+            "x_prenorm": x,
+            "masks": masks,
+        }
+
     def _get_intermediate_layers_not_chunked(self, x, n=1):
         x = self.prepare_tokens_with_masks(x)
         # If n is an int, take the n last blocks. If it's a list, take them
@@ -284,63 +321,12 @@ class DinoVisionTransformer(nn.Module):
             return tuple(zip(outputs, class_tokens))
         return tuple(outputs)
 
-    def forward(self, x, n=1):
-        x = self.prepare_tokens_with_masks(x)
-
-        features = []
-        attentions = []
-        qkvs = []
-
-        for i, blk in enumerate(self.blocks):
-            x, attn, qkv = blk(x)
-            if len(self.blocks) - i <= n:
-                features.append(self.norm(x))
-                attentions.append(attn)
-                qkvs.append(qkv)
-        # 只返回cls+hw
-        if self.num_register_tokens != 0:
-            cls_reg_hw = features[0].shape[1]
-            index_tensor = [0] + list(range(self.num_register_tokens+1, cls_reg_hw))
-            index_tensor = torch.tensor(index_tensor).long().to(features[0].device)
-            new_features = []
-            for feats in features:
-                new_features.append(feats.index_select(dim=1, index=index_tensor))
-            # qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
-
-            # b cls_reg_hw 3 head dim -> 3 b head cls_reg_hw dim
-
-            # attn = q @ k.transpose(-2, -1)
-            # b head cls_reg_hw cls_reg_hw
-            new_attentions = []
-            if attentions[0] is not None:
-                for attns in attentions:
-                    cls_hw = attns.index_select(dim=2, index=index_tensor)
-                    cls_hw = cls_hw.index_select(dim=3, index=index_tensor)
-                    # cls_hw = attns[:, :, target_index, :]
-                    # cls_hw = cls_hw[:, :, :, target_index]
-                    new_attentions.append(cls_hw)
-            new_qkvs = []
-            if qkvs[0] is not None:
-                for qf in qkvs:
-                    new_qkvs.append(qf.index_select(dim=3, index=index_tensor))        
-            
-            features = new_features
-            attentions = new_attentions
-            qkvs = new_qkvs
-
-        return {
-            'features': features, # b cls+hw c
-            'attentions': attentions, # 
-            'qkvs': qkvs, # 
-        }
-
-        # return {
-        #     "x_norm_clstoken": x_norm[:, 0],
-        #     "x_norm_regtokens": x_norm[:, 1 : self.num_register_tokens + 1],
-        #     "x_norm_patchtokens": x_norm[:, self.num_register_tokens + 1 :],
-        #     "x_prenorm": x,
-        # }
-
+    def forward(self, *args, is_training=False, **kwargs):
+        ret = self.forward_features(*args, **kwargs)
+        if is_training:
+            return ret
+        else:
+            return self.head(ret["x_norm_clstoken"])
 
 
 def init_weights_vit_timm(module: nn.Module, name: str = ""):
