@@ -118,6 +118,7 @@ MetadataCatalog.get('cocostuff27_iic_train').set(**tep_meta,
                                                   visualize_meta_idxs=visualize_meta_idxs['cocostuff27_iic_train']) 
 
 
+
 tep_meta = dcopy(cocostuff27_meta)
 tep_meta.update({'mode': 'train', 'name': 'cocostuff27_train',})
 tep_meta.update({
