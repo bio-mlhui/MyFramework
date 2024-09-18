@@ -38,14 +38,19 @@ class Dinov1(nn.Module):
             name_to_pt_path = {'dinov1_vits16': 'dinov1/dino_deitsmall16_pretrain.pth',
                                'dinov1_vitb8': 'dinov1/dino_vitbase8_pretrain.pth',
                                'dinov1_vitb16': 'dinov1/dino_vitbase16_pretrain.pth',
+                               # 'dinov1_vits8': '/home/xuhuihui/workspace/dino/out/checkpoint0000.pth',}
                                'dinov1_vits8': 'dinov1/dino_deitsmall8_300ep_pretrain.pth', }
             state_dict = torch.load(os.path.join(os.getenv('PT_PATH'), name_to_pt_path[dino_name]), map_location='cpu')
+            # state_dict = torch.load(os.path.join(os.getenv('PT_PATH'), name_to_pt_path[dino_name]), map_location='cpu')['teacher']
+            # state_dict = {k.replace("backbone.", ""): v for k, v in state_dict.items()}
+            # self.ssl.load_state_dict(state_dict, strict=False) 
             self.ssl.load_state_dict(state_dict, strict=True) 
         if configs['freeze_pt']:
             for p in self.ssl.parameters():
                 p.requires_grad_(False)  
         self.embed_dim = self.ssl.embed_dim
         self.patch_size = self.ssl.patch_embed.patch_size
+        self.num_heads = dino_configs['num_heads']
         if os.environ.get('GO_TRAIN') == 'true':
             self.ssl = torch.compile(self.ssl)
 

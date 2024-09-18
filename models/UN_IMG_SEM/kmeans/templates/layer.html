@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Loader and Generator</title>
+    <style>
+        #image-container img {
+            width: 300px;
+            height: auto;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <h1>Image Loader and Generator</h1>
+    
+    <!-- Image Selection -->
+    <div>
+        <h2>Select Image 1:</h2>
+        <select id="image-dropdown">
+            {% for image in image_list %}
+                <option value="{{ image }}">{{ image }}</option>
+            {% endfor %}
+        </select>
+        <button onclick="loadImage()">Load Image</button>
+
+    </div>
+
+    <!-- Image Display -->
+    <div id="image-container">
+        <div id="first-box">
+            <h2>Selected Image:</h2>
+            <img id="chosen-image" src="{{ url_for('static', filename='assets/image.png') }}" alt="No image selected" onclick="handleImageClick(event)">
+        </div>
+        <div id="second-box">
+            <h2>Generated Image:</h2>
+            <img id="generated-image" src="{{ url_for('static', filename='assets/image_sim.png') }}" alt="No image generated">
+        </div>
+        <div id="third-box">
+            <img id="generated-image" src="{{ url_for('static', filename='assets/layer_sim1.png') }}" alt="No image generated">
+            <img id="generated-image" src="{{ url_for('static', filename='assets/layer_sim2.png') }}" alt="No image generated">
+            <img id="generated-image" src="{{ url_for('static', filename='assets/layer_sim3.png') }}" alt="No image generated">
+            <img id="generated-image" src="{{ url_for('static', filename='assets/layer_sim4.png') }}" alt="No image generated">
+            <img id="generated-image" src="{{ url_for('static', filename='assets/layer_sim5.png') }}" alt="No image generated">
+            <img id="generated-image" src="{{ url_for('static', filename='assets/layer_sim6.png') }}" alt="No image generated">
+            <img id="generated-image" src="{{ url_for('static', filename='assets/layer_sim7.png') }}" alt="No image generated">
+            <img id="generated-image" src="{{ url_for('static', filename='assets/layer_sim8.png') }}" alt="No image generated">
+            <img id="generated-image" src="{{ url_for('static', filename='assets/layer_sim9.png') }}" alt="No image generated">
+            <img id="generated-image" src="{{ url_for('static', filename='assets/layer_sim10.png') }}" alt="No image generated">
+            <img id="generated-image" src="{{ url_for('static', filename='assets/layer_sim11.png') }}" alt="No image generated">
+            <img id="generated-image" src="{{ url_for('static', filename='assets/layer_sim12.png') }}" alt="No image generated">
+        </div>
+
+    </div>
+
+    <script>
+        function loadImage() {
+            const selectedImage = document.getElementById('image-dropdown').value;
+            fetch('/load_image', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({image: selectedImage})
+            })
+            .then(response => response.json())
+            .then(data => {
+                window.location.reload();  // This reloads the whole page
+            });
+        }
+        function handleImageClick(event) {
+            const img = event.target;
+            
+            // Get image dimensions
+            const imgWidth = img.offsetWidth;
+            const imgHeight = img.offsetHeight;
+            
+            // Get click position relative to the image
+            const clickX = event.offsetX;
+            const clickY = event.offsetY;
+            
+            // Calculate the relative positions as percentages
+            const relativeX = (clickX / imgWidth);
+            const relativeY = (clickY / imgHeight);
+            const clickPosition = { x: relativeX, y: relativeY };
+            fetch('/click_image', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({point: clickPosition})
+            })
+            .then(response => response.json())
+            .then(data => {
+                window.location.reload();  // This reloads the whole page
+            });
+        }
+    </script>
+</body>
+</html>

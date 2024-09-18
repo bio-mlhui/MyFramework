@@ -297,14 +297,37 @@ class DinoVisionTransformer(nn.Module):
                 features.append(self.norm(x))
                 attentions.append(attn)
                 qkvs.append(qkv)
+
+        # for i, blk in enumerate(self.blocks):
+        #     x, attn, qkv = blk(x)
+        #     if len(self.blocks) - i <= n:
+        #         features.append(x)
+        #         attentions.append(attn)
+        #         qkvs.append(qkv)
+
+        # for i, blk in enumerate(self.blocks):
+        #     x, attn, qkv = blk(x)
+        #     if i in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]: 
+        #         features.append(x) # # 1105, 1221, 130
+        #         attentions.append(attn)
+        #         qkvs.append(qkv)
+
+        features = [features[0]]
+        reg_features = [None]
         # 只返回cls+hw
         if self.num_register_tokens != 0:
             cls_reg_hw = features[0].shape[1]
             index_tensor = [0] + list(range(self.num_register_tokens+1, cls_reg_hw))
             index_tensor = torch.tensor(index_tensor).long().to(features[0].device)
+
+            reg_index_tensor = list(range(1, self.num_register_tokens+1))
+            reg_index_tensor = torch.tensor(reg_index_tensor).long().to(features[0].device)
+            
             new_features = []
+            reg_features = []
             for feats in features:
                 new_features.append(feats.index_select(dim=1, index=index_tensor))
+                reg_features.append(feats.index_select(dim=1, index=reg_index_tensor))
             # qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
 
             # b cls_reg_hw 3 head dim -> 3 b head cls_reg_hw dim
@@ -332,6 +355,7 @@ class DinoVisionTransformer(nn.Module):
             'features': features, # b cls+hw c
             'attentions': attentions, # 
             'qkvs': qkvs, # 
+            'reg_features': reg_features,
         }
 
         # return {

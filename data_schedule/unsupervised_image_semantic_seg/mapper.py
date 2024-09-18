@@ -196,6 +196,323 @@ class UN_IMG_SEG_EvalMapper(Ori_Mapper):
        }
 
 
+@MAPPER_REGISTRY.register()
+class AggSampleMapper(Ori_Mapper):
+    def __init__(self,
+                 dataset_name,
+                 configs,
+                 mode, 
+                 meta_idx_shift,
+                 ): 
+        dataset_meta = MetadataCatalog.get(dataset_name)
+        assert dataset_meta.get('name') == dataset_name
+        mapper_config = configs['data'][mode][dataset_name]['mapper']
+        super().__init__(meta_idx_shift, dataset_meta)
+        self.get_image_fn = dataset_meta.get('get_image_fn')
+        global_crops_scale = mapper_config['global_crops_scale']
+        local_crops_scale = mapper_config['local_crops_scale']
+        local_crops_number = mapper_config['local_crops_number']
+
+        from torchvision import transforms
+        import models.UN_IMG_SEM.AggSample.utils as utils
+        color_jitter = transforms.Compose([
+            transforms.RandomApply(
+                [transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1)],
+                p=0.8
+            ),
+            transforms.RandomGrayscale(p=0.2),
+        ])
+
+        self.global_geo_transform = transforms.Compose([
+            transforms.RandomResizedCrop(224, scale=global_crops_scale, interpolation=Image.BICUBIC),
+            transforms.RandomHorizontalFlip(p=0.5),
+        ])
+        self.local_geo_transform = transforms.Compose([
+            transforms.RandomResizedCrop(96, scale=local_crops_scale, interpolation=Image.BICUBIC),
+            transforms.RandomHorizontalFlip(p=0.5),
+        ])
+
+        # first global crop
+        self.global_transfo1 = transforms.Compose([
+            color_jitter,
+            utils.GaussianBlur(1.0),
+        ])
+        # second global crop
+        self.global_transfo2 = transforms.Compose([
+            color_jitter,
+            utils.GaussianBlur(0.1),
+            utils.Solarization(0.2),
+        ])
+        # transformation for the local small crops
+        self.local_crops_number = local_crops_number
+        self.local_transfo = transforms.Compose([
+            color_jitter,
+            utils.GaussianBlur(p=0.5),
+        ])
+
+        self.to_tensor = transforms.ToTensor()
+
+    def _set_seed(self, seed):
+        random.seed(seed)  # apply this seed to img tranfsorms
+        torch.manual_seed(seed)  # needed for torchvision 0.7
+
+    def x1x2y1y2(self, coord):
+        # 2 H W, (y, x)
+        ymin, x1 = coord[:, 0, 0].tolist()
+        ymax, x2 = coord[:, -1, -1].tolist()
+        assert ymin < ymax
+        if x1 > x2:
+            wmin, wmax, flip = x2, x1, True
+        else:
+            wmin, wmax, flip = x1, x2, False
+
+        return (wmin, wmax, ymin, ymax)
+
+    def xywh(self, coord):
+        ymin, x1 = coord[:, 0, 0].tolist()
+        ymax, x2 = coord[:, -1, -1].tolist()
+        assert ymin < ymax
+        if x1 > x2:
+            wmin, wmax, flip = x2, x1, True
+        else:
+            wmin, wmax, flip = x1, x2, False
+
+        x_c, y_c = (wmin+wmax)/2, (ymin+ymax)/2
+        w, h = wmax-wmin, ymax -ymin
+        return x_c,y_c,w,h, flip
+
+
+    def get_common_relative_coordinates(self, crop1, crop2):
+        # 坐标值: -1,1, 大小: 0.0-2.0
+        x_c1, y_c1, W1, H1, flip1 = self.xywh(crop1)
+        x_c2, y_c2, W2, H2, flip2 = self.xywh(crop2)
+
+        x_min1, x_max1, y_min1, y_max1 = self.x1x2y1y2(crop1)
+        x_min2, x_max2, y_min2, y_max2 = self.x1x2y1y2(crop2)
+
+        # # Calculate the boundaries of each crop
+        # x_min1, x_max1 = x_c1 - W1 / 2, x_c1 + W1 / 2
+        # y_min1, y_max1 = y_c1 - H1 / 2, y_c1 + H1 / 2
+        
+        # x_min2, x_max2 = x_c2 - W2 / 2, x_c2 + W2 / 2
+        # y_min2, y_max2 = y_c2 - H2 / 2, y_c2 + H2 / 2
+        assert x_min1 == x_c1 - W1 / 2
+        assert x_max1 == x_c1 + W1 / 2
+        assert y_min1 == y_c1 - H1 / 2
+        assert y_max2 == y_c2 + H2 / 2
+        
+        # Calculate the boundaries of the intersection
+        x_min_inter = max(x_min1, x_min2)
+        x_max_inter = min(x_max1, x_max2)
+        y_min_inter = max(y_min1, y_min2)
+        y_max_inter = min(y_max1, y_max2)
+        
+        # Check if there is an intersection
+        assert (x_max_inter > x_min_inter) and (y_max_inter > y_min_inter)
+        
+        # Calculate relative coordinates of the intersection w.r.t Crop 1
+        x_rel1_min = 2 * (x_min_inter - x_c1) / W1
+        x_rel1_max = 2 * (x_max_inter - x_c1) / W1
+        y_rel1_min = 2 * (y_min_inter - y_c1) / H1
+        y_rel1_max = 2 * (y_max_inter - y_c1) / H1
+        
+        # inter的大小按照crop1得到还是crop2得到?
+        if flip1:
+            rel_coords1 = (-x_rel1_min, -x_rel1_max, y_rel1_min, y_rel1_max)
+        else:
+            rel_coords1 = (x_rel1_min, x_rel1_max, y_rel1_min, y_rel1_max)
+        
+        # Calculate relative coordinates of the intersection w.r.t Crop 2
+        x_rel2_min = 2 * (x_min_inter - x_c2) / W2
+        x_rel2_max = 2 * (x_max_inter - x_c2) / W2
+        y_rel2_min = 2 * (y_min_inter - y_c2) / H2
+        y_rel2_max = 2 * (y_max_inter - y_c2) / H2
+
+        # inter的大小按照crop1得到还是crop2得到?
+        if flip2:
+            rel_coords2 = (-x_rel2_min, -x_rel2_max, y_rel2_min, y_rel2_max)
+        else:
+            rel_coords2 = (x_rel2_min, x_rel2_max, y_rel2_min, y_rel2_max)
+
+        return rel_coords1, rel_coords2
+
+    def get_global1(self, image, coord):
+        seed = np.random.randint(2147483647)  # 第二个global和第一个global最好有交集
+        self._set_seed(seed)
+        g1_coord = self.global_geo_transform(coord)
+
+        self._set_seed(seed)
+        crop = self.global_geo_transform(image)
+        crop = self.global_transfo1(crop)
+        return crop, g1_coord       
+
+    def intersect_box(self, coord1, coord2):
+        x_min1, x_max1, y_min1, y_max1 = self.x1x2y1y2(coord1)
+        x_min2, x_max2, y_min2, y_max2 = self.x1x2y1y2(coord2)
+        x_min_inter = max(x_min1, x_min2)
+        x_max_inter = min(x_max1, x_max2)
+        y_min_inter = max(y_min1, y_min2)
+        y_max_inter = min(y_max1, y_max2)
+        
+        # Check if there is an intersection
+        if x_min_inter >= x_max_inter or y_min_inter >= y_max_inter:
+            return False
+        else:
+            return True    
+
+
+    def get_globa2(self, image, coord, g1_coord):
+        can_pass = False
+        num_attmpts = 0
+        while ((not can_pass) and (num_attmpts <=10)):
+            num_attmpts += 1
+            seed = np.random.randint(2147483647)  # 第二个global和第一个global最好有交集
+            self._set_seed(seed)
+            g2_coord = self.global_geo_transform(coord)
+            can_pass = self.intersect_box(g2_coord, g1_coord)
+
+        g1_to_g1g2, g2_to_g1g2 = None, None
+        if can_pass:
+            g1_to_g1g2, g2_to_g1g2 = self.get_common_relative_coordinates(g1_coord, g2_coord)
+
+        self._set_seed(seed)
+        crop = self.global_geo_transform(image)
+        crop = self.global_transfo2(crop)
+
+        return crop, g2_coord, (g1_to_g1g2, g2_to_g1g2) 
+
+    def get_local(self, image, coord, g1_coord, g2_coord):
+        can_pass = False
+        num_attmpts = 0
+        while ((not can_pass) and (num_attmpts <=15)):
+            num_attmpts += 1
+            seed = np.random.randint(2147483647)  # 第二个global和第一个global最好有交集
+            self._set_seed(seed)
+            lx_coord = self.local_geo_transform(coord) # 2 H w
+
+            lx_g1_common = self.intersect_box(lx_coord, g1_coord)
+            lx_g2_common = self.intersect_box(lx_coord, g2_coord)
+            can_pass =  lx_g1_common and lx_g2_common
+
+        rel1, rel2, rel3, rel4 = None, None, None, None
+        if lx_g1_common:
+            (rel1, rel2) = self.get_common_relative_coordinates(g1_coord, lx_coord)
+        if lx_g2_common:
+            (rel3, rel4) = self.get_common_relative_coordinates(g2_coord, lx_coord)
+
+        self._set_seed(seed)
+        crop = self.local_geo_transform(image)
+        crop = self.local_transfo(crop)
+
+        return crop, lx_coord, (rel1, rel2), (rel3, rel4)
+
+    def _call(self, data_dict):
+        image_id = data_dict['image_id']
+        image = self.get_image_fn(image_id=image_id)  # PIL Image
+        W, H = image.size
+        coord = torch.meshgrid([torch.linspace(-1, 1, H), torch.linspace(-1, 1, W)]) 
+        coord = torch.stack(coord, dim=0) # (y, x) H W
+        
+        crops = []
+        common_samples = {}
+
+        global1_image, global1_coord = self.get_global1(image, coord)
+        global2_image, global2_coord, (g1_to_g1g2, g2_to_g1g2) = self.get_globa2(image, coord, g1_coord=global1_coord) 
+
+        crops.extend([self.to_tensor(global1_image), self.to_tensor(global2_image)])
+        common_samples.update({
+            'g0_to_g0g1':g1_to_g1g2, # (xmin, xmax, ymin, ymax), -1/1
+            'g1_to_g0g1': g2_to_g1g2,
+        })
+        for local_idx in range(self.local_crops_number):
+            local_crop, local_coord, (g1_to_lxg1, lx_to_lxg1), (g2_to_lxg2, lx_to_lxg2) = self.get_local(image, coord, 
+                                                                                                         global1_coord, global2_coord)
+            crops.append(self.to_tensor(local_crop))
+            common_samples.update({
+                f'g0_to_l{local_idx}g0': g1_to_lxg1,
+                f'g1_to_l{local_idx}g1': g2_to_lxg2,
+                f'l{local_idx}_to_l{local_idx}g0': lx_to_lxg1,
+                f'l{local_idx}_to_l{local_idx}g1': lx_to_lxg2,
+            })
+            
+        return {
+            'crops': crops, # list[3 h w] # 2 + local
+            'common_samples': common_samples, #  dict
+            'image_id': image_id
+        }
+
+class AggSampleAUXMapper:
+    def mapper(self, data_dict, mode,):
+        return data_dict
+    def collate(self, batch_dict, mode):
+        if mode == 'train':
+            images = [item['crops'] for item in batch_dict] 
+            # list[list[3 h w], crop] batch -> list[b 3 hi wi], crop
+            images = [torch.stack(foo, dim=0) for foo in list(zip(*images))]
+            common_samples = [item['common_samples'] for item in batch_dict]
+            return {
+                'images': images,
+                'common_samples': common_samples,
+                'meta_idxs': [item['meta_idx'] for item in batch_dict],
+                'visualize': [item['visualize'] for item in batch_dict],
+                'image_ids':[item['image_id'] for item in batch_dict],
+            }
+        elif mode == 'evaluate':
+            return {
+                'metas': {
+                    'image_ids': [item['image_id'] for item in batch_dict],
+                    'meta_idxs': [item['meta_idx'] for item in batch_dict],
+                },
+                'images': torch.stack([item['image'] for item in batch_dict], dim=0), # b 3 h w
+                'masks': torch.stack([item['mask'] for item in batch_dict], dim=0), # b h w
+                'visualize': [item['visualize'] for item in batch_dict]
+            }
+        else:
+            raise ValueError()
+
+
+# bilinear resize到固定大小，mask也是bilinear
+@MAPPER_REGISTRY.register()
+class CutLer_Mapper(Ori_Mapper):
+    def __init__(self,
+                 dataset_name, # potsdam_train
+                 configs,
+                 mode, 
+                 meta_idx_shift,
+                 ): 
+        dataset_meta = MetadataCatalog.get(dataset_name)
+        assert dataset_meta.get('name') == dataset_name
+        mapper_config = configs['data'][mode][dataset_name]['mapper']
+        super().__init__(meta_idx_shift, dataset_meta)
+        self.get_image_fn = dataset_meta.get('get_image_fn')
+        self.get_mask_fn = dataset_meta.get('get_mask_fn')
+
+        self.to_tensor = T.ToTensor()
+
+    def _call(self, data_dict):
+        image_id = data_dict['image_id']
+
+        image = self.get_image_fn(image_id=image_id)  # PIL Image
+        mask = self.get_mask_fn(image_id=image_id) # long int 
+        unique_labels = mask.unique().tolist()
+        instance_masks = []
+        assert len(unique_labels) >= 2
+        for uniq_cls in unique_labels:
+            if uniq_cls == -1:
+                continue
+            else:
+                instance_masks.append(mask == uniq_cls)
+        instance_masks = torch.stack(instance_masks, dim=0) # N h w
+
+        image = self.to_tensor(image)
+        
+        return {
+           'image': image,
+           'image_id': image_id,
+           'instance_mask': instance_masks
+       }
+
+
 # bilinear resize到固定大小 没有mask
 @MAPPER_REGISTRY.register()
 class Common_TrainMapper(Ori_Mapper):

@@ -175,6 +175,118 @@ class AllImages_FixedQueries_HugMatching_Evaluator:
         eval_metrics.update(linear_metrics.compute())
         return eval_metrics
 
+class UnsupervisedMetrics_DDP(Metric):
+    def __init__(self, prefix: str, n_classes: int, extra_clusters: int, compute_hungarian: bool,):
+        super().__init__(dist_sync_on_step=False,
+                         sync_on_compute=False,)
+
+        self.n_classes = n_classes
+        self.extra_clusters = extra_clusters
+        self.compute_hungarian = compute_hungarian
+        self.prefix = prefix
+        self.add_state('stats', 
+                       default=torch.zeros(n_classes + self.extra_clusters, n_classes, dtype=torch.int64, device="cuda"),
+                       dist_reduce_fx='sum')
+    
+    @torch.no_grad()
+    def update(self, preds: torch.Tensor, target: torch.Tensor):
+        actual = target.reshape(-1) 
+        preds = preds.reshape(-1) 
+        mask = (actual >= 0) & (actual < self.n_classes) & (preds >= 0) & (preds < self.n_classes)
+        actual = actual[mask]
+        preds = preds[mask]
+        self.stats += torch.bincount(
+            (self.n_classes + self.extra_clusters) * actual + preds,
+            minlength=self.n_classes * (self.n_classes + self.extra_clusters)) \
+            .reshape(self.n_classes, self.n_classes + self.extra_clusters).t().to(self.stats.device)
+
+    def compute(self):
+        if comm.is_main_process():
+            self.assignments = linear_sum_assignment(self.stats.cpu(), maximize=True)  # row, col
+            if self.extra_clusters == 0:
+                self.histogram = self.stats[np.argsort(self.assignments[1]), :]
+
+            if self.extra_clusters > 0:
+                self.assignments_t = linear_sum_assignment(self.stats.detach().cpu().t(), maximize=True)
+                histogram = self.stats[self.assignments_t[1], :]
+                missing = list(set(range(self.n_classes + self.extra_clusters)) - set(self.assignments[0]))
+                new_row = self.stats[missing, :].sum(0, keepdim=True)
+                histogram = torch.cat([histogram, new_row], axis=0)
+                new_col = torch.zeros(self.n_classes + 1, 1, device=histogram.device)
+                self.histogram = torch.cat([histogram, new_col], axis=1)
+
+            tp = torch.diag(self.histogram)
+            fp = torch.sum(self.histogram, dim=0) - tp
+            fn = torch.sum(self.histogram, dim=1) - tp
+
+            iou = tp / (tp + fp + fn)
+            prc = tp / (tp + fn)
+            opc = torch.sum(tp) / torch.sum(self.histogram)
+
+            metric_dict = {self.prefix + "mIoU": iou[~torch.isnan(iou)].mean().item()*100,
+                        self.prefix + "Accuracy": opc.item()*100}
+        else:
+            metric_dict = {}
+        comm.synchronize()
+        return metric_dict
+
+@EVALUATOR_REGISTRY.register()
+class AllImages_FixedQueries_HugMatching_Evaluator_DDP:
+    def __init__(self,
+                 dataset_name,
+                 data_loader,
+                 configs) -> None:
+        dataset_meta = MetadataCatalog.get(dataset_name)
+        self.dataset_name = dataset_name
+        self.loader = data_loader
+        eval_configs: dict = configs['data']['evaluate'][dataset_name]['evaluator']
+        self.num_gt_classes = MetadataCatalog.get(dataset_name).get('num_classes')
+        self.visualize_all = eval_configs.get('visualize_all', False)
+
+    @torch.no_grad()
+    def __call__(self, model, output_dir):
+        model.eval()                    
+        visualize_path = os.path.join(output_dir, f'eval_{self.dataset_name}')
+        os.makedirs(visualize_path, exist_ok=True)
+        cluster_metrics = UnsupervisedMetrics_DDP("Cluster_", compute_hungarian=True,
+                                              n_classes=self.num_gt_classes, extra_clusters=model.num_queries - self.num_gt_classes,) 
+        self.num_cluster_classes = model.num_queries
+
+        for batch_dict in tqdm(self.loader):
+            eval_metas = batch_dict.pop('metas') # image_ids: list[str]
+            image_ids = eval_metas['image_ids']
+            images = batch_dict['images'] # b 3 h w
+            gt_masks = batch_dict['masks'].cuda() # b h w, -1/gt
+            model_out = model.sample(batch_dict, visualize_all=self.visualize_all)  
+
+            cluster_preds: torch.Tensor = model_out['cluster_preds'] # b nq h w, logits
+            assert cluster_preds.shape[1] == self.num_cluster_classes
+            cluster_preds = cluster_preds.argmax(1) # b h w
+            cluster_metrics.update(cluster_preds, gt_masks)   
+
+            if self.visualize_all:
+                assert len(image_ids) == 1
+                image_path = os.path.join(visualize_path, f'{image_ids[0]}.jpg')
+                kmeans_preds, num_kmeans_classes, kmeans_preds_bb = model_out['kmeans_preds'], model_out['num_kmeans_classes'], model_out['kmeans_preds_bb']
+                sampled_points, similarities, backbone_similarities = \
+                    model_out['sampled_points'], model_out['similarities'], model_out['backbone_similarities']
+
+                # image, gt, cluster_pred, linear_pred, kmeans_pred, kmeans_pred_bb
+                # H 5*W 3 
+                first_row = visualize_cluster(image=images[0], gt=gt_masks[0].cpu(), linear_pred=linear_preds[0].cpu(), num_gt_classes=self.num_gt_classes,
+                                              cluster_pred=cluster_preds[0].cpu(), num_cluster_classes=self.num_cluster_classes,
+                                              kmeans_pred=kmeans_preds[0].cpu(), kmeans_pred_bb=kmeans_preds_bb[0].cpu(), num_kmeans_classes=num_kmeans_classes,) # H W*3 3
+                # 3*H N*W 3 point, transformed_sim, backbone_sim
+                sim_image = visualize_cos_similarity(image=images[0], sampled_points=sampled_points, 
+                                                     similarities=similarities, backbone_similarities=backbone_similarities)
+                first_row = F.pad(first_row, pad=(0, 0, 0, sim_image.shape[1]-first_row.shape[1], 0, 0),)
+                whole_image = torch.cat([first_row, sim_image], dim=0) # 4H 10W 3
+                Image.fromarray(whole_image.numpy()).save(image_path)  
+            # comm.synchronize()
+        cluster_metrics.sync()
+        eval_metrics = cluster_metrics.compute()
+        return eval_metrics
+    
 def visualize_cluster(image, gt, linear_pred, num_gt_classes,
                     cluster_pred, num_cluster_classes,
                     kmeans_pred, kmeans_pred_bb, num_kmeans_classes
@@ -259,6 +371,146 @@ def visualize_cos_similarity(image,
                              torch.cat(superimposed_imgs_bb, dim=1)], dim=0)
     return whole_image
     # Image.fromarray(whole_image.numpy()).save(save_dir)
+
+from scipy.optimize import linear_sum_assignment
+class SingleImageHugMatching(Metric):
+    def __init__(self,):
+        super().__init__(dist_sync_on_step=False, compute_on_step=False)
+        self.add_state("iou", [])
+        self.add_state("iou_excludeFirst", [])
+        self.n_jobs = -1
+
+        self.temporary_match = None
+    def batch_dice_cost(self, inputs: torch.Tensor, targets: torch.Tensor):
+        """
+        Compute the DICE loss, similar to generalized IOU for masks
+        Args:
+            inputs: N h w, float, 0/1
+            targets: Nq h w, float 0/1
+        """
+        inputs = inputs.flatten(1) # N hw
+        targets = targets.flatten(1) # M hw
+        numerator = 2 * torch.einsum("nc,mc->nm", inputs, targets)
+        denominator = inputs.sum(-1)[:, None] + targets.sum(-1)[None, :] # N 1 + 1 M -> N M
+        dice = 1 - (numerator + 1) / (denominator + 1)
+        return dice
+
+    def update(self, gt: torch.Tensor, pred: torch.Tensor, many_to_one=True, precision_based=True, linear_probe=False):
+        # n h w, m h w, bool, 0/1
+        assert pred.shape[0] >= gt.shape[0]
+        cost_dice = self.batch_dice_cost(pred.float(), gt.float()) # n m
+        matched_indices = linear_sum_assignment(cost_dice)
+        # match_src matched_tgt
+        # 看一下数据集的情况, 比如怎么讲semantic(两个不连通的)分成
+
+        for src_idx, tgt_idx in zip(matched_indices[0], matched_indices[1]):
+            src_mask = pred[src_idx] # h w
+            tgt_mask = gt[tgt_idx] # h w
+
+            inter = torch.logical_and(src_mask, tgt_mask)
+            union = torch.logical_or(src_mask, tgt_mask)
+
+            iou = inter.float().sum() / union.float().sum()
+
+            self.iou.append(iou)
+
+        self.temporary_match = matched_indices
+
+    def compute(self):
+        """
+        Compute mIoU
+        """
+        mIoU = np.mean(self.iou)
+        return {'miou': mIoU}
+
+
+@EVALUATOR_REGISTRY.register()
+class CutLER_Evaluator:
+    def __init__(self,
+                 dataset_name,
+                 data_loader,
+                 configs) -> None:
+        dataset_meta = MetadataCatalog.get(dataset_name)
+        self.dataset_name = dataset_name
+        self.loader = data_loader
+        eval_configs: dict = configs['data']['evaluate'][dataset_name]['evaluator']
+        self.visualize = eval_configs.get('visualize_all', False)
+
+        MetadataCatalog.get('single').set(stuff_classes = ['0'],
+                                            stuff_colors = [(156, 31, 23),])
+
+    def visualize_path(self, meta_idxs, visualize, evaluator_path):
+        return [os.path.join(evaluator_path, f'meta_{meta_idx}') if vis else None for (meta_idx, vis) in zip(meta_idxs, visualize)]
+    
+    @torch.no_grad()
+    def __call__(self, model, output_dir):
+        # 假设: 固定输入输出大小, evaluate也在固定大小上测试
+        # 假设: B=1
+        # 1 3 h w -> 1 nq h w, 然后单图matching
+        model.eval()                    
+        visualize_path = os.path.join(output_dir, f'eval_{self.dataset_name}')
+        os.makedirs(visualize_path, exist_ok=True)
+        metric = SingleImageHugMatching()
+        for batch_dict in tqdm(self.loader):
+            eval_metas = batch_dict.pop('metas') # image_ids: list[str]
+            image_id = eval_metas['image_ids'][0]
+            image_path = os.path.join(visualize_path, f'{image_id}.jpg')
+
+            image = batch_dict['images'][0] # 3 h w, 0-1
+            instance_gt_masks = batch_dict['instance_masks'][0] # N h w;bool
+            _, H, W = image.shape
+
+            if H >= 1000 or W >= 1000:
+                continue
+            model_out = model.sample(batch_dict) # dict{'pred_masks': b nq h w, logits} 
+            pred_masks: torch.Tensor = model_out['pred_masks'][0] # nq h w, bool  
+            num_pred_classes = pred_masks.shape[0]
+            num_gt_classes = instance_gt_masks.shape[0]
+
+            metric.update(instance_gt_masks, pred_masks)
+            matched_indices = metric.temporary_match
+            not_matched_src_idxs = list(set(list(range(num_pred_classes))) - set(matched_indices[0]))
+            instance_gt_masks = torch.stack([instance_gt_masks[foo_idx] for foo_idx in matched_indices[1]], dim=0)
+            pred_masks = torch.stack([pred_masks[foo_idx] for foo_idx in (matched_indices[0].tolist() + not_matched_src_idxs)], dim=0)
+
+            cluster_image = visualize_cutler(image, 
+                                             gt=instance_gt_masks, pred=pred_masks, 
+                                             num_pred_classes=num_pred_classes,
+                                             num_gt_classes=num_gt_classes) # H W*3 3
+            cluster_image = cluster_image[:5000, :30000, :]
+            Image.fromarray(cluster_image.numpy()).save(image_path)            
+        iou_mean_over_instances = metric.compute()['miou'] * 100
+        return {
+            'iou_mean_over_instances': iou_mean_over_instances
+        }
+
+def visualize_cutler(image, 
+                     gt, num_gt_classes,
+                     pred, num_pred_classes,
+                    ):
+    # N h w, T/F; M h w, T/F;
+    H, W = image.shape[-2:]
+    image = (image.permute(1,2,0).numpy() * 255).astype('uint8')
+    
+    gt_plots = []
+    pred_plots = []
+    
+    gt = gt.int() - 1
+    gt[gt==-1] = 20000
+    pred = pred.int() - 1
+    pred[pred==-1] = 20000
+
+    for gt_m in gt:
+        gt_plots.append(torch.from_numpy(generate_semseg_canvas_uou(image=image, H=H, W=W, mask=gt_m, num_classes=num_gt_classes, dataset_name='single',)) )
+    for pred_m in pred:
+        pred_plots.append(torch.from_numpy(generate_semseg_canvas_uou(image=image,  H=H, W=W, mask=pred_m, num_classes=num_gt_classes, dataset_name='single',)) )
+    
+    gt_plots = torch.cat(gt_plots, dim=1)
+    gt_plots = F.pad(gt_plots, pad=(0, 0, 0, (pred.shape[0] - gt.shape[0]) * image.shape[1]))
+    pred_plots = torch.cat(pred_plots, dim=1)
+    whole_image = torch.cat([gt_plots, pred_plots], dim=0)
+    return whole_image
+
 
 # region
 # alignseg

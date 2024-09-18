@@ -88,6 +88,7 @@ def build_schedule(configs, model_input_mapper, model_input_collate_fn):
                                         collate_fn=partial(model_input_collate_fn, mode='train'), 
                                         num_workers=int(os.getenv('TORCH_NUM_WORKERS')),
                                         pin_memory=pin_memory,
+                                        drop_last=True,
                                         persistent_workers=True if int(os.getenv('TORCH_NUM_WORKERS')) > 0 else False))
 
     evaluators = []

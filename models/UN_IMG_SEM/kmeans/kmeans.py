@@ -148,6 +148,42 @@ class KMeans_SingleImage(OptimizeModel):
         if self.cluster_strategy == 'fixed':
             self.num_queries = model_configs['num_queries']
     
+
+    def get_backbone_features_grad(self, images):
+        images = images.to(self.device) 
+        B, _, H, W = images.shape
+        features = self.backbone(images) # b 3 h w -> b c h//patch w//patch
+        features = features['features'][0][:, 1:, :] # b cls_hw c
+        features = features.reshape(B, H//self.patch_size, W//self.patch_size, features.shape[-1])
+        return features
+
+
+    def get_backbone_features_with_reg(self, images):
+        images = images.to(self.device) 
+        images = (images - self.pixel_mean) / self.pixel_std
+        B, _, H, W = images.shape
+        # Extract feature
+        with torch.no_grad():
+            features = self.backbone(images) # b 3 h w -> b c h//patch w//patch
+            hw_features = features['features'][0][:, 1:, :] # b cls_hw c
+            reg_features = features['reg_features'][0] # b reg c
+            cls_features =  features['features'][0][:, [0], :] # b 1 c
+            reg_features = torch.cat([cls_features, reg_features], dim=1) # b 1_reg c
+            hw_features = hw_features.reshape(B, H//self.patch_size, W//self.patch_size, hw_features.shape[-1])
+        return hw_features, reg_features
+
+    def get_backbone_features_layer(self, images):
+        images = images.to(self.device) 
+        images = (images - self.pixel_mean) / self.pixel_std
+        B, _, H, W = images.shape
+        # Extract feature
+        with torch.no_grad():
+            features = self.backbone(images) # b 3 h w -> b c h//patch w//patch
+            hw_features = features['features'] # list[b cls_hw c]
+            hw_features = [foo[:, 1:, :].reshape(B, H//self.patch_size, W//self.patch_size, -1)\
+                           for foo in hw_features]
+        return hw_features
+
     def get_backbone_features(self, images):
         images = images.to(self.device) 
         images = (images - self.pixel_mean) / self.pixel_std
@@ -278,6 +314,418 @@ def kmeans_singleImage(configs, device):
                 if i > eval_number:
                     exit()
     return model, train_loader, eval_function
+
+@register_model
+def kmeans_flask1(configs, device):
+    from flask import Flask, render_template, request, jsonify
+    import os
+    import random
+    from PIL import Image
+    import numpy as np       
+    aux_mapper = AUXMapper()
+    from models.utils.visualize_cos_similarity import MyVisualizer, ColorMode,cv2
+    from detectron2.data import MetadataCatalog
+    from functools import partial
+    train_dataset_name = list(configs['data']['train'].keys())[0]
+    num_classes = MetadataCatalog.get(train_dataset_name).get('num_classes')
+    from data_schedule import build_singleProcess_schedule
+    train_loader, eval_function = build_singleProcess_schedule(configs, aux_mapper.mapper, lambda x: x)
+    model = KMeans_SingleImage(configs,num_classes=num_classes)
+    model.to(device)
+    DATASET = train_loader.dataset
+    IMAGE_LIST = list(range(30))
+    app = Flask(__name__)
+
+    IMAGE_FEATURES = [None]
+    IMAGE = [None]
+    @app.route('/')
+    def index():
+        return render_template('kmeans.html', image_list=IMAGE_LIST)
+
+    @app.route('/load_image', methods=['POST'])
+    def load_image():
+        selected_image = request.json.get('image')
+        image_id = int(selected_image)
+        image: torch.Tensor = DATASET.__getitem__(image_id)['image']
+        IMAGE[0] = image
+        image_features: torch.Tensor = model.get_backbone_features(image.unsqueeze(0))[0] # h w c
+        Image.fromarray((image * 255).permute(1,2,0,).to(torch.uint8).numpy()).save('./models/UN_IMG_SEM/kmeans/static/assets/image.png')
+        IMAGE_FEATURES[0] = image_features
+        return jsonify({'image': 'assets/image.png'})
+
+    @app.route('/click_image', methods=['POST'])
+    def click_image():
+        image_features = IMAGE_FEATURES[0]
+        image = IMAGE[0]
+        image = (image.permute(1,2,0).numpy() * 255).astype('uint8')
+        clicked_point = request.json.get('point')
+        H_P, W_P = image_features.shape[:2]
+        H, W = H_P * model.patch_size, W_P * model.patch_size
+
+        point = [int(clicked_point['y'] * H_P), int(clicked_point['x'] * W_P)]
+    
+        query = image_features[point[0], point[1], :] # c
+        sim = torch.einsum('c,hwc->hw',
+                            F.normalize(query, dim=0, eps=1e-10),
+                            F.normalize(image_features, dim=-1, eps=1e-10),).cpu() 
+        sim = F.interpolate(sim[None, None, ...], size=(H, W), align_corners=False, mode='bilinear').clamp(-1, 1)[0, 0]
+        heatmap = ((sim + 1) / 2).clamp(0, 1).numpy()
+        heatmap = np.uint8(255 * heatmap) 
+        heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)  
+        heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+        superimposed_img = cv2.addWeighted(heatmap, 0.7, image, 0.3, 0)
+        superimposed_img = torch.from_numpy(np.asarray(superimposed_img)) # h w 3
+        Image.fromarray(superimposed_img.numpy()).save('./models/UN_IMG_SEM/kmeans/static/assets/image_sim.png')
+
+        return jsonify({'generated_image': 'assets/image_sim.png'})
+
+
+
+
+    app.run(debug=True)
+
+@register_model
+def kmeans_flask(configs, device):
+    from flask import Flask, render_template, request, jsonify
+    import os
+    import random
+    from PIL import Image
+    import numpy as np       
+    import plotly.express as px
+    aux_mapper = AUXMapper()
+    from models.utils.visualize_cos_similarity import MyVisualizer, ColorMode,cv2
+    from detectron2.data import MetadataCatalog
+    from functools import partial
+    train_dataset_name = list(configs['data']['train'].keys())[0]
+    num_classes = MetadataCatalog.get(train_dataset_name).get('num_classes')
+    from data_schedule import build_singleProcess_schedule
+    train_loader, eval_function = build_singleProcess_schedule(configs, aux_mapper.mapper, lambda x: x)
+    model = KMeans_SingleImage(configs,num_classes=num_classes)
+    model.to(device)
+    DATASET = train_loader.dataset
+    IMAGE_LIST = list(range(30))
+    app = Flask(__name__)
+
+    IMAGE_FEATURES = [None, None]
+    IMAGE = [None, None]
+    @app.route('/')
+    def index():
+        return render_template('img_to_img.html', image_list=IMAGE_LIST)
+
+    @app.route('/load_image', methods=['POST'])
+    def load_image():
+        selected_image = request.json.get('image')
+        image_id = int(selected_image)
+        image: torch.Tensor = DATASET.__getitem__(image_id)['image']
+        IMAGE[0] = image
+        with torch.no_grad():
+            image_features: torch.Tensor = model.get_backbone_features(image.unsqueeze(0))[0] # h w c
+            outliers = image_features.norm(p=2,dim=-1) < 50 # h w
+            outlier_coords = torch.nonzero(outliers, as_tuple=True)
+        IMAGE_FEATURES[0] = image_features
+        Image.fromarray((image * 255).permute(1,2,0,).to(torch.uint8).numpy()).save('./models/UN_IMG_SEM/kmeans/static/assets/image.png')
+        # # 1105, 1221, 130
+        inter_feats = F.interpolate(image_features.permute(2, 0, 1).unsqueeze(0), 
+                                    size=image.shape[-2:], mode='bilinear', align_corners=False)[0] # h w c -> c h w
+        features_norm = torch.norm(inter_feats, p=2, dim=0, keepdim=False) # h w
+        fig = px.imshow(features_norm.cpu().numpy())
+        fig.write_html('./models/UN_IMG_SEM/kmeans/static/assets/image_norm.html')
+
+        with torch.no_grad():
+            grad_imag = image.to(device)
+            grad_imag:torch.Tensor = (grad_imag - model.pixel_mean) / model.pixel_std
+        grad_imag.requires_grad_(True)
+        show_img = (image.permute(1,2,0).numpy() * 255).astype('uint8')
+
+        randperm = torch.randperm(len(outlier_coords[0]))
+        outlier_coords = list(zip(outlier_coords[0].cpu()[randperm], outlier_coords[1].cpu()[randperm]))
+
+        for idx, coord_yx in enumerate(outlier_coords): # list[y, x]
+            coord_y, coord_x = coord_yx
+            istce_canvas = MyVisualizer(img_rgb=show_img, metadata=None, instance_mode=ColorMode.SEGMENTATION)
+            istce_canvas.draw_circle(circle_coord=(coord_x.item() * model.patch_size, 
+                                                   coord_y.item() * model.patch_size), color=(1.0, 0, 0), radius=10)
+            istce_canvas = istce_canvas.get_output()
+            point_image =  torch.from_numpy(istce_canvas.get_image())  # h w 3
+            Image.fromarray((point_image * 255).to(torch.uint8).numpy()).save(f'./models/UN_IMG_SEM/kmeans/static/assets/point_img{idx}.png')
+
+            grad_imag.grad=None
+            model.zero_grad()
+            features: torch.Tensor = model.get_backbone_features_grad(grad_imag.unsqueeze(0))[0] # h w c
+            features_norm = features.norm(dim=-1, p=2) # h w
+            scalar = features_norm[coord_y, coord_x] # value
+            scalar.backward()
+            field = grad_imag.grad # 3 h w
+            field = field.norm(dim=0, p=2) # h w
+            fig = px.imshow(field.cpu().numpy())
+            fig.write_html(f'./models/UN_IMG_SEM/kmeans/static/assets/norm_gradient{idx}.html')  
+            if idx >= 3:
+                break              
+
+        # features_mean = inter_feats.mean(0) # h w
+        # fig = px.imshow(features_mean.cpu().numpy())
+        # fig.write_html('./models/UN_IMG_SEM/kmeans/static/assets/image_mean.html')
+
+        # outliers = (features_norm > 300).flatten() # h w
+        # outliers = inter_feats.flatten(1,2)[:, outliers] # c N
+        # fig = px.imshow(outliers.cpu().numpy())
+        # fig.write_html('./models/UN_IMG_SEM/kmeans/static/assets/sample_features.html')        
+
+        return jsonify({'image': 'assets/image.png'})
+
+    @app.route('/load_image2', methods=['POST'])
+    def load_image2():
+        selected_image = request.json.get('image')
+        image_id = int(selected_image)
+        image: torch.Tensor = DATASET.__getitem__(image_id)['image']
+        IMAGE[1] = image
+        image_features: torch.Tensor = model.get_backbone_features(image.unsqueeze(0))[0] # h w c
+        Image.fromarray((image * 255).permute(1,2,0,).to(torch.uint8).numpy()).save('./models/UN_IMG_SEM/kmeans/static/assets/image2.png')
+        IMAGE_FEATURES[1] = image_features #  # 1105, 1221, 130
+
+        inter_feats = F.interpolate(image_features.permute(2, 0, 1).unsqueeze(0), 
+                                    size=image.shape[-2:], mode='bilinear', align_corners=False)[0] # h w c -> b c h w
+        features_norm = torch.norm(inter_feats, p=2, dim=0, keepdim=False) # h w
+        fig = px.imshow(features_norm.cpu().numpy())
+        fig.write_html('./models/UN_IMG_SEM/kmeans/static/assets/image_norm2.html')
+
+        features_mean = inter_feats.mean(0) # h w
+        fig = px.imshow(features_mean.cpu().numpy())
+        fig.write_html('./models/UN_IMG_SEM/kmeans/static/assets/image_mean2.html')
+
+        outliers = (features_norm > 300).flatten() # h w
+        outliers = inter_feats.flatten(1,2)[:, outliers] # c N
+        fig = px.imshow(outliers.cpu().numpy())
+        fig.write_html('./models/UN_IMG_SEM/kmeans/static/assets/sample_features2.html')  
+
+        return jsonify({'image': 'assets/image.png'})
+
+    @app.route('/click_image', methods=['POST'])
+    def click_image():
+        image_features = IMAGE_FEATURES[0]
+        image = IMAGE[0]
+
+        image_features2 = IMAGE_FEATURES[1]
+        image2 = IMAGE[1]
+
+        image = (image.permute(1,2,0).numpy() * 255).astype('uint8')
+        image2 = (image2.permute(1,2,0).numpy() * 255).astype('uint8')
+        clicked_point = request.json.get('point')
+        H_P, W_P = image_features.shape[:2]
+        H, W = H_P * model.patch_size, W_P * model.patch_size
+
+        point = [int(clicked_point['y'] * H_P), int(clicked_point['x'] * W_P)]
+    
+        query = image_features[point[0], point[1], :] # c
+        sim = torch.einsum('c,hwc->hw',
+                            F.normalize(query, dim=0, eps=1e-10),
+                            F.normalize(image_features, dim=-1, eps=1e-10),).cpu() 
+        sim2 = torch.einsum('c,hwc->hw',
+                            F.normalize(query, dim=0, eps=1e-10),
+                            F.normalize(image_features2, dim=-1, eps=1e-10),).cpu() 
+        
+        sim = F.interpolate(sim[None, None, ...], size=(H, W), align_corners=False, mode='bilinear').clamp(-1, 1)[0, 0]
+        sim2 = F.interpolate(sim2[None, None, ...], size=(H, W), align_corners=False, mode='bilinear').clamp(-1, 1)[0, 0]
+        heatmap = ((sim + 1) / 2).clamp(0, 1).numpy()
+        heatmap = np.uint8(255 * heatmap) 
+        heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)  
+        heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+        superimposed_img = cv2.addWeighted(heatmap, 0.7, image, 0.3, 0)
+        superimposed_img = torch.from_numpy(np.asarray(superimposed_img)) # h w 3
+        Image.fromarray(superimposed_img.numpy()).save('./models/UN_IMG_SEM/kmeans/static/assets/image_sim.png')
+
+
+        heatmap = ((sim2 + 1) / 2).clamp(0, 1).numpy()
+        heatmap = np.uint8(255 * heatmap) 
+        heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)  
+        heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+        superimposed_img = cv2.addWeighted(heatmap, 0.7, image2, 0.3, 0)
+        superimposed_img = torch.from_numpy(np.asarray(superimposed_img)) # h w 3
+        Image.fromarray(superimposed_img.numpy()).save('./models/UN_IMG_SEM/kmeans/static/assets/image_sim2.png')
+
+        return jsonify({'generated_image': 'assets/image_sim.png'})
+
+
+
+
+    app.run(debug=True)
+
+
+@register_model
+def kmeans_flask_register(configs, device):
+    from flask import Flask, render_template, request, jsonify
+    import os
+    import random
+    from PIL import Image
+    import numpy as np       
+    import plotly.express as px
+    aux_mapper = AUXMapper()
+    from models.utils.visualize_cos_similarity import MyVisualizer, ColorMode,cv2
+    from detectron2.data import MetadataCatalog
+    from functools import partial
+    train_dataset_name = list(configs['data']['train'].keys())[0]
+    num_classes = MetadataCatalog.get(train_dataset_name).get('num_classes')
+    from data_schedule import build_singleProcess_schedule
+    train_loader, eval_function = build_singleProcess_schedule(configs, aux_mapper.mapper, lambda x: x)
+    model = KMeans_SingleImage(configs,num_classes=num_classes)
+    model.to(device)
+    DATASET = train_loader.dataset
+    IMAGE_LIST = list(range(30))
+    app = Flask(__name__)
+
+    IMAGE_FEATURES = [None]
+    REG_FEATURES = [None]
+    IMAGE = [None]
+    @app.route('/')
+    def index():
+        return render_template('register.html', image_list=IMAGE_LIST)
+
+    @app.route('/load_image', methods=['POST'])
+    def load_image():
+        selected_image = request.json.get('image')
+        image_id = int(selected_image)
+        image: torch.Tensor = DATASET.__getitem__(image_id)['image']
+        IMAGE[0] = image
+        with torch.no_grad():
+            image_features, reg_features = model.get_backbone_features_with_reg(image.unsqueeze(0)) # h w c
+            image_features = image_features[0] # 
+            reg_features = reg_features[0]
+            outliers = image_features.norm(p=2,dim=-1) < 50 # h w
+            outlier_coords = torch.nonzero(outliers, as_tuple=True)
+        IMAGE_FEATURES[0] = image_features
+        REG_FEATURES[0] = reg_features
+        Image.fromarray((image * 255).permute(1,2,0,).to(torch.uint8).numpy()).save('./models/UN_IMG_SEM/kmeans/static/assets/image.png')
+        # # 1105, 1221, 130
+        inter_feats = F.interpolate(image_features.permute(2, 0, 1).unsqueeze(0), 
+                                    size=image.shape[-2:], mode='bilinear', align_corners=False)[0] # h w c -> c h w
+        features_norm = torch.norm(inter_feats, p=2, dim=0, keepdim=False) # h w
+        fig = px.imshow(features_norm.cpu().numpy())
+        fig.write_html('./models/UN_IMG_SEM/kmeans/static/assets/image_norm.html')
+
+        image = (image.permute(1,2,0).numpy() * 255).astype('uint8')
+        H_P, W_P = image_features.shape[:2]
+        H, W = H_P * model.patch_size, W_P * model.patch_size
+
+        # register_similarity b 5 c
+        for idx in range(5):
+            sim = torch.einsum('c,hwc->hw',
+                            F.normalize(reg_features[idx], dim=0, eps=1e-10),
+                            F.normalize(image_features, dim=-1, eps=1e-10),).cpu()
+            sim = F.interpolate(sim[None, None, ...], size=(H, W), align_corners=False, mode='bilinear').clamp(-1, 1)[0, 0]
+            heatmap = ((sim + 1) / 2).clamp(0, 1).numpy()
+            heatmap = np.uint8(255 * heatmap) 
+            heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)  
+            heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+            superimposed_img = cv2.addWeighted(heatmap, 0.7, image, 0.3, 0)
+            superimposed_img = torch.from_numpy(np.asarray(superimposed_img)) # h w 3
+            Image.fromarray(superimposed_img.numpy()).save(f'./models/UN_IMG_SEM/kmeans/static/assets/reg_sim{idx+1}.png')             
+
+        return jsonify({'image': 'assets/image.png'})
+
+
+    @app.route('/click_image', methods=['POST'])
+    def click_image():
+        image_features = IMAGE_FEATURES[0]
+        image = IMAGE[0]
+        image = (image.permute(1,2,0).numpy() * 255).astype('uint8')
+        clicked_point = request.json.get('point')
+        H_P, W_P = image_features.shape[:2]
+        H, W = H_P * model.patch_size, W_P * model.patch_size
+
+        point = [int(clicked_point['y'] * H_P), int(clicked_point['x'] * W_P)]
+    
+        query = image_features[point[0], point[1], :] # c
+        sim = torch.einsum('c,hwc->hw',
+                            F.normalize(query, dim=0, eps=1e-10),
+                            F.normalize(image_features, dim=-1, eps=1e-10),).cpu() 
+        
+        sim = F.interpolate(sim[None, None, ...], size=(H, W), align_corners=False, mode='bilinear').clamp(-1, 1)[0, 0]
+        heatmap = ((sim + 1) / 2).clamp(0, 1).numpy()
+        heatmap = np.uint8(255 * heatmap) 
+        heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)  
+        heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+        superimposed_img = cv2.addWeighted(heatmap, 0.7, image, 0.3, 0)
+        superimposed_img = torch.from_numpy(np.asarray(superimposed_img)) # h w 3
+        Image.fromarray(superimposed_img.numpy()).save('./models/UN_IMG_SEM/kmeans/static/assets/image_sim.png')
+        return jsonify({'generated_image': 'assets/image_sim.png'})
+
+
+    app.run(debug=True)
+
+
+@register_model
+def kmeans_flask_layer(configs, device):
+    from flask import Flask, render_template, request, jsonify
+    import os
+    import random
+    from PIL import Image
+    import numpy as np       
+    import plotly.express as px
+    aux_mapper = AUXMapper()
+    from models.utils.visualize_cos_similarity import MyVisualizer, ColorMode,cv2
+    from detectron2.data import MetadataCatalog
+    from functools import partial
+    train_dataset_name = list(configs['data']['train'].keys())[0]
+    num_classes = MetadataCatalog.get(train_dataset_name).get('num_classes')
+    from data_schedule import build_singleProcess_schedule
+    train_loader, eval_function = build_singleProcess_schedule(configs, aux_mapper.mapper, lambda x: x)
+    model = KMeans_SingleImage(configs,num_classes=num_classes)
+    model.to(device)
+    DATASET = train_loader.dataset
+    IMAGE_LIST = list(range(30))
+    app = Flask(__name__)
+
+    IMAGE_FEATURES = [None]
+    IMAGE = [None]
+    @app.route('/')
+    def index():
+        return render_template('layer.html', image_list=IMAGE_LIST)
+
+    @app.route('/load_image', methods=['POST'])
+    def load_image():
+        selected_image = request.json.get('image')
+        image_id = int(selected_image)
+        image: torch.Tensor = DATASET.__getitem__(image_id)['image']
+        IMAGE[0] = image
+        with torch.no_grad():
+            layer_features = model.get_backbone_features_layer(image.unsqueeze(0)) # h w c
+            layer_features = [foo[0] for foo in layer_features]
+        IMAGE_FEATURES[0] = layer_features
+        Image.fromarray((image * 255).permute(1,2,0,).to(torch.uint8).numpy()).save('./models/UN_IMG_SEM/kmeans/static/assets/image.png')
+
+        return jsonify({'image': 'assets/image.png'})
+
+
+    @app.route('/click_image', methods=['POST'])
+    def click_image():
+        image_features = IMAGE_FEATURES[0]
+        image = IMAGE[0]
+        image = (image.permute(1,2,0).numpy() * 255).astype('uint8')
+        clicked_point = request.json.get('point')
+        H_P, W_P = image_features[0].shape[:2]
+        H, W = H_P * model.patch_size, W_P * model.patch_size
+
+        point = [int(clicked_point['y'] * H_P), int(clicked_point['x'] * W_P)]
+
+        for layer_idx in range(len(image_features)):
+            feat = image_features[layer_idx]
+            query = feat[point[0], point[1], :] # c
+            sim = torch.einsum('c,hwc->hw',
+                                F.normalize(query, dim=0, eps=1e-10),
+                                F.normalize(feat, dim=-1, eps=1e-10),).cpu() 
+            
+            sim = F.interpolate(sim[None, None, ...], size=(H, W), align_corners=False, mode='bilinear').clamp(-1, 1)[0, 0]
+            heatmap = ((sim + 1) / 2).clamp(0, 1).numpy()
+            heatmap = np.uint8(255 * heatmap) 
+            heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)  
+            heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+            superimposed_img = cv2.addWeighted(heatmap, 0.7, image, 0.3, 0)
+            superimposed_img = torch.from_numpy(np.asarray(superimposed_img)) # h w 3
+            Image.fromarray(superimposed_img.numpy()).save(f'./models/UN_IMG_SEM/kmeans/static/assets/layer_sim{layer_idx+1}.png')
+        return jsonify({'generated_image': 'assets/image_sim.png'})
+
+
+    app.run(debug=True)
 
 
 def kmeans(X, num_clusters, device, tol=1e-4):

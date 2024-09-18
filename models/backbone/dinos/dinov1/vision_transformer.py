@@ -255,6 +255,11 @@ class VisionTransformer(nn.Module):
                 features.append(self.norm(x))
                 attentions.append(attn)
                 qkvs.append(qkv)
+
+        # for i, blk in enumerate(self.blocks):
+        #     x, attn, qkv = blk(x)
+        #     features.append(x)
+
         return {
             'features': features, # b cls+hw c
             'attentions': attentions, # 
