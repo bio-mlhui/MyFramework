@@ -41,7 +41,7 @@ def get_image_mask(path, image_id):
         mask[mask == cat_id] = cat_id_map[int(cat_id.item())]
     return mask
 
-root = '/home/xuhuihui/workspace/UNMED/data/Datasets/cocostuff'
+root = os.path.join(os.environ['DATASET_PATH'], 'cocostuff')
 visualize_meta_idxs = defaultdict(list)
 visualize_meta_idxs['cocostuff27_train]'] = [] 
 visualize_meta_idxs['cocostuff27_iic_eval'] = [] 
