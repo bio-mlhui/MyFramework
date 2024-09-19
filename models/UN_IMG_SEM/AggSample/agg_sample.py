@@ -356,7 +356,7 @@ class AggSample(OptimizeModel):
             warmup_teacher_temp_epochs=model_configs['warmup_teacher_temp_epochs'],
             nepochs=self.num_epochs,
             student_temp = 0.1,
-            center_momentum = 0.9
+            center_momentum = model_configs['center_momentum']
         ).cuda() 
 
         self.merge_thresholds = model_configs['merge_thresholds']
