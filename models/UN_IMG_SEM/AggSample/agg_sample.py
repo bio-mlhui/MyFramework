@@ -274,11 +274,13 @@ class DINOLoss(nn.Module):
         # # list[b k h w], global=2
         batch_center = torch.cat(teacher_output, dim=0) # 2b k h w
 
+        
         # 2. (ori)
-        # batch_center = batch_center.mean([2, 3]).sum(dim=0, keepdim=True) # 2b k
+        batch_center = batch_center.mean([2, 3]).sum(dim=0, keepdim=True) # 1 k
+        dist.all_reduce(batch_center)
 
         # 3.
-        batch_center = batch_center.mean(0).sum([1, 2])[None, :] # 2b k
+        # batch_center = batch_center.mean(0).sum([1, 2])[None, :] # 2b k
         
         # batch_center = batch_center.sum([0, 2, 3])[None, :]
 
@@ -362,8 +364,8 @@ class AggSample(OptimizeModel):
         self.nq_temperature = model_configs['nq_temperature']
 
         self.init_graph_utils(batch_size=batch_size)
-        # self.evaluate_key = model_configs['evaluate_key']
-        # self.num_queries = self.num_classes
+        self.evaluate_key = model_configs['evaluate_key']
+        self.num_queries = self.num_classes
 
     
     def init_graph_utils(self, batch_size):
@@ -441,7 +443,7 @@ class AggSample(OptimizeModel):
             self.fp16_scaler = torch.cuda.amp.GradScaler()
         # # warmup阶段从0到base value, 到epochs之前: base余弦降到min_lr
         self.lr_schedule = utils.cosine_scheduler(
-            base_value= optim_configs['lr'] * (optim_configs['batch_size'] * utils.get_world_size()) / 256.,  # batch_size越大，lr也应该越大
+            base_value= optim_configs['lr'] * optim_configs['batch_size'] / 256.,  # batch_size越大，lr也应该越大
             final_value=optim_configs['min_lr'],
             epochs= optim_configs['epochs'], 
             niter_per_ep=niter_per_ep,
@@ -604,6 +606,117 @@ class AggSample(OptimizeModel):
       
         return {'loss': loss.item()}
 
+    @torch.no_grad()
+    def forward_backbone_features_sample(self, x):
+        # b 3 h w
+        self.backbone.eval()
+        x = torchv_Normalize(x, self.pixel_mean, self.pixel_std, False)
+        B, _, H_ori, W_ori = x.shape
+        H, W = H_ori//self.patch_size, W_ori//self.patch_size
+        _out = self.backbone(x) #
+        if self.feat_type == 'feat':
+            features = _out['features'][0] # b cls_hw c
+            features = features[:, 1:, :].reshape(B, H//self.patch_size, W//self.patch_size, -1)
+
+        elif self.feat_type == 'key':
+            features = _out['qkvs'][0] # 3 b head cls_hw head_dim
+            features = features[1, :, :, 1:, :] # b head hw head_di
+            features: torch.Tensor = rearrange(features, 'b head (h w) d -> b h w (head d)',h=H, w=W)
+        else:
+            raise ValueError()
+        # b h w c, bhw c
+        graph_node_features = features.flatten(0, 2) 
+        edge_index = []
+        cluster_idx = 0
+        for y in range(H):
+            for x in range(W):
+                assert cluster_idx == y * H + x
+                if (cluster_idx % W) != 0: # 不是第一列的token, 定义它和它前面的那个token的相似度
+                    edge_index.append([cluster_idx-1, cluster_idx])
+                if (cluster_idx - W) >= 0: # 不是第一行的token, 定义它和它上一行的那个token的相似度
+                    edge_index.append([cluster_idx-W, cluster_idx])
+                cluster_idx += 1
+        edge_index = torch.tensor(edge_index).permute(1, 0).contiguous().long().to(self.device) # 2 E
+
+        from torch_geometric.data import Batch, Data
+        graph = Data(edge_index=edge_index,)
+        graph.num_nodes = H*W
+        whole_graph = [graph.clone() for _ in range(B)]
+        nodes_batch_ids = []
+        edges_batch_ids = []
+        num_nodes_by_batch = [g.num_nodes for g in whole_graph]
+        for bch_idx, nnode in enumerate(num_nodes_by_batch):
+            nodes_batch_ids.extend([bch_idx] * nnode)
+        num_edges_by_batch = [g.num_edges for g in whole_graph]
+        for bch_idx, nedge in enumerate(num_edges_by_batch):
+            edges_batch_ids.extend([bch_idx] * nedge)
+        whole_graph = Batch.from_data_list(whole_graph)
+        whole_graph_edge_index = whole_graph.edge_index
+
+        nodes_batch_ids = torch.tensor(nodes_batch_ids).int().to(self.device)
+        edges_batch_ids = torch.tensor(edges_batch_ids).int().to(self.device)
+        node_num_patches = torch.ones(len(nodes_batch_ids)).int().to(self.device)
+
+        cluster_feats = aggo_whole_batch(nodes_feature=graph_node_features,
+                                         edge_index=whole_graph_edge_index,
+                                         node_batch_tensor=nodes_batch_ids,
+                                         edge_batch_tensor=edges_batch_ids,
+                                         node_num_patches=node_num_patches,) 
+        cluster_feats = [torch.cat(foo, dim=0) for foo in cluster_feats] # list[ni c], batch
+        # list[b hi wi c]
+        return features, cluster_feats 
+
+    @torch.no_grad()
+    def sample(self, batch_dict, visualize_all=False):
+        assert not self.training
+        self.backbone.eval()
+
+        images = batch_dict['images']  # b 3 h w
+        _, _, H, W = images.shape
+        images = images.to(self.device)
+        batch_size = images.shape[0]
+        # b h w c
+        # list[ni c], batch
+        image_features, cluster_feats = self.forward_backbone_features_sample(images)
+
+        outputs = [] # b k h w
+        if self.evaluate_key == 'teacher':
+            eval_head = self.teacher_head
+        else:
+            eval_head = self.student_head
+        
+        for batch_idx in range(batch_size):
+            nq_feats = cluster_feats[batch_idx]
+            hw_feats = image_features[batch_idx] # h w c
+            cluster_attn = torch.einsum('hwc,nc->hwn', 
+                                        F.normalize(hw_feats, dim=-1, eps=1e-10), F.normalize(nq_feats, dim=-1, eps=1e-10)) # [-1, 1]
+            cluster_attn = F.softmax(cluster_attn / self.nq_temperature, dim=-1)
+            nq_k = eval_head(nq_feats)
+            outputs.append(torch.einsum('hwn,nk->khw', cluster_attn, nq_k))
+           
+        outputs = torch.stack(outputs, dim=0) # b k h w, logits
+        outputs = F.interpolate(outputs, (H,W), mode='bilinear', align_corners=False)
+        # sampled_points, similarities, backbone_similarities = None, None, None
+        # kmeans_preds, num_kmeans_classes, kmeans_preds_backbone = None, None, None,
+        # if visualize_all:
+        #     sampled_points, similarities, backbone_similarities = self.sample_point_similarities(code_features=head_code,
+        #                                                                                          backbone_features=image_features, 
+        #                                                                                          num_points=10)
+        #     kmeans_preds, _ , num_kmeans_classes = self.self_cluster(head_code, label)
+        #     kmeans_preds_backbone, _ , _ = self.self_cluster(backbone_feats, label)
+
+
+        return  {
+            'cluster_preds': outputs,
+            # 'sampled_points': sampled_points,
+            # 'similarities': similarities,
+            # 'backbone_similarities': backbone_similarities,
+
+            # 'kmeans_preds': kmeans_preds,
+            # 'kmeans_preds_bb': kmeans_preds_backbone,
+            # 'num_kmeans_classes': num_kmeans_classes,
+        }
+
 @register_model
 def agg_sample(configs, device):
     from data_schedule.unsupervised_image_semantic_seg.mapper import AggSampleAUXMapper
@@ -620,6 +733,32 @@ def agg_sample(configs, device):
     logging.debug(f'模型的总参数数量:{sum(p.numel() for p in model.parameters())}')
     logging.debug(f'模型的可训练参数数量:{sum(p.numel() for p in model.parameters() if p.requires_grad)}')
     return model, train_loader, eval_function
+
+@register_model
+def agg_sample_ddp(configs, device):
+    from data_schedule.unsupervised_image_semantic_seg.mapper import AggSampleAUXMapper
+    aux_mapper = AggSampleAUXMapper()
+    from data_schedule import build_schedule
+    from detectron2.data import MetadataCatalog
+    train_dataset_name = list(configs['data']['train'].keys())[0]
+    train_samplers, train_loaders, eval_function = build_schedule(configs, aux_mapper.mapper, partial(aux_mapper.collate))
+
+    num_classes = MetadataCatalog.get(train_dataset_name).get('num_classes')
+    whole_batch_size = configs['optim']['batch_size']
+    batch_size_per_gpu = whole_batch_size // comm.get_world_size()
+    model = AggSample(configs, num_classes=num_classes, batch_size=batch_size_per_gpu)
+    model.to(device)
+    niter_per_ep = len(train_loaders[0].dataset) // whole_batch_size
+    model.optimize_setup(configs, niter_per_ep=niter_per_ep)
+
+    if comm.is_main_process():
+        logging.debug(f'模型的总参数数量:{sum(p.numel() for p in model.parameters())}')
+        logging.debug(f'模型的可训练参数数量:{sum(p.numel() for p in model.parameters() if p.requires_grad)}')
+
+    if comm.get_world_size() > 1:
+        model = DDP(model, device_ids=[comm.get_local_rank()])
+
+    return model, train_samplers, train_loaders, eval_function
 
 
 
@@ -695,143 +834,8 @@ def visualize_cutler_onlyAttn(image, cluster_attn, patch_size, lengths, image_pa
     Image.fromarray(pred_plots.numpy()).save(os.path.join(image_path, image_name))
 
 
-# @register_model
-# def agg_sample_ddp(configs, device):
-#     from data_schedule.unsupervised_image_semantic_seg.mapper import AggSampleAUXMapper
-#     aux_mapper = AggSampleAUXMapper()
-#     from data_schedule import build_schedule
-#     from detectron2.data import MetadataCatalog
-#     train_dataset_name = list(configs['data']['train'].keys())[0]
-#     train_samplers, train_loaders, eval_function = build_schedule(configs, aux_mapper.mapper, partial(aux_mapper.collate))
 
-#     num_classes = MetadataCatalog.get(train_dataset_name).get('num_classes')
-#     whole_batch_size = configs['optim']['batch_sizes'][0]
-#     batch_size_per_gpu = whole_batch_size // comm.get_world_size()
-#     model = AggSample(configs, num_classes=num_classes, batch_size=batch_size_per_gpu)
-#     model.to(device)
-#     niter_per_ep = len(train_loaders[0].dataset) // whole_batch_size
-#     model.optimize_setup(configs, niter_per_ep=niter_per_ep)
-
-#     if comm.is_main_process():
-#         logging.debug(f'模型的总参数数量:{sum(p.numel() for p in model.parameters())}')
-#         logging.debug(f'模型的可训练参数数量:{sum(p.numel() for p in model.parameters() if p.requires_grad)}')
-
-#     if comm.get_world_size() > 1:
-#         model = DDP(model, device_ids=[comm.get_local_rank()])
-
-#     return model, train_samplers, train_loaders, eval_function
-
-
-    # @torch.no_grad()
-    # def forward_backbone_features_sample(self, x):
-    #     # b 3 h w
-    #     self.backbone.eval()
-    #     x = torchv_Normalize(x, self.pixel_mean, self.pixel_std, False)
-    #     B, _, H_ori, W_ori = x.shape
-    #     H, W = H_ori//self.patch_size, W_ori//self.patch_size
-    #     _out = self.backbone(x) #
-    #     if self.feat_type == 'feat':
-    #         features = _out['features'][0] # b cls_hw c
-    #         features = features[:, 1:, :].reshape(B, H//self.patch_size, W//self.patch_size, -1)
-
-    #     elif self.feat_type == 'key':
-    #         features = _out['qkvs'][0] # 3 b head cls_hw head_dim
-    #         features = features[1, :, :, 1:, :] # b head hw head_di
-    #         features: torch.Tensor = rearrange(features, 'b head (h w) d -> b h w (head d)',h=H, w=W)
-    #     else:
-    #         raise ValueError()
-    #     # b h w c, bhw c
-    #     graph_node_features = features.flatten(0, 2) 
-    #     edge_index = []
-    #     cluster_idx = 0
-    #     for y in range(H):
-    #         for x in range(W):
-    #             assert cluster_idx == y * H + x
-    #             if (cluster_idx % W) != 0: # 不是第一列的token, 定义它和它前面的那个token的相似度
-    #                 edge_index.append([cluster_idx-1, cluster_idx])
-    #             if (cluster_idx - W) >= 0: # 不是第一行的token, 定义它和它上一行的那个token的相似度
-    #                 edge_index.append([cluster_idx-W, cluster_idx])
-    #             cluster_idx += 1
-    #     edge_index = torch.tensor(edge_index).permute(1, 0).contiguous().long().to(self.device) # 2 E
-
-    #     from torch_geometric.data import Batch, Data
-    #     graph = Data(edge_index=edge_index,)
-    #     graph.num_nodes = H*W
-    #     whole_graph = [graph.clone() for _ in range(B)]
-    #     nodes_batch_ids = []
-    #     edges_batch_ids = []
-    #     num_nodes_by_batch = [g.num_nodes for g in whole_graph]
-    #     for bch_idx, nnode in enumerate(num_nodes_by_batch):
-    #         nodes_batch_ids.extend([bch_idx] * nnode)
-    #     num_edges_by_batch = [g.num_edges for g in whole_graph]
-    #     for bch_idx, nedge in enumerate(num_edges_by_batch):
-    #         edges_batch_ids.extend([bch_idx] * nedge)
-    #     whole_graph = Batch.from_data_list(whole_graph)
-    #     whole_graph_edge_index = whole_graph.edge_index
-
-    #     nodes_batch_ids = torch.tensor(nodes_batch_ids).int().to(self.device)
-    #     edges_batch_ids = torch.tensor(edges_batch_ids).int().to(self.device)
-    #     node_num_patches = torch.ones(len(nodes_batch_ids)).int().to(self.device)
-
-    #     cluster_feats = aggo_whole_batch(nodes_feature=graph_node_features,
-    #                                      edge_index=whole_graph_edge_index,
-    #                                      node_batch_tensor=nodes_batch_ids,
-    #                                      edge_batch_tensor=edges_batch_ids,
-    #                                      node_num_patches=node_num_patches,) 
-    #     cluster_feats = [torch.cat(foo, dim=0) for foo in cluster_feats] # list[ni c], batch
-    #     # list[b hi wi c]
-    #     return features, cluster_feats 
-
-    # @torch.no_grad()
-    # def sample(self, batch_dict, visualize_all=False):
-    #     assert not self.training
-    #     self.backbone.eval()
-
-    #     images = batch_dict['images']  # b 3 h w
-    #     _, _, H, W = images.shape
-    #     images = images.to(self.device)
-    #     batch_size = images.shape[0]
-    #     # b h w c
-    #     # list[ni c], batch
-    #     image_features, cluster_feats = self.forward_backbone_features_sample(images)
-
-    #     outputs = [] # b k h w
-    #     if self.evaluate_key == 'teacher':
-    #         eval_head = self.teacher_head
-    #     else:
-    #         eval_head = self.student_head
-        
-    #     for batch_idx in range(batch_size):
-    #         nq_feats = cluster_feats[batch_idx]
-    #         hw_feats = image_features[batch_idx] # h w c
-    #         cluster_attn = torch.einsum('hwc,nc->hwn', 
-    #                                     F.normalize(hw_feats, dim=-1, eps=1e-10), F.normalize(nq_feats, dim=-1, eps=1e-10)) # [-1, 1]
-    #         cluster_attn = F.softmax(cluster_attn / self.nq_temperature, dim=-1)
-    #         nq_k = eval_head(nq_feats)
-    #         outputs.append(torch.einsum('hwn,nk->khw', cluster_attn, nq_k))
-           
-    #     outputs = torch.stack(outputs, dim=0) # b k h w, logits
-    #     outputs = F.interpolate(outputs, (H,W), mode='bilinear', align_corners=False)
-    #     # sampled_points, similarities, backbone_similarities = None, None, None
-    #     # kmeans_preds, num_kmeans_classes, kmeans_preds_backbone = None, None, None,
-    #     # if visualize_all:
-    #     #     sampled_points, similarities, backbone_similarities = self.sample_point_similarities(code_features=head_code,
-    #     #                                                                                          backbone_features=image_features, 
-    #     #                                                                                          num_points=10)
-    #     #     kmeans_preds, _ , num_kmeans_classes = self.self_cluster(head_code, label)
-    #     #     kmeans_preds_backbone, _ , _ = self.self_cluster(backbone_feats, label)
-
-
-    #     return  {
-    #         'cluster_preds': outputs,
-    #         # 'sampled_points': sampled_points,
-    #         # 'similarities': similarities,
-    #         # 'backbone_similarities': backbone_similarities,
-
-    #         # 'kmeans_preds': kmeans_preds,
-    #         # 'kmeans_preds_bb': kmeans_preds_backbone,
-    #         # 'num_kmeans_classes': num_kmeans_classes,
-    #     }
+ 
 
     # @torch.no_grad()
     # def forward_backbone_features_v0(self, x):

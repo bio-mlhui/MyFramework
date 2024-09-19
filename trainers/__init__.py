@@ -7,8 +7,8 @@ task_to_trainer = {
     'VIS': Trainer,
     'RENDER': Trainer,
     'VIDVID': Trainer,
-    'UN_IMG_SEM': Trainer_SingleProcess
-    # 'UN_IMG_SEM': Trainer_FB
+    # 'UN_IMG_SEM': Trainer_SingleProcess
+    'UN_IMG_SEM': Trainer_FB
 }
 
 # optimizer, schedule都交给model构建

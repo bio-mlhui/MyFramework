@@ -282,7 +282,8 @@ class AllImages_FixedQueries_HugMatching_Evaluator_DDP:
                 first_row = F.pad(first_row, pad=(0, 0, 0, sim_image.shape[1]-first_row.shape[1], 0, 0),)
                 whole_image = torch.cat([first_row, sim_image], dim=0) # 4H 10W 3
                 Image.fromarray(whole_image.numpy()).save(image_path)  
-            # comm.synchronize()
+        
+        comm.synchronize()
         cluster_metrics.sync()
         eval_metrics = cluster_metrics.compute()
         return eval_metrics
