@@ -303,7 +303,7 @@ class AggSample(OptimizeModel):
         super().__init__()
         self.register_buffer("pixel_mean", torch.Tensor(pixel_mean).view(-1, 1, 1), False) # 3 1 1
         self.register_buffer("pixel_std", torch.Tensor(pixel_std).view(-1, 1, 1), False)
-        self.num_classes = num_classes
+        self.num_classes = 4096
         model_configs = configs['model']
         # backbone
         dino_configs = model_configs["backbone"]
@@ -760,6 +760,33 @@ def agg_sample_ddp(configs, device):
 
     return model, train_samplers, train_loaders, eval_function
 
+
+def visualize_cutler_thre_masks(image, cluster_masks, patch_size):
+    # list[ni h w] threshold
+    cluster_masks = [foo.cpu() for foo in cluster_masks]
+    cluster_masks = [(F.interpolate(foo[None, ...].float(), scale_factor=patch_size, mode='nearest')[0] > 0.5).int() - 1 for foo in cluster_masks]
+    image = image.cpu()
+    from data_schedule.unsupervised_image_semantic_seg.evaluator_alignseg import generate_semseg_canvas_uou
+    import cv2
+    H, W = image.shape[1:]
+    image = (image.permute(1,2,0).numpy() * 255).astype('uint8')
+    
+    max_length = max([len(foo) for foo in cluster_masks])
+    gt_plots = []
+    for gt_m in cluster_masks:
+        # ni h w, -1/0
+        gt_m[gt_m==-1] = 20000
+        threshold_img = []
+        for mk in gt_m:
+            # h w 3
+            show = torch.from_numpy(generate_semseg_canvas_uou(image=image, H=H, W=W, mask=mk, num_classes=1, dataset_name='single',))
+            threshold_img.append(show)
+        threshold_img = torch.cat(threshold_img, dim=1)
+        threshold_img = F.pad(threshold_img, pad=(0, 0, 0, max_length*W-threshold_img.shape[1], 0, 0), value=0.)
+        gt_plots.append(threshold_img)
+    # list[h w 3]
+    gt_plots = torch.cat(gt_plots, dim=0)
+    return gt_plots
 
 
 def visualize_cutler(image, cluster_masks,  cluster_attn, patch_size):

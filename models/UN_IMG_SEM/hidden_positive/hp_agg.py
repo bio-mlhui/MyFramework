@@ -121,12 +121,309 @@ def norm(t):
 @torch.jit.script
 def resize(classes: torch.Tensor, size: int):
     return F.interpolate(classes, (size, size), mode="bilinear", align_corners=False)
-from models.UN_IMG_SEM.hidden_positive.dino.DinoFeaturizer import DinoFeaturizer
-from models.UN_IMG_SEM.stego.utils.layer_utils import ClusterLookup
+
 from models.UN_IMG_SEM.stego.utils.common_utils import freeze_bn, zero_grad_bn
 from models.UN_IMG_SEM.stego.utils.seg_utils import UnsupervisedMetrics, batched_crf, get_metrics
 from .LambdaLayer import LambdaLayer
 from .loss import StegoLoss
+from models.UN_IMG_SEM.AggSample.code import aggo_whole_batch
+import torch
+import torch.nn as nn
+import models.UN_IMG_SEM.hidden_positive.dino.vision_transformer as vits
+from detectron2.modeling import BACKBONE_REGISTRY
+class DinoFeaturizer(nn.Module):
+
+    def __init__(self, dim, cfg):  # cfg["pretrained"]
+        super().__init__()
+        self.cfg = cfg
+        self.dim = dim
+        self.feat_type = self.cfg["pretrained"]["dino_feat_type"]
+        dino_configs = self.cfg["pretrained"]
+        self.sigma = 28
+        self.dropout = torch.nn.Dropout2d(p=.1)
+
+        self.model = BACKBONE_REGISTRY.get(dino_configs['name'])(dino_configs)
+        for p in self.model.parameters():
+            p.requires_grad = False
+        self.model.eval().cuda()
+
+        self.n_feats = self.model.embed_dim
+        self.patch_size = self.model.patch_size
+
+        self.cluster1 = self.make_clusterer(self.n_feats)
+        self.proj_type = cfg["pretrained"]["projection_type"]
+        assert self.proj_type == 'nonlinear'
+        self.cluster2 = self.make_nonlinear_clusterer(self.n_feats)
+
+        self.ema_model1 = self.make_clusterer(self.n_feats)
+        self.ema_model2 = self.make_nonlinear_clusterer(self.n_feats)
+
+        for param_q, param_k in zip(self.cluster1.parameters(), self.ema_model1.parameters()):
+            param_k.data.copy_(param_q.detach().data)  # initialize
+            param_k.requires_grad = False  # not update by gradient for eval_net
+        self.ema_model1.cuda()
+        self.ema_model1.eval()
+
+        for param_q, param_k in zip(self.cluster2.parameters(), self.ema_model2.parameters()):
+            param_k.data.copy_(param_q.detach().data)  # initialize
+            param_k.requires_grad = False  # not update by gradient for eval_net
+        self.ema_model2.cuda()
+        self.ema_model2.eval()
+
+        sz = cfg["spatial_size"]
+
+        self.index_mask = torch.zeros((sz*sz, sz*sz), dtype=torch.float16)
+        self.divide_num = torch.zeros((sz*sz), dtype=torch.long)
+        for _im in range(sz*sz):
+            if _im == 0:
+                index_set = torch.tensor([_im, _im+1, _im+sz, _im+(sz+1)])
+            elif _im==(sz-1):
+                index_set = torch.tensor([_im-1, _im, _im+(sz-1), _im+sz])
+            elif _im==(sz*sz-sz):
+                index_set = torch.tensor([_im-sz, _im-(sz-1), _im, _im+1])
+            elif _im==(sz*sz-1):
+                index_set = torch.tensor([_im-(sz+1), _im-sz, _im-1, _im])
+
+            elif ((1 <= _im) and (_im <= (sz-2))):
+                index_set = torch.tensor([_im-1, _im, _im+1, _im+(sz-1), _im+sz, _im+(sz+1)])
+            elif (((sz*sz-sz+1) <= _im) and (_im <= (sz*sz-2))):
+                index_set = torch.tensor([_im-(sz+1), _im-sz, _im-(sz-1), _im-1, _im, _im+1])
+            elif (_im % sz == 0):
+                index_set = torch.tensor([_im-sz, _im-(sz-1), _im, _im+1, _im+sz, _im+(sz+1)])
+            elif ((_im+1) % sz == 0):
+                index_set = torch.tensor([_im-(sz+1), _im-sz, _im-1, _im, _im+(sz-1), _im+sz])
+            else:
+                index_set = torch.tensor([_im-(sz+1), _im-sz, _im-(sz-1), _im-1, _im, _im+1, _im+(sz-1), _im+sz, _im+(sz+1)])
+            self.index_mask[_im][index_set] = 1.
+            self.divide_num[_im] = index_set.size(0)
+
+        self.index_mask = self.index_mask.cuda()
+        self.divide_num = self.divide_num.unsqueeze(1)
+        self.divide_num = self.divide_num.cuda()
+
+        batch_size = cfg['batch_size']
+        train_size = cfg['train_size']
+        eval_size = cfg['eval_size']
+        self.init_graph_utils(batch_size, train_size, eval_size)
+
+    def init_graph_utils(self, train_batch_size, train_size, eval_size):
+        # test=1
+        H = W = (train_size // self.patch_size) 
+        num_train_nodes = H*W
+        train_edge_index = []
+        cluster_idx = 0
+        for y in range(H):
+            for x in range(W):
+                assert cluster_idx == y * H + x
+                if (cluster_idx % W) != 0: # 不是第一列的token, 定义它和它前面的那个token的相似度
+                    train_edge_index.append([cluster_idx-1, cluster_idx])
+                if (cluster_idx - W) >= 0: # 不是第一行的token, 定义它和它上一行的那个token的相似度
+                    train_edge_index.append([cluster_idx-W, cluster_idx])
+                cluster_idx += 1
+        train_edge_index = torch.tensor(train_edge_index).permute(1, 0).contiguous().long() # 2 N
+
+        H = W = (eval_size // self.patch_size)
+        num_test_nodes = H*W
+        eval_edge_index = []
+        cluster_idx = 0
+        for y in range(H):
+            for x in range(W):
+                assert cluster_idx == y * H + x
+                if (cluster_idx % W) != 0: # 不是第一列的token, 定义它和它前面的那个token的相似度
+                    eval_edge_index.append([cluster_idx-1, cluster_idx])
+                if (cluster_idx - W) >= 0: # 不是第一行的token, 定义它和它上一行的那个token的相似度
+                    eval_edge_index.append([cluster_idx-W, cluster_idx])
+                cluster_idx += 1
+        eval_edge_index = torch.tensor(eval_edge_index).permute(1, 0).contiguous().long()
+
+        from torch_geometric.data import Batch, Data
+        train_graph = Data(edge_index=train_edge_index,)
+        train_graph.num_nodes = num_train_nodes
+        eval_graph = Data(edge_index=eval_edge_index)
+        eval_graph.num_nodes = num_test_nodes
+
+        whole_train_graph = [train_graph.clone() for _ in range(train_batch_size)]
+        nodes_batch_ids = []
+        edges_batch_ids = []
+        num_nodes_by_batch = [g.num_nodes for g in whole_train_graph]
+        for bch_idx, nnode in enumerate(num_nodes_by_batch):
+            nodes_batch_ids.extend([bch_idx] * nnode)
+        num_edges_by_batch = [g.num_edges for g in whole_train_graph]
+        for bch_idx, nedge in enumerate(num_edges_by_batch):
+            edges_batch_ids.extend([bch_idx] * nedge)
+        whole_train_graph = Batch.from_data_list(whole_train_graph)
+
+        self.register_buffer('train_node_batch_ids', torch.tensor(nodes_batch_ids).int())
+        self.register_buffer('train_edge_batch_ids', torch.tensor(edges_batch_ids).int())
+        self.register_buffer('train_edge_index', whole_train_graph.edge_index.long())
+        self.register_buffer('train_num_patches', torch.ones(len(nodes_batch_ids)).int())
+
+        self.register_buffer('eval_node_batch_ids', torch.zeros(eval_graph.num_nodes).int())
+        self.register_buffer('eval_edge_batch_ids', torch.zeros(eval_graph.num_edges).int())
+        self.register_buffer('eval_edge_index', eval_graph.edge_index.long())
+        self.register_buffer('eval_num_patches', torch.ones(eval_graph.num_nodes).int())
+
+
+    def make_clusterer(self, in_channels):
+        return torch.nn.Sequential(
+            nn.Linear(in_channels, self.dim),)
+
+    def make_nonlinear_clusterer(self, in_channels):
+        return torch.nn.Sequential(
+            nn.Linear(in_channels, in_channels,),
+            torch.nn.ReLU(),
+            nn.Linear(in_channels, self.dim))
+    
+
+
+    @torch.no_grad()
+    def ema_model_update(self, model, ema_model, ema_m):
+        """
+        Momentum update of evaluation model (exponential moving average)
+        """
+        for param_train, param_eval in zip(model.parameters(), ema_model.parameters()):
+            param_eval.copy_(param_eval * ema_m + param_train.detach() * (1 - ema_m))
+
+        for buffer_train, buffer_eval in zip(model.buffers(), ema_model.buffers()):
+            buffer_eval.copy_(buffer_train)
+
+    def forward(self, img, n=1, return_class_feat=False, train=False):
+        self.model.eval()
+        batch_size = img.shape[0]
+
+        with torch.no_grad():
+            assert (img.shape[2] % self.patch_size == 0)
+            assert (img.shape[3] % self.patch_size == 0)
+
+            # get selected layer activations
+            rets = self.model(img, n=n)
+            # b cls+hw c, 
+            feat, attn, qkv = rets['features'], rets['attentions'], rets['qkvs']
+            feat, attn, qkv = feat[0], attn[0], qkv[0]
+
+            if train==True:
+                attn = attn[:, :, 1:, 1:]
+                attn = torch.mean(attn, dim=1)
+                attn = attn.type(torch.float32)
+                attn_max = torch.quantile(attn, 0.9, dim=2, keepdim=True)
+                attn_min = torch.quantile(attn, 0.1, dim=2, keepdim=True)
+                attn = torch.max(torch.min(attn, attn_max), attn_min)
+
+                attn = attn.softmax(dim=-1)
+                attn = attn*self.sigma
+                attn[attn < torch.mean(attn, dim=2, keepdim=True)] = 0.
+
+            feat_h = img.shape[2] // self.patch_size
+            feat_w = img.shape[3] // self.patch_size
+
+            if self.feat_type == "feat":
+                image_feat = feat[:, 1:, :].reshape(feat.shape[0], feat_h, feat_w, -1) # b h w c
+            elif self.feat_type == "KK":
+                raise ValueError() # 6?
+                image_k = qkv[1, :, :, 1:, :].reshape(feat.shape[0], 6, feat_h, feat_w, -1)
+                B, H, I, J, D = image_k.shape
+                image_feat = image_k.permute(0, 1, 4, 2, 3).reshape(B, H * D, I, J)
+            else:
+                raise ValueError("Unknown feat type:{}".format(self.feat_type))
+
+
+            graph_node_features = image_feat.flatten(0, 2) # bhw c
+            # list[list[ni c], threshold] b
+            nquery_feats = aggo_whole_batch(nodes_feature=graph_node_features,
+                                            edge_index= self.train_edge_index if self.training else self.eval_edge_index,
+                                            node_batch_tensor=self.train_node_batch_ids if self.training else self.eval_node_batch_ids,
+                                            edge_batch_tensor=self.train_edge_batch_ids if self.training else self.eval_edge_batch_ids,
+                                            node_num_patches=self.train_num_patches if self.training else self.eval_num_patches,) 
+            nquery_feats = [torch.cat(foo, dim=0) for foo in nquery_feats] # list[ni c], batch
+            nquery_splits = [len(foo) for foo in nquery_feats] # list[int], batch
+
+            nquery_attns = [] # list[h w ni] batch
+            for batch_idx in range(batch_size):
+                nq_attn = torch.einsum('hwc,nc->hwn', 
+                                        F.normalize(image_feat[batch_idx], dim=-1, eps=1e-10), 
+                                        F.normalize(nquery_feats[batch_idx], dim=-1, eps=1e-10)) # [-1, 1])
+                nquery_attns.append(nq_attn)
+
+            image_feat = image_feat.permute(0, 3, 1, 2) # b c h w
+            nquery_feats = torch.cat(nquery_feats, dim=0) # b_ni c
+        B, _, H, W = image_feat.shape
+
+        code = self.cluster1(self.dropout(image_feat).permute(0, 2,3,1).flatten(0, 2))
+        code += self.cluster2(self.dropout(image_feat).permute(0, 2,3,1).flatten(0, 2))
+        code = rearrange(code, '(b h w) c -> b c h w',b=B,h=H,w=W)
+
+        code_ema = self.ema_model1(self.dropout(image_feat).permute(0, 2,3,1).flatten(0, 2))
+        code_ema += self.ema_model2(self.dropout(image_feat).permute(0, 2,3,1).flatten(0, 2))
+        code_ema = rearrange(code_ema, '(b h w) c -> b c h w',b=B,h=H,w=W)
+
+        code_query = self.cluster1(nquery_feats) # b_ni c'
+        code_query += self.cluster2(nquery_feats)
+        
+
+        if train==True:
+            attn = attn * self.index_mask.unsqueeze(0).repeat(batch_size, 1, 1)
+            code_clone = code.clone()
+            code_clone = code_clone.view(code_clone.size(0), code_clone.size(1), -1)
+            code_clone = code_clone.permute(0,2,1)
+
+            code_3x3_all = []
+            for bs in range(batch_size):
+                code_3x3 = attn[bs].unsqueeze(-1) * code_clone[bs].unsqueeze(0)
+                code_3x3 = torch.sum(code_3x3, dim=1)
+                code_3x3 = code_3x3 / self.divide_num
+                code_3x3_all.append(code_3x3)
+            code_3x3_all = torch.stack(code_3x3_all)
+            code_3x3_all = code_3x3_all.permute(0,2,1).view(code.size(0), code.size(1), code.size(2), code.size(3))
+
+        if train==True:
+            with torch.no_grad():
+                self.ema_model_update(self.cluster1, self.ema_model1, self.cfg["ema_m"])
+                self.ema_model_update(self.cluster2, self.ema_model2, self.cfg["ema_m"])
+
+        if train==True:
+            if self.cfg["pretrained"]["dropout"]:
+                return self.dropout(image_feat), code, self.dropout(code_ema), self.dropout(code_3x3_all), \
+                    nquery_feats, code_query, nquery_splits, nquery_attns
+            else:
+                return image_feat, code, code_ema, code_3x3_all,\
+                    nquery_feats, code_query, nquery_splits, nquery_attns 
+        else:
+            if self.cfg["pretrained"]["dropout"]:
+                return self.dropout(image_feat), code, self.dropout(code_ema),\
+                      nquery_feats, code_query, nquery_splits, nquery_attns 
+            else:
+                return image_feat, code, code_ema,\
+                      nquery_feats, code_query, nquery_splits, nquery_attns 
+            
+class ClusterLookup(nn.Module):
+
+    def __init__(self, dim: int, n_classes: int):
+        super(ClusterLookup, self).__init__()
+        self.n_classes = n_classes
+        self.dim = dim
+        self.clusters = torch.nn.Parameter(torch.randn(n_classes, dim))
+
+    def reset_parameters(self):
+        with torch.no_grad():
+            self.clusters.copy_(torch.randn(self.n_classes, self.dim))
+
+    def forward(self, x, alpha, log_probs=False):
+        normed_clusters = F.normalize(self.clusters, dim=1) # K d
+        normed_features = F.normalize(x, dim=-1) # N d
+        inner_products = torch.einsum("nd,kd->nk", normed_features, normed_clusters) # N k
+
+        if alpha is None:
+            # N K
+            cluster_probs = F.one_hot(torch.argmax(inner_products, dim=-1), self.clusters.shape[0]).to(torch.float32)
+        else:
+            # N k
+            cluster_probs = nn.functional.softmax(inner_products * alpha, dim=1)
+        cluster_loss = -(cluster_probs * inner_products).sum(1).mean()
+
+        if log_probs:
+            return cluster_loss, nn.functional.log_softmax(inner_products * alpha, dim=1)
+        else:
+            return cluster_loss, cluster_probs
 
 class STEGOmodel(nn.Module):
     # opt["model"]
@@ -150,14 +447,7 @@ class STEGOmodel(nn.Module):
             raise ValueError("Unknown arch {}".format(opt["arch"]))
 
         self.cluster_probe = ClusterLookup(dim, n_classes + opt["extra_clusters"])
-        self.linear_probe = nn.Conv2d(dim, n_classes, (1, 1))
-
-        self.cluster_probe2 = ClusterLookup(dim, n_classes + opt["extra_clusters"])
-        self.linear_probe2 = nn.Conv2d(dim, n_classes, (1, 1))
-
-        self.cluster_probe3 = ClusterLookup(dim, n_classes + opt["extra_clusters"])
-        self.linear_probe3 = nn.Conv2d(dim, n_classes, (1, 1))
-
+        self.linear_probe = nn.Linear(dim, n_classes)
 
     def forward(self, x: torch.Tensor):
         return self.net(x)[1]
@@ -226,7 +516,7 @@ def build_criterion(n_classes: int, opt: dict):
 
     return loss
 from .make_reference_pool import renew_reference_pool
-class HP(OptimizeModel):
+class HP_Agg(OptimizeModel):
     def __init__(
         self,
         configs,
@@ -234,12 +524,18 @@ class HP(OptimizeModel):
         train_loader_memory,
         device,
         pixel_mean = [0.485, 0.456, 0.406],
-        pixel_std = [0.229, 0.224, 0.225],):
+        pixel_std = [0.229, 0.224, 0.225],
+        batch_size=None,
+        train_size=None,
+        eval_size=None):
         super().__init__()
         self.register_buffer("pixel_mean", torch.Tensor(pixel_mean).view(-1, 1, 1), False) # 3 1 1
         self.register_buffer("pixel_std", torch.Tensor(pixel_std).view(-1, 1, 1), False)
         model_configs = configs['model']
-
+        model_configs['batch_size'] = batch_size
+        model_configs['train_size'] = train_size
+        model_configs['eval_size'] = eval_size
+        self.nq_temperature = model_configs['nq_temperature']
         self.net_model, self.linear_model, self.cluster_model = build_model(opt=model_configs,
                                                                             n_classes=num_classes,
                                                                             is_direct=configs["eval"]["is_direct"]) 
@@ -300,6 +596,7 @@ class HP(OptimizeModel):
 
         with torch.no_grad():
             img = (img - self.pixel_mean) / self.pixel_std
+            img_aug = (img_aug - self.pixel_mean) / self.pixel_std
 
         if self.freeze_encoder_bn:
             freeze_bn(self.net_model.model)
@@ -317,45 +614,64 @@ class HP(OptimizeModel):
         with torch.cuda.amp.autocast(enabled=True):
             model_output = self.net_model(img, train=True)
             model_output_aug = self.net_model(img_aug)
-
+        
+        # feat: bhw c
         modeloutput_f = model_output[0].clone().detach().permute(0, 2, 3, 1).reshape(-1, self.feat_dim)
         modeloutput_f = F.normalize(modeloutput_f, dim=1)
 
+        # code(z): bhw c'
+        # code_aug: bhw c'
         modeloutput_s = model_output[1].permute(0, 2, 3, 1).reshape(-1, self.configs["model"]["dim"])
-
         modeloutput_s_aug = model_output_aug[1].permute(0, 2, 3, 1).reshape(-1, self.configs["model"]["dim"])
-
         with torch.cuda.amp.autocast(enabled=True):
             modeloutput_z = self.project_head(modeloutput_s)
             modeloutput_z_aug = self.project_head(modeloutput_s_aug)
         modeloutput_z = F.normalize(modeloutput_z, dim=1)
         modeloutput_z_aug = F.normalize(modeloutput_z_aug, dim=1)
 
+        # code, code_aug
         loss_consistency = torch.mean(self.pd(modeloutput_z, modeloutput_z_aug))
 
+        # local:bhw c
         modeloutput_s_mix = model_output[3].permute(0, 2, 3, 1).reshape(-1, self.configs["model"]["dim"])
         with torch.cuda.amp.autocast(enabled=True):
             modeloutput_z_mix = self.project_head(modeloutput_s_mix)
         modeloutput_z_mix = F.normalize(modeloutput_z_mix, dim=1)
 
+        # code_ema: bhw c
         modeloutput_s_pr = model_output[2].permute(0, 2, 3, 1).reshape(-1, self.configs["model"]["dim"])
         modeloutput_s_pr = F.normalize(modeloutput_s_pr, dim=1)
+
+        # b_ni c, b_ni c', list[int],batch, lis[h w ni], batch
+        nquery_feats, code_query, nquery_splits, nquery_attns = model_output[4], model_output[5].clone(), model_output[6], model_output[7]   # b_ni c, b_ni c', list[int],batch
+        nquery_attns = [F.softmax(foo / self.nq_temperature, dim=-1) for foo in nquery_attns]
+        # with torch.cuda.amp.autocast(enabled=True):
+        #     code_query = self.project_head(code_query)
+        # loss_nq = self.nquery_loss(nquery_feats=nquery_feats, code_query=code_query, nquery_splits=nquery_splits,
+        #                            nquery_ori_attns=nquery_attns)
 
         loss_supcon = self.supcon_criterion(modeloutput_z, modeloutput_s_pr=modeloutput_s_pr, modeloutput_f=modeloutput_f,
                                 Pool_ag=self.Pool_ag, Pool_sp=self.Pool_sp,
                                 opt=self.configs, lmbd=lmbd, modeloutput_z_mix=modeloutput_z_mix)
-
-
-        detached_code = torch.clone(model_output[1].detach())
+ 
+        detached_code_nq = torch.clone(model_output[5].detach()) # b_ni c'
         with torch.cuda.amp.autocast(enabled=True):
-            linear_output = self.linear_model(detached_code)
-            cluster_output = self.cluster_model(detached_code, None, is_direct=False)
-
+            linear_output = self.linear_model(detached_code_nq) # b_ni K
+            cluster_output = self.cluster_model(detached_code_nq, None, is_direct=False) # b_ni K
+            linear_output = linear_output.split(nquery_splits) #list[ni k]
+            cluster_output = cluster_output.split(nquery_splits) #list[ni k]
+            # b k h w
+            assert len(linear_output) == len(nquery_attns)
+            linear_mask_pred = torch.stack([torch.einsum('hwn,nk->khw', nq_attn, feat)  \
+                                            for feat, nq_attn in zip(linear_output, nquery_attns)],dim=0)
+            cluster_mask_pred = torch.stack([torch.einsum('hwn,nk->khw', nq_attn, feat)  \
+                                             for feat, nq_attn in zip(cluster_output, nquery_attns)],dim=0)
+            
             loss, loss_dict, corr_dict = self.criterion(model_input=model_input,
-                                                    model_output=model_output,
-                                                    linear_output=linear_output,
-                                                    cluster_output=cluster_output
-                                                    )
+                                                        model_output=model_output,
+                                                        linear_output=linear_mask_pred,
+                                                        cluster_output=cluster_mask_pred
+                                                        )
 
             loss = loss + loss_supcon + loss_consistency * self.configs['alpha'] 
 
@@ -494,7 +810,7 @@ class HP(OptimizeModel):
         return cluster_ids, cluster_logits, num_image_classes
 
 @register_model
-def hp(configs, device):
+def hp_agg_cluster(configs, device):
     # 假设只有一个训练数据集
     scaler = torch.cuda.amp.GradScaler(init_scale=2048, growth_interval=1000, enabled=True)
     aux_mapper = AUXMapper()
@@ -504,7 +820,14 @@ def hp(configs, device):
     train_loader, eval_function = build_singleProcess_schedule(configs, aux_mapper.mapper, partial(aux_mapper.collate))
     train_loader_memory, _ = build_singleProcess_schedule(configs, aux_mapper.mapper, partial(aux_mapper.collate))
     num_classes = MetadataCatalog.get(train_dataset_name).get('num_classes')
-    model = HP(configs, num_classes=num_classes, train_loader_memory=train_loader_memory, device=device)
+    batch_size = configs['optim']['batch_size']
+    eval_dataset_name = list(configs['data']['evaluate'].keys())[0]
+    train_size = configs['data']['train'][train_dataset_name]['mapper']['res']
+    eval_size = configs['data']['evaluate'][eval_dataset_name]['mapper']['res']
+    model = HP_Agg(configs, num_classes=num_classes, train_loader_memory=train_loader_memory, device=device,
+                   batch_size=batch_size,
+                   train_size=train_size,
+                   eval_size=eval_size)
     model.to(device)
     model.optimize_setup(configs)
     from .make_reference_pool import initialize_reference_pool

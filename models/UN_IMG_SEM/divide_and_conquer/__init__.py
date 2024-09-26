@@ -1,1 +1,1 @@
-from . import cutler
+from . import divide_conquer

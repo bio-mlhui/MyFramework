@@ -102,7 +102,7 @@ class DinoFeaturizer(nn.Module):
         for buffer_train, buffer_eval in zip(model.buffers(), ema_model.buffers()):
             buffer_eval.copy_(buffer_train)
 
-    def forward(self, img, n=1, return_class_feat=False, train=False):
+    def forward(self, img, n=1, return_class_feat=False, train=False, only_pool=True):
         self.model.eval()
         batch_size = img.shape[0]
 
@@ -134,6 +134,7 @@ class DinoFeaturizer(nn.Module):
             if self.feat_type == "feat":
                 image_feat = feat[:, 1:, :].reshape(feat.shape[0], feat_h, feat_w, -1).permute(0, 3, 1, 2)
             elif self.feat_type == "KK":
+                raise ValueError() # 6?
                 image_k = qkv[1, :, :, 1:, :].reshape(feat.shape[0], 6, feat_h, feat_w, -1)
                 B, H, I, J, D = image_k.shape
                 image_feat = image_k.permute(0, 1, 4, 2, 3).reshape(B, H * D, I, J)

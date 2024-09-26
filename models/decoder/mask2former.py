@@ -49,9 +49,10 @@ class Image_SetMatchingLoss(nn.Module):
         self.losses = loss_config['losses'] 
 
         self.aux_layer_weights = loss_config['aux_layer_weights']  # int/list
-        empty_weight = torch.ones(self.num_classes + 1)
-        empty_weight[-1] = loss_config['background_cls_eos']
-        self.register_buffer('empty_weight', empty_weight)
+        if 'class_ce' in self.losses:
+            empty_weight = torch.ones(self.num_classes + 1)
+            empty_weight[-1] = loss_config['background_cls_eos']
+            self.register_buffer('empty_weight', empty_weight)
         # self.register_buffer('small_obj_weight', torch.tensor(loss_config['small_obj_weight']).float())
 
     @property

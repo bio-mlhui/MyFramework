@@ -24,7 +24,10 @@ from PIL import Image
 from scipy.io import loadmat
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
-
+from pycocotools.coco import COCO
+import contextlib
+import io
+import pycocotools.mask as mask_util
 import numpy as np
 
 cat_id_map = {91: 22, 92: 22, 93: 16, 94: 3, 95: 3, 96: 16, 97: 10, 98: 21, 99: 17, 100: 6, 101: 4, 102: 4, 103: 22, 104: 22, 105: 18, 106: 10, 107: 10, 108: 22, 109: 10, 110: 11, 111: 10, 112: 21, 113: 6, 114: 6, 115: 6, 116: 6, 117: 6, 118: 16, 119: 25, 120: 8, 121: 8, 122: 10, 123: 16, 124: 11, 125: 11, 126: 19, 127: 3, 128: 16, 129: 10, 130: 22, 131: 17, 132: 10, 133: 16, 134: 19, 135: 11, 136: 22, 137: 21, 138: 17, 139: 11, 140: 22, 141: 16, 142: 17, 143: 11, 144: 11, 145: 21, 146: 11, 147: 25, 148: 11, 149: 19, 150: 3, 151: 22, 152: 8, 153: 11, 154: 25, 155: 10, 156: 18, 157: 3, 158: 11, 159: 19, 160: 10, 161: 19, 162: 16, 163: 21, 164: 10, 165: 3, 166: 22, 167: 22, 168: 16, 169: 8, 170: 24, 171: 24, 172: 24, 173: 24, 174: 24, 175: 24, 176: 24, 177: 25, 178: 25, 179: 26, 180: 26, 181: 19,
@@ -40,6 +43,50 @@ def get_image_mask(path, image_id):
     for cat_id in torch.unique(mask):
         mask[mask == cat_id] = cat_id_map[int(cat_id.item())]
     return mask
+
+from detectron2.utils.visualizer import GenericMask
+
+def get_instance_mask(dataset_name, image_id, orig_height, orig_width):
+    cocoapi = MetadataCatalog.get(dataset_name).get('coco_instance_api')
+    annotations = cocoapi.imgToAnns[int(image_id)] # list[dict]
+    if len(annotations) == 0:
+        return None
+    instance_masks = []
+    for anno in annotations:
+        segm = anno.get("segmentation", None)
+        if segm:  # either list[list[float]] or dict(RLE)
+            if isinstance(segm, dict):
+                if isinstance(segm["counts"], list):
+                    # convert to compressed RLE
+                    segm = mask_util.frPyObjects(segm, *segm["size"])
+                    # segm = GenericMask(segm)
+                    # if isinstance(segm, dict):
+                    #     # RLEs
+                    #     assert "counts" in segm and "size" in segm
+                    #     if isinstance(segm["counts"], list):  # uncompressed RLEs
+                    #         h, w = segm["size"]
+                    #         assert h == orig_height and w == orig_width
+                    #         m = mask_util.frPyObjects(m, h, w)
+                    #     mask = mask_util.decode(segm)[:, :]
+                else:
+                    raise ValueError()
+            else:
+                # filter out invalid polygons (< 3 points)
+                segm = [poly for poly in segm if len(poly) % 2 == 0 and len(poly) >= 6]
+                if len(segm) == 0:
+                    continue  # ignore this instance
+                # rle = mask_util.frPyObjects(segm, orig_height, orig_width)
+                # rle = mask_util.merge(rle)
+                # mask = mask_util.decode(rle)[:, :] # H W, uint8
+            mask = GenericMask(segm, orig_height, orig_width).mask
+            mask = torch.from_numpy(mask).bool()
+            instance_masks.append(mask)
+    if len(instance_masks) == 0:
+        instance_masks = None
+    else:
+        instance_masks = torch.stack(instance_masks, dim=0)
+    return instance_masks
+
 
 root = os.path.join(os.environ['DATASET_PATH'], 'cocostuff')
 visualize_meta_idxs = defaultdict(list)
@@ -89,15 +136,20 @@ tep_meta = dcopy(cocostuff27_meta)
 tep_meta.update({'mode': 'evaluate', 'name': 'cocostuff27_iic_eval',})
 tep_meta.update({
     'get_image_fn': partial(get_image, path=os.path.join(root, 'images/val2017',)),
-    'get_mask_fn': partial(get_image_mask, path=os.path.join(root, 'annotations/stuffthingmaps_trainval2017/val2017/',),),        
+    'get_mask_fn': partial(get_image_mask, path=os.path.join(root, 'annotations/stuffthingmaps_trainval2017/val2017/',),), 
+    'get_instance_mask_fn': partial(get_instance_mask, dataset_name='cocostuff27_iic_eval'),
 })
 def cocostuff27_iic_eval_meta():
+    with contextlib.redirect_stdout(io.StringIO()):
+        coco_api = COCO(os.path.join(root, 'annotations/annotations/instances_val2017.json'))
+    MetadataCatalog.get('cocostuff27_iic_eval').set(coco_instance_api=coco_api)
     file_list = []
     with open(os.path.join(root, "curated", "val2017", "Coco164kFull_Stuff_Coarse_7.txt"), "r") as f:
         file_list = [fn.rstrip() for fn in f.readlines()]
     return [{'image_id': image_id, 'meta_idx': idx} for idx, image_id in enumerate(file_list)]
 DatasetCatalog.register('cocostuff27_iic_eval', cocostuff27_iic_eval_meta)    
 MetadataCatalog.get('cocostuff27_iic_eval').set(**tep_meta, 
+                                                json_file=os.path.join(root, 'annotations/annotations/instances_val2017.json'),
                                                visualize_meta_idxs=visualize_meta_idxs['cocostuff27_iic_eval_meta']) 
 
 
@@ -107,8 +159,12 @@ tep_meta.update({'mode': 'train', 'name': 'cocostuff27_iic_train',})
 tep_meta.update({
      'get_image_fn': partial(get_image, path=os.path.join(root, 'images/train2017',)),
     'get_mask_fn': partial(get_image_mask, path=os.path.join(root, 'annotations/train2017/',),), 
+    'get_instance_mask_fn': partial(get_instance_mask, dataset_name='cocostuff27_iic_train'),
 })
 def cocostuff27_iic_train_meta():
+    with contextlib.redirect_stdout(io.StringIO()):
+        coco_api = COCO(os.path.join(root, 'annotations/annotations/instances_train2017.json'))
+    MetadataCatalog.get('cocostuff27_iic_train').set(coco_instance_api=coco_api)
     file_list = []
     with open(os.path.join(root, "curated", "train2017", "Coco164kFull_Stuff_Coarse.txt"), "r") as f:
         file_list = [fn.rstrip() for fn in f.readlines()]
@@ -124,8 +180,12 @@ tep_meta.update({'mode': 'train', 'name': 'cocostuff27_train',})
 tep_meta.update({
      'get_image_fn': partial(get_image, path=os.path.join(root, 'images/train2017',)),
     'get_mask_fn': partial(get_image_mask, path=os.path.join(root, 'annotations/train2017/',),), 
+    'get_instance_mask_fn': partial(get_instance_mask, dataset_name='cocostuff27_train'),
 })
 def cocostuff27_train_meta():
+    with contextlib.redirect_stdout(io.StringIO()):
+        coco_api = COCO(os.path.join(root, 'annotations/annotations/instances_train2017.json'))
+    MetadataCatalog.get('cocostuff27_train').set(coco_instance_api=coco_api)
     file_list = os.listdir(os.path.join(root, "images/train2017"))
     return [{'image_id': os.path.splitext(image_id)[0], 'meta_idx': idx} for idx, image_id in enumerate(file_list)]
 DatasetCatalog.register('cocostuff27_train', cocostuff27_train_meta)    

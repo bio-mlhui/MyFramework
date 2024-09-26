@@ -36,7 +36,6 @@ from torchmetrics import Metric
 # allimage/single_image
 # fixed_query/dynamic_query
 
-
 class UnsupervisedMetrics(Metric):
     def __init__(self, prefix: str, n_classes: int, extra_clusters: int, compute_hungarian: bool,
                  dist_sync_on_step=True):
@@ -378,7 +377,6 @@ class SingleImageHugMatching(Metric):
     def __init__(self,):
         super().__init__(dist_sync_on_step=False, compute_on_step=False)
         self.add_state("iou", [])
-        self.add_state("iou_excludeFirst", [])
         self.n_jobs = -1
 
         self.temporary_match = None
@@ -424,7 +422,8 @@ class SingleImageHugMatching(Metric):
         mIoU = np.mean(self.iou)
         return {'miou': mIoU}
 
-
+from detectron2.evaluation import COCOEvaluator
+from detectron2.structures import Instances, Boxes
 @EVALUATOR_REGISTRY.register()
 class CutLER_Evaluator:
     def __init__(self,
@@ -436,10 +435,6 @@ class CutLER_Evaluator:
         self.loader = data_loader
         eval_configs: dict = configs['data']['evaluate'][dataset_name]['evaluator']
         self.visualize = eval_configs.get('visualize_all', False)
-
-        MetadataCatalog.get('single').set(stuff_classes = ['0'],
-                                            stuff_colors = [(156, 31, 23),])
-
     def visualize_path(self, meta_idxs, visualize, evaluator_path):
         return [os.path.join(evaluator_path, f'meta_{meta_idx}') if vis else None for (meta_idx, vis) in zip(meta_idxs, visualize)]
     
@@ -451,65 +446,106 @@ class CutLER_Evaluator:
         model.eval()                    
         visualize_path = os.path.join(output_dir, f'eval_{self.dataset_name}')
         os.makedirs(visualize_path, exist_ok=True)
+        num_droped = 0
+        # instance_eval = COCOEvaluator(dataset_name='coco_2017_val', output_dir=visualize_path)
+        # instance_eval.reset()
         metric = SingleImageHugMatching()
+        coco_eval_ids = []
+        previous_images_ids = []
         for batch_dict in tqdm(self.loader):
-            eval_metas = batch_dict.pop('metas') # image_ids: list[str]
+            eval_metas = batch_dict['metas'] # image_ids: list[str]
             image_id = eval_metas['image_ids'][0]
-            image_path = os.path.join(visualize_path, f'{image_id}.jpg')
-
+            previous_images_ids.append(image_id)
+            orig_HWs = eval_metas['orig_HWs'][0] # (H W)
             image = batch_dict['images'][0] # 3 h w, 0-1
             instance_gt_masks = batch_dict['instance_masks'][0] # N h w;bool
             _, H, W = image.shape
 
-            if H >= 1000 or W >= 1000:
-                continue
-            model_out = model.sample(batch_dict) # dict{'pred_masks': b nq h w, logits} 
-            pred_masks: torch.Tensor = model_out['pred_masks'][0] # nq h w, bool  
+            model_out = model.sample(batch_dict) # dict{'pred_masks': b nq h w / list[nq h w],batch, bool}
+            pred_masks: torch.Tensor = model_out['pred_masks'][0].cpu() # nq h w, bool  
+            pred_score = model_out['pred_scores'][0].cpu() # nq [0, 1]
+            # TODO: 每个mask的confidence分数
             num_pred_classes = pred_masks.shape[0]
-            num_gt_classes = instance_gt_masks.shape[0]
+            if pred_masks.shape[0] < instance_gt_masks.shape[0]:
+                num_droped += 1
+                continue
+            else:
+                if int(image_id) in coco_eval_ids:
+                    continue # 因为mapper的这个index没有成功，所以重新选了一个新的
+                coco_eval_ids.append(int(image_id))
 
+            # AP
+            # coco_eval_inputs = [{'image_id': int(image_id)}]
+            # coco_eval_outputs = self.instance_inference(mask_pred=pred_masks, orig_HWs=orig_HWs, pred_score=pred_score)
+            # instance_eval.process(inputs=coco_eval_inputs, outputs=coco_eval_outputs)
+            # matched mIou
             metric.update(instance_gt_masks, pred_masks)
             matched_indices = metric.temporary_match
             not_matched_src_idxs = list(set(list(range(num_pred_classes))) - set(matched_indices[0]))
             instance_gt_masks = torch.stack([instance_gt_masks[foo_idx] for foo_idx in matched_indices[1]], dim=0)
             pred_masks = torch.stack([pred_masks[foo_idx] for foo_idx in (matched_indices[0].tolist() + not_matched_src_idxs)], dim=0)
 
-            cluster_image = visualize_cutler(image, 
-                                             gt=instance_gt_masks, pred=pred_masks, 
-                                             num_pred_classes=num_pred_classes,
-                                             num_gt_classes=num_gt_classes) # H W*3 3
-            cluster_image = cluster_image[:5000, :30000, :]
-            Image.fromarray(cluster_image.numpy()).save(image_path)            
-        iou_mean_over_instances = metric.compute()['miou'] * 100
+            # image_path = os.path.join(visualize_path, f'{image_id}.jpg')
+            # cluster_image = visualize_cutler(image, gt=instance_gt_masks, pred=pred_masks, ) # H W*3 3
+            # cluster_image = cluster_image[:5000, :30000, :]
+            # Image.fromarray(cluster_image.numpy()).save(image_path)
+
+        # results = instance_eval.evaluate(coco_eval_ids)            
+        logging.warning(f'there are {num_droped} instances dropped')
         return {
-            'iou_mean_over_instances': iou_mean_over_instances
+            'matched_miou': metric.compute()['miou'] * 100
         }
 
-def visualize_cutler(image, 
-                     gt, num_gt_classes,
-                     pred, num_pred_classes,
-                    ):
-    # N h w, T/F; M h w, T/F;
+    def instance_inference(self, mask_pred, orig_HWs, pred_score, test_topk_per_image=100):
+        """从ni h w, bool, 到 coco_eval的outputs(single list)
+        ni h w, bool
+        H, W
+        ni, [0, 1]
+        """
+        mask_pred = F.interpolate(mask_pred[None, ...].float(), size=orig_HWs, mode='bilinear', align_corners=False)[0] > 0.5
+        # mask_pred is already processed to have the same shape as original input
+        image_size = mask_pred.shape[-2:]
+        result = Instances(image_size)
+        result.pred_masks = mask_pred.float()
+        result.pred_boxes = Boxes(torch.zeros(mask_pred.size(0), 4))
+        result.scores = pred_score
+        result.pred_classes = torch.zeros(mask_pred.size(0)).long()
+        return [{
+            'instances': result
+        }]
+
+
+def visualize_cutler(image, gt=None, pred=None,):
+    """ 可视化instance masks到图像上, 一共有两行, 第一行是gt, 第二行是pred, 假设gt的数量少于pred
+    gt: n h w, bool
+    pred: m h w, bool
+    image: 3 h w, tensor, 0-1
+    """
+    assert not ((gt==None) and (pred==None))
+    if (gt is not None) and (pred is not None):
+        assert gt.shape[0] <= pred.shape[0]
     H, W = image.shape[-2:]
     image = (image.permute(1,2,0).numpy() * 255).astype('uint8')
-    
-    gt_plots = []
-    pred_plots = []
-    
-    gt = gt.int() - 1
-    gt[gt==-1] = 20000
-    pred = pred.int() - 1
-    pred[pred==-1] = 20000
-
-    for gt_m in gt:
-        gt_plots.append(torch.from_numpy(generate_semseg_canvas_uou(image=image, H=H, W=W, mask=gt_m, num_classes=num_gt_classes, dataset_name='single',)) )
-    for pred_m in pred:
-        pred_plots.append(torch.from_numpy(generate_semseg_canvas_uou(image=image,  H=H, W=W, mask=pred_m, num_classes=num_gt_classes, dataset_name='single',)) )
-    
-    gt_plots = torch.cat(gt_plots, dim=1)
-    gt_plots = F.pad(gt_plots, pad=(0, 0, 0, (pred.shape[0] - gt.shape[0]) * image.shape[1]))
-    pred_plots = torch.cat(pred_plots, dim=1)
-    whole_image = torch.cat([gt_plots, pred_plots], dim=0)
+    whole_image = []
+    if gt is not None:
+        gt_plots = []
+        gt = gt.int() - 1  # 只有1个类
+        gt[gt==-1] = 20000
+        for gt_m in gt:
+            gt_plots.append(torch.from_numpy(generate_semseg_canvas_uou(image=image, H=H, W=W, mask=gt_m, dataset_name='single',)) )
+        gt_plots = torch.cat(gt_plots, dim=1)
+        if pred is not None:
+            gt_plots = F.pad(gt_plots, pad=(0, 0, 0, (pred.shape[0] - gt.shape[0]) * image.shape[1]))
+        whole_image.append(gt_plots)
+    if pred is not None:
+        pred_plots = []
+        pred = pred.int() - 1
+        pred[pred==-1] = 20000
+        for pred_m in pred:
+            pred_plots.append(torch.from_numpy(generate_semseg_canvas_uou(image=image,  H=H, W=W, mask=pred_m, dataset_name='single',)) )
+        pred_plots = torch.cat(pred_plots, dim=1)
+        whole_image.append(pred_plots)
+    whole_image = torch.cat(whole_image, dim=0)
     return whole_image
 
 
