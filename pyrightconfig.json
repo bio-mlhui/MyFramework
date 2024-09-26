@@ -4,6 +4,11 @@
         "wandb",
         "miccai_generate_Dir",
         "readme",
+        "tmp",
+        "tmp_after_attn",
+        "tmp1",
         ".vscode",
     ]
 }
+
+// detectron2.data.common.py line 133 -> sorted()

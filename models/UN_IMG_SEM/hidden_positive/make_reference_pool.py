@@ -16,7 +16,7 @@ def initialize_reference_pool(net_model, train_loader_memory, opt, feat_dim, dev
                 break
             img = img.cuda()
             with torch.cuda.amp.autocast(enabled=True):
-                model_output = net_model(img)
+                model_output = net_model(img, only_pool=True)
 
                 modeloutput_f = model_output[0].clone().detach()
                 modeloutput_f = modeloutput_f.view(modeloutput_f.size(0), modeloutput_f.size(1), -1)
@@ -48,7 +48,7 @@ def renew_reference_pool(net_model, train_loader_memory, opt, device, pixel_mean
             img_net: torch.Tensor = data['img'].to(device, non_blocking=True)
             img_net = (img_net - pixel_mean) / pixel_std
             with torch.cuda.amp.autocast(enabled=True):
-                model_output = net_model(img_net)
+                model_output = net_model(img_net, only_pool=True)
 
                 modeloutput_s_pr = model_output[2].clone().detach()
                 modeloutput_s_pr = modeloutput_s_pr.view(modeloutput_s_pr.size(0), modeloutput_s_pr.size(1), -1)

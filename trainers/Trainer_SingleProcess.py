@@ -15,7 +15,7 @@ import detectron2.utils.comm as comm
 import datetime
 from models import model_entrypoint
 from utils.misc import to_device
-
+from detectron2.engine import DefaultTrainer
 __all__ = ['Trainer']
 class Trainer_SingleProcess:
     def __init__(self, configs):

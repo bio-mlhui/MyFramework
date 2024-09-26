@@ -33,7 +33,7 @@ def get_frames_mask(mask_path, video_id, frames):
     masks = (masks > 0).int()
     return masks, torch.ones(len(frames)).bool()
 
-def generate_semseg_canvas_uou(image, H, W, mask, num_classes, dataset_name):
+def generate_semseg_canvas_uou(image, H, W, mask, num_classes=None, dataset_name=None):
     """pred_mask: h w, score:float"""
     metadata = MetadataCatalog.get(dataset_name)
     istce_canvas = MyVisualizer(img_rgb=image, 

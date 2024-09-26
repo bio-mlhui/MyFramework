@@ -115,6 +115,7 @@ def build_singleProcess_schedule(configs, model_input_mapper, model_input_collat
     from torch.utils.data import DataLoader, ConcatDataset
     from .registry import MAPPER_REGISTRY, EVALUATOR_REGISTRY
     from detectron2.data import DatasetCatalog, DatasetFromList, MapDataset, MetadataCatalog
+    MetadataCatalog.get('single').set(stuff_classes = ['0'], stuff_colors = [(156, 31, 23),]) # for visualize
     datasets = {'train': [], 'evaluate': []}
     meta_idx_shift = 0 # train, eval都对meta_idx进行shift, 每个set的idx都在独立的范围内
     for mode in ['train', 'evaluate']:

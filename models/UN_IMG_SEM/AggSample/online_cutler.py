@@ -393,8 +393,9 @@ from torch_geometric.utils import (
     to_dense_adj,
     to_scipy_sparse_matrix,
 )
-
-
+from PIL import Image
+import time
+from models.UN_IMG_SEM.AggSample.agg_sample import visualize_cutler_thre_masks
 class Online_Cutler(OptimizeModel):
     def __init__(
         self,
@@ -564,11 +565,14 @@ class Online_Cutler(OptimizeModel):
         assert not self.training
         img: torch.Tensor = batch_dict['images'].to(self.device, non_blocking=True)
         img = torchv_Normalize(img, self.pixel_mean, self.pixel_std, False) 
+        image_ids = batch_dict['metas']['image_ids']
         B, _, H, W = img.shape    
         with torch.cuda.amp.autocast(enabled=True):
             # b c h w (patch_size)
             image_feats = self.forward_backbone(img)
-            q_feats, q_masks, q_scores = self.forward_online_agg_clustering_nms(image_feats) # list[ni c]
+            q_feats, q_masks, q_scores = self.forward_online_agg_clustering_orig_dino(image_feats, 
+                                                                                      orig_image=batch_dict['images'],
+                                                                                      image_ids=image_ids,) # list[ni c]
             # # auxiliary mask score
             # pred_scores = [] # list[ni], batch
             # for batch_idx in range(B):
@@ -588,7 +592,7 @@ class Online_Cutler(OptimizeModel):
         }
 
     @torch.no_grad()
-    def forward_online_agg_clustering_cntMaxArea(self, image_feats):
+    def forward_online_agg_clustering_cntMaxArea(self, image_feats, orig_image=None):
         """
         image_feats: b c h w
         return: 
@@ -648,6 +652,9 @@ class Online_Cutler(OptimizeModel):
                     if first_condition and (not second_condition): # TODO: 如果新的cluster(包含原来的)只更新了一点点, 那么更新旧的cluster, 相当于MNMS的排序
                         pass
         # TODO: NMS和N_cnt进行比较，看哪个比较好
+        # visualize:
+        for batch_idx in range(batch_size):
+            visualize_cutler_thre_masks(image=orig_image[batch_idx], cluster_masks=batch_clusters_feats[batch_idx],patch_size=self.backbone_patch_size)
         batch_clusters_feats = [torch.cat(foo, dim=0) for foo in batch_clusters_feats] # list[ni c], batch
         batch_clusters_masks = [torch.cat(foo, dim=0) for foo in batch_clusters_masks] # list[ni h w], batch
         
@@ -669,7 +676,7 @@ class Online_Cutler(OptimizeModel):
 
 
     @torch.no_grad()
-    def forward_online_agg_clustering_nms(self, image_feats):
+    def forward_online_agg_clustering_nms(self, image_feats, orig_image=None, image_ids=None):
         """
         image_feats: b c h w
         return: 
@@ -744,6 +751,10 @@ class Online_Cutler(OptimizeModel):
                 batch_clusters_masks[batch_idx][thre_idx] = torch.stack(batch_clusters_masks[batch_idx][thre_idx], dim=0)
                 batch_clusters_instanceness[batch_idx][thre_idx] = torch.tensor(batch_clusters_instanceness[batch_idx][thre_idx])
         # TODO: NMS和N_cnt进行比较，看哪个比较好
+        # visualize:
+        # for batch_idx in range(batch_size):
+        #     visualized_image = visualize_cutler_thre_masks(image=orig_image[batch_idx], cluster_masks=batch_clusters_masks[batch_idx], patch_size=self.backbone_patch_size)
+        #     Image.fromarray(visualized_image.numpy()).save(f'./tmp/test_{int(image_ids[batch_idx])}.png')
         batch_clusters_feats = [torch.cat(foo, dim=0) for foo in batch_clusters_feats] # list[ni c], batch
         batch_clusters_masks = [torch.cat(foo, dim=0) for foo in batch_clusters_masks] # list[ni h w], batch, bool
         batch_clusters_instanceness = [torch.cat(foo) for foo in batch_clusters_instanceness] # list[ni], batch, float
@@ -772,6 +783,7 @@ class Online_Cutler(OptimizeModel):
             nms_feats.append(nms_pool_feats)
             nms_masks.append(nms_pool)
             nms_instanceness.append(nms_pool_ins)
+        
         return nms_feats, nms_masks, nms_instanceness
         # NMS
         
@@ -788,6 +800,367 @@ class Online_Cutler(OptimizeModel):
         #                             image_path='./tmp',
         #                             image_name=f'test_iter{iteration_num}_bs{batch_idx}.png')
         # TODO: mask的获得是通过graph, 还是通过attention得到mask(利用hp/alignseg的attention->mask的方式)
+
+    @torch.no_grad()
+    def batch_feat_attns(self, feat_attns, temperature):
+        # b hw hw [-1,1] -> bhw bhw
+        dtype = feat_attns.dtype
+        batch_size, HW, _ = feat_attns.shape
+        feat_attns = feat_attns / temperature
+        batch_attns = torch.zeros([batch_size*HW, batch_size*HW], dtype=dtype).to(feat_attns.device)
+        for batch_idx in range(batch_size):
+            batch_attns[(batch_idx*HW): (batch_idx+1)*HW, (batch_idx*HW): (batch_idx+1)*HW].copy_(feat_attns[batch_idx])
+        return batch_attns
+
+    
+    @torch.no_grad()
+    def forward_online_agg_clustering_orig_dino(self, image_feats, 
+                                                orig_image=None,
+                                                image_ids=None):
+        """
+        image_feats: b c h w
+        feats_attns: b hw hw, [-1, 1]
+        return: 
+            list[ni c], batch, 特征
+            list[ni h w(bool)], batch, 特征mask
+            大小和image_feats的大小一致, 都是缩放patch_size之后的
+        """
+        # b c h w -> bhw c
+        batch_size, _, H, W = image_feats.shape
+        clustering_threshold_list = [0.8, 0.7, 0.6, 0.5, 0.4]
+        feature_merge_temperature = 0.07
+        clustering_area_threshold = 4 # TODO:一个物体的大小4*32像素
+        # TODO: self.的attention永远是1， 可不可以用dino的attn, self.就不是1了
+        feats_attns = torch.einsum('bcs,bcd->bsd', F.normalize(image_feats.flatten(2), dim=1),  F.normalize(image_feats.flatten(2), dim=1))
+        def instanceness_function(foo_x, start=0.25, cnt=0.35, cnt_value=0.2):
+            # 0到cnt是从1到cnt_value, cnt到1是从cnt_value到0
+            if foo_x < start:
+                return 1.
+            elif foo_x < cnt:
+                return 1 - (1-cnt_value) / (cnt-start) * (foo_x-start)
+            elif foo_x >= cnt:
+                return cnt_value - (cnt_value) / (1 - cnt) * (foo_x - cnt)
+            else:
+                raise ValueError()
+
+        bhw_attns = self.batch_feat_attns(feat_attns=feats_attns, temperature=feature_merge_temperature) # N N
+        bhw_features = image_feats.permute(0, 2, 3, 1).flatten(0, 2) # N c
+        assert bhw_attns.shape[0] == bhw_features.shape[0] # N N
+        
+        edge_index= self.train_edge_index if self.training else self.eval_edge_index # 2 E
+        node_batch_tensor=self.train_node_batch_ids if self.training else self.eval_node_batch_ids # N
+        batch_mask = self.train_batch_mask if self.training else self.eval_batch_mask
+        token_masks = self.train_token_masks if self.training else self.eval_token_masks # N N, 0-1
+        edge_score = self.get_edge_score(bhw_features, edge_index) # E, -1/1
+        batch_clusters_feats = [[[] for _ in range(len(clustering_threshold_list))] for _ in range(batch_size)]# list[list[ni c], threshold] batch
+        batch_clusters_masks = [[[] for _ in range(len(clustering_threshold_list))] for _ in range(batch_size)]# list[list[ni h w], threshold] batch
+        batch_clusters_instanceness = [[[] for _ in range(len(clustering_threshold_list))] for _ in range(batch_size)]# list[list[ni], threshold] batch
+        for thre_idx, threshold in enumerate(clustering_threshold_list):
+            while (edge_score > threshold).any():
+                # Nt c,  2 Et, Nt, Nt N(0-1)
+                nodes_feature, edge_index, node_batch_tensor, token_masks = self.hc_graph_orig_dino(edge_index=edge_index, # 2 Et
+                                                                                    batch=node_batch_tensor, # Nt
+                                                                                    threshold=threshold,
+                                                                                    edge_score=edge_score,# Et
+                                                                                    token_masks=token_masks,
+                                                                                    bhw_features=bhw_features,
+                                                                                    bhw_attns=bhw_attns,
+                                                                                    batch_mask=batch_mask) # Nt N
+                edge_score = self.get_edge_score(nodes_feature, edge_index)
+                assert len(token_masks.unique()) == 2
+            # TODO: 还有0.799的边:)
+            connect_adj = to_dense_adj(edge_index=edge_index, edge_attr=edge_score, max_num_nodes=nodes_feature.shape[0])[0]
+            connect_adj = connect_adj + connect_adj.t() # Nt Nt
+            node_max_simlarity, _ = connect_adj.max(dim=1) # Nt
+            node_instanceness = [instanceness_function(foo) for foo in node_max_simlarity] # N
+
+            node_num_patches = (token_masks > 0).int().sum(-1) # Nt
+            for node_idx in range(nodes_feature.shape[0]):
+                first_condition = node_num_patches[node_idx] >= clustering_area_threshold
+                if first_condition:
+                    this_node_batch_idx = node_batch_tensor[node_idx]
+                    this_node_feat = nodes_feature[node_idx]
+                    this_node_mask = token_masks[node_idx, (H*W*this_node_batch_idx):((this_node_batch_idx+1)*H*W)].reshape(H, W).bool() # B*HW -> HW
+                    this_node_instancess = node_instanceness[node_idx]
+                    batch_clusters_feats[this_node_batch_idx][thre_idx].append(this_node_feat)
+                    batch_clusters_masks[this_node_batch_idx][thre_idx].append(this_node_mask)
+                    batch_clusters_instanceness[this_node_batch_idx][thre_idx].append(this_node_instancess)
+            if len(batch_clusters_feats[this_node_batch_idx][thre_idx]) != 0:
+                for batch_idx in range(batch_size): 
+                    batch_clusters_feats[batch_idx][thre_idx] = torch.stack(batch_clusters_feats[batch_idx][thre_idx], dim=0)
+                    batch_clusters_masks[batch_idx][thre_idx] = torch.stack(batch_clusters_masks[batch_idx][thre_idx], dim=0)
+                    batch_clusters_instanceness[batch_idx][thre_idx] = torch.tensor(batch_clusters_instanceness[batch_idx][thre_idx])
+        # TODO: NMS和N_cnt进行比较，看哪个比较好
+        # visualize:
+        # for batch_idx in range(batch_size):
+        #     visualized_image = visualize_cutler_thre_masks(image=orig_image[batch_idx], cluster_masks=batch_clusters_masks[batch_idx], patch_size=self.backbone_patch_size)
+        #     Image.fromarray(visualized_image.numpy()).save(f'./tmp_after_attn_512/test_{int(image_ids[batch_idx])}.png')
+        batch_clusters_feats = [torch.cat(foo, dim=0) for foo in batch_clusters_feats] # list[ni c], batch
+        batch_clusters_masks = [torch.cat(foo, dim=0) for foo in batch_clusters_masks] # list[ni h w], batch, bool
+        batch_clusters_instanceness = [torch.cat(foo) for foo in batch_clusters_instanceness] # list[ni], batch, float
+        # NMS
+        clustering_nms_iou = 0.9
+        clustering_nms_step = len(clustering_threshold_list)
+        nms_feats = [] 
+        nms_masks = []
+        nms_instanceness = [] # list[ni]
+        for pool, pool_feat, pool_ins in zip(batch_clusters_masks,batch_clusters_feats, batch_clusters_instanceness) :
+            pool = pool.unbind(0) # list[h w], ni
+            mask_areas = torch.tensor([area(foo) for foo in pool])
+            _, sorted_idxs = torch.sort(mask_areas, descending=True, dim=0)
+            sorted_masks = [pool[foo_idx] for foo_idx in sorted_idxs]
+            sorted_feats = [pool_feat[foo_idx] for foo_idx in sorted_idxs]
+            sorted_ins = [pool_ins[foo_idx] for foo_idx in sorted_idxs] # list[float]
+            masks_kept_indices = list(range(len(pool)))
+            for i in range(len(sorted_masks)):
+                if i in masks_kept_indices:
+                    for j in range(i+1, min(len(sorted_masks), i+clustering_nms_step)):
+                        if iou(sorted_masks[i], sorted_masks[j]) > clustering_nms_iou:
+                            masks_kept_indices.remove(j) if j in masks_kept_indices else None
+            nms_pool = torch.stack([sorted_masks[i] for i in masks_kept_indices], dim=0)
+            nms_pool_feats = torch.stack([sorted_feats[i] for i in masks_kept_indices], dim=0)
+            nms_pool_ins = torch.tensor([sorted_ins[i] for i in masks_kept_indices]) # ni
+            nms_feats.append(nms_pool_feats)
+            nms_masks.append(nms_pool)
+            nms_instanceness.append(nms_pool_ins)
+        
+        return nms_feats, nms_masks, nms_instanceness
+        # NMS
+        
+        # TODO: NMS
+        # NMS的step和list的长度一样
+        # TODO2:  每个节点维护到目前为止它的子树中注册的最大面积的hw
+        # TODO: visualize是否运行的好
+        # from models.UN_IMG_SEM.AggSample.agg_sample import visualize_cutler_onlyAttn
+        # for batch_idx in range(batch_size):
+        #     visualize_cutler_onlyAttn(image=orig_image[batch_idx].float(),
+        #                             cluster_attn=image_attns[batch_idx].float(), # h w nq
+        #                             patch_size=self.patch_size,
+        #                             lengths=threshold_lenghts[batch_idx],
+        #                             image_path='./tmp',
+        #                             image_name=f'test_iter{iteration_num}_bs{batch_idx}.png')
+        # TODO: mask的获得是通过graph, 还是通过attention得到mask(利用hp/alignseg的attention->mask的方式)
+
+    def hc_graph_orig_dino(self,edge_index: Tensor, # 2 Et, 每个edge从小到大, 但是是一个无向图
+                                batch: Tensor, # Nt
+                                threshold: float,
+                                edge_score, # Et, float, -1/1
+                                token_masks, # Nt N
+                                bhw_features, # N c
+                                bhw_attns, # N N, -inf
+                                batch_mask # N N
+                    ):
+        """edge_index_out, batch_out, token_masks
+        edge_index 2 Et, long()
+        batch: Nt, int
+        threshold: float
+        edge_score: Et
+        token_masks: Nt N, float0/1
+        """
+        (NT, N), device = token_masks.shape, token_masks.device
+        edge_contract = edge_index[:, edge_score > threshold]
+        adj = to_scipy_sparse_matrix(edge_contract, num_nodes=NT)
+        adj = adj + adj.T
+        # NT NT, 原始节点之间是否被选中
+        _, cluster_np = connected_components(adj, directed=False)
+        # NT
+        cluster = torch.tensor(cluster_np, dtype=torch.long, device=device)
+        # NT N'  #新节点的归属问题, sum(-1)都是1
+        C = one_hot(cluster) 
+        _, NT_NEW = C.shape
+        # NT NT, 原始节点之间是否连接
+        A = to_dense_adj(edge_index, max_num_nodes=NT).squeeze(0)
+        A = A + A.T
+
+        # N' Nt, Nt N -> N' N
+        # union of masks of previous nodes
+        token_masks = C.t() @ token_masks
+        assert token_masks.max() <= 1
+        # 肯定不会超过1, 因为union的时候不会有重叠的区域, 但有可能全是1
+
+        # TODO: 先每个softmax,然后加权; 先加，然后一起softmax
+        node_attns:Tensor = token_masks @ bhw_attns
+        # node_batch_mask = (token_masks @ (batch_mask.float())).bool()
+        # node_attns.masked_fill_(node_batch_mask, value=torch.finfo())
+        # N' N @ N c -> N' c
+        node_features = node_attns.softmax(-1) @ bhw_features
+
+        # N' N @ N N @ N N' -> N' N'
+        new_new_adj = (C.T @ A @ C).fill_diagonal_(0)
+        edge_index_out, _ = dense_to_sparse(torch.triu(new_new_adj)) # 保持小的在前
+
+        # N'
+        # batch_out[cluster[i]]=batch[i], i=1...N
+        batch_out = batch.new_empty(NT_NEW).scatter_(0, cluster, batch)
+        return node_features, edge_index_out, batch_out, token_masks
+
+
+    @torch.no_grad()
+    def forward_online_agg_clustering_withSimi(self, image_feats, 
+                                                orig_image=None,
+                                                image_ids=None):
+        """
+        image_feats: b c h w
+        feats_attns: b hw hw, [-1, 1]
+        return: 
+            list[ni c], batch, 特征
+            list[ni h w(bool)], batch, 特征mask
+            大小和image_feats的大小一致, 都是缩放patch_size之后的
+        """
+        # b c h w -> bhw c
+        batch_size, _, H, W = image_feats.shape
+        clustering_threshold_list = [0.8, 0.7, 0.6, 0.5, 0.4]
+        clustering_area_threshold = 4 # TODO:一个物体的大小4*32像素
+        # TODO: self.的attention永远是1， 可不可以用dino的attn, self.就不是1了
+        feats_attns = torch.einsum('bcs,bcd->bsd', F.normalize(image_feats.flatten(2), dim=1),  
+                                   F.normalize(image_feats.flatten(2), dim=1)) # -1, 1
+        def instanceness_function(foo_x, start=0.25, cnt=0.35, cnt_value=0.2):
+            # 0到cnt是从1到cnt_value, cnt到1是从cnt_value到0
+            if foo_x < start:
+                return 1.
+            elif foo_x < cnt:
+                return 1 - (1-cnt_value) / (cnt-start) * (foo_x-start)
+            elif foo_x >= cnt:
+                return cnt_value - (cnt_value) / (1 - cnt) * (foo_x - cnt)
+            else:
+                raise ValueError()
+
+        bhw_attns = self.batch_feat_attns(feat_attns=feats_attns) # N N
+        bhw_features = image_feats.permute(0, 2, 3, 1).flatten(0, 2) # N c
+        assert bhw_attns.shape[0] == bhw_features.shape[0] # N N
+        
+        edge_index= self.train_edge_index if self.training else self.eval_edge_index # 2 E
+        node_batch_tensor=self.train_node_batch_ids if self.training else self.eval_node_batch_ids # N
+        batch_mask = self.train_batch_mask if self.training else self.eval_batch_mask
+        token_masks = self.train_token_masks if self.training else self.eval_token_masks # N N, 0-1
+        edge_score = self.get_edge_score(bhw_features, edge_index) # E, -1/1
+        batch_clusters_feats = [[[] for _ in range(len(clustering_threshold_list))] for _ in range(batch_size)]# list[list[ni c], threshold] batch
+        batch_clusters_masks = [[[] for _ in range(len(clustering_threshold_list))] for _ in range(batch_size)]# list[list[ni h w], threshold] batch
+        batch_clusters_instanceness = [[[] for _ in range(len(clustering_threshold_list))] for _ in range(batch_size)]# list[list[ni], threshold] batch
+        for thre_idx, threshold in enumerate(clustering_threshold_list):
+            while (edge_score > threshold).any():
+                # Nt c,  2 Et, Nt, Nt N(0-1)
+                nodes_feature, edge_index, node_batch_tensor, token_masks = self.hc_graph_orig_dino(edge_index=edge_index, # 2 Et
+                                                                                    batch=node_batch_tensor, # Nt
+                                                                                    threshold=threshold,
+                                                                                    edge_score=edge_score,# Et
+                                                                                    token_masks=token_masks,
+                                                                                    bhw_features=bhw_features,
+                                                                                    bhw_attns=bhw_attns,
+                                                                                    batch_mask=batch_mask) # Nt N
+                edge_score = self.get_edge_score(nodes_feature, edge_index)
+                assert len(token_masks.unique()) == 2
+            # TODO: 还有0.799的边:)
+            connect_adj = to_dense_adj(edge_index=edge_index, edge_attr=edge_score, max_num_nodes=nodes_feature.shape[0])[0]
+            connect_adj = connect_adj + connect_adj.t() # Nt Nt
+            node_max_simlarity, _ = connect_adj.max(dim=1) # Nt
+            node_instanceness = [instanceness_function(foo) for foo in node_max_simlarity] # N
+
+            node_num_patches = (token_masks > 0).int().sum(-1) # Nt
+            for node_idx in range(nodes_feature.shape[0]):
+                first_condition = node_num_patches[node_idx] >= clustering_area_threshold
+                if first_condition:
+                    this_node_batch_idx = node_batch_tensor[node_idx]
+                    this_node_feat = nodes_feature[node_idx]
+                    this_node_mask = token_masks[node_idx, (H*W*this_node_batch_idx):((this_node_batch_idx+1)*H*W)].reshape(H, W).bool() # B*HW -> HW
+                    this_node_instancess = node_instanceness[node_idx]
+                    batch_clusters_feats[this_node_batch_idx][thre_idx].append(this_node_feat)
+                    batch_clusters_masks[this_node_batch_idx][thre_idx].append(this_node_mask)
+                    batch_clusters_instanceness[this_node_batch_idx][thre_idx].append(this_node_instancess)
+            if len(batch_clusters_feats[this_node_batch_idx][thre_idx]) != 0:
+                for batch_idx in range(batch_size): 
+                    batch_clusters_feats[batch_idx][thre_idx] = torch.stack(batch_clusters_feats[batch_idx][thre_idx], dim=0)
+                    batch_clusters_masks[batch_idx][thre_idx] = torch.stack(batch_clusters_masks[batch_idx][thre_idx], dim=0)
+                    batch_clusters_instanceness[batch_idx][thre_idx] = torch.tensor(batch_clusters_instanceness[batch_idx][thre_idx])
+        # TODO: NMS和N_cnt进行比较，看哪个比较好
+        # visualize:
+        # for batch_idx in range(batch_size):
+        #     visualized_image = visualize_cutler_thre_masks(image=orig_image[batch_idx], cluster_masks=batch_clusters_masks[batch_idx], patch_size=self.backbone_patch_size)
+        #     Image.fromarray(visualized_image.numpy()).save(f'./tmp_after_attn_512/test_{int(image_ids[batch_idx])}.png')
+        batch_clusters_feats = [torch.cat(foo, dim=0) for foo in batch_clusters_feats] # list[ni c], batch
+        batch_clusters_masks = [torch.cat(foo, dim=0) for foo in batch_clusters_masks] # list[ni h w], batch, bool
+        batch_clusters_instanceness = [torch.cat(foo) for foo in batch_clusters_instanceness] # list[ni], batch, float
+        # NMS
+        clustering_nms_iou = 0.9
+        clustering_nms_step = len(clustering_threshold_list)
+        nms_feats = [] 
+        nms_masks = []
+        nms_instanceness = [] # list[ni]
+        for pool, pool_feat, pool_ins in zip(batch_clusters_masks,batch_clusters_feats, batch_clusters_instanceness) :
+            pool = pool.unbind(0) # list[h w], ni
+            mask_areas = torch.tensor([area(foo) for foo in pool])
+            _, sorted_idxs = torch.sort(mask_areas, descending=True, dim=0)
+            sorted_masks = [pool[foo_idx] for foo_idx in sorted_idxs]
+            sorted_feats = [pool_feat[foo_idx] for foo_idx in sorted_idxs]
+            sorted_ins = [pool_ins[foo_idx] for foo_idx in sorted_idxs] # list[float]
+            masks_kept_indices = list(range(len(pool)))
+            for i in range(len(sorted_masks)):
+                if i in masks_kept_indices:
+                    for j in range(i+1, min(len(sorted_masks), i+clustering_nms_step)):
+                        if iou(sorted_masks[i], sorted_masks[j]) > clustering_nms_iou:
+                            masks_kept_indices.remove(j) if j in masks_kept_indices else None
+            nms_pool = torch.stack([sorted_masks[i] for i in masks_kept_indices], dim=0)
+            nms_pool_feats = torch.stack([sorted_feats[i] for i in masks_kept_indices], dim=0)
+            nms_pool_ins = torch.tensor([sorted_ins[i] for i in masks_kept_indices]) # ni
+            nms_feats.append(nms_pool_feats)
+            nms_masks.append(nms_pool)
+            nms_instanceness.append(nms_pool_ins)
+        
+        return nms_feats, nms_masks, nms_instanceness
+
+    def hc_graph_orig_withSimi(self,
+                               edge_index: Tensor, # 2 Et, 每个edge从小到大, 但是是一个无向图
+                                batch: Tensor, # Nt
+                                threshold: float,
+                                edge_score, # Et, float, -1/1
+                                token_masks, # Nt N
+                                bhw_features, # N c
+                                bhw_attns, # N N, -inf
+                                batch_mask # N N
+                    ):
+        """edge_index_out, batch_out, token_masks
+        edge_index 2 Et, long()
+        batch: Nt, int
+        threshold: float
+        edge_score: Et
+        token_masks: Nt N, float0/1
+        """
+        (NT, N), device = token_masks.shape, token_masks.device
+        edge_contract = edge_index[:, edge_score > threshold]
+        adj = to_scipy_sparse_matrix(edge_contract, num_nodes=NT)
+        adj = adj + adj.T
+        # NT NT, 原始节点之间是否被选中
+        _, cluster_np = connected_components(adj, directed=False)
+        # NT
+        cluster = torch.tensor(cluster_np, dtype=torch.long, device=device)
+        # NT N'  #新节点的归属问题, sum(-1)都是1
+        C = one_hot(cluster) 
+        _, NT_NEW = C.shape
+        # NT NT, 原始节点之间是否连接
+        A = to_dense_adj(edge_index, max_num_nodes=NT).squeeze(0)
+        A = A + A.T
+
+        # N' Nt, Nt N -> N' N
+        # union of masks of previous nodes
+        token_masks = C.t() @ token_masks
+        assert token_masks.max() <= 1
+        # 肯定不会超过1, 因为union的时候不会有重叠的区域, 但有可能全是1
+
+        # TODO: 先每个softmax,然后加权; 先加，然后一起softmax
+        node_attns:Tensor = token_masks @ bhw_attns
+        # N' N @ N c -> N' c
+        node_features = node_attns.softmax(-1) @ bhw_features
+
+        # N' N @ N N @ N N' -> N' N'
+        new_new_adj = (C.T @ A @ C).fill_diagonal_(0)
+        edge_index_out, _ = dense_to_sparse(torch.triu(new_new_adj)) # 保持小的在前
+
+        # N'
+        # batch_out[cluster[i]]=batch[i], i=1...N
+        batch_out = batch.new_empty(NT_NEW).scatter_(0, cluster, batch)
+        return node_features, edge_index_out, batch_out, token_masks
+
+
 
     def hc_graph(self,
                     x: Tensor, # N c
@@ -828,15 +1201,22 @@ class Online_Cutler(OptimizeModel):
         # N N * N N' -> N' N @ N c -> N' c
         # x_out = (S @ C).t() @ x
 
+
+        # N' N @ N c -> N' c 
+        x_out = C.t() @ x # TODO:nomalize方式
+        # x_out = x_out / node_num_patches[:, None]
+
+        # # N' Nt * 1 Nt
+        # feature_weights = C.t() * (token_masks.sum(dim=1)[None, :])
+        # # N' Nt / N' 1
+        # feature_weights = feature_weights / (feature_weights.sum(dim=1, keepdim=True)) # * node数量
+        # x_out = feature_weights @ x
+
         # N' N, N N -> N' N
         # union of masks of previous nodes
         token_masks = C.t() @ token_masks
         assert len(token_masks.unique()) == 2
         # 肯定不会超过1, 因为union的时候不会有重叠的区域
-
-        # N' N @ N c -> N' c 
-        x_out = C.t() @ x # TODO:nomalize方式
-        # x_out = x_out / node_num_patches[:, None]
 
         # N' N @ N N @ N N' -> N' N'
         new_new_adj = (C.T @ A @ C).fill_diagonal_(0)
@@ -932,6 +1312,19 @@ class Online_Cutler(OptimizeModel):
         self.register_buffer('eval_edge_index', eval_graph.edge_index.long())
         self.register_buffer('eval_token_masks', eval_masks)
         self.register_buffer('eval_cnt_registered_area', torch.zeros(num_test_nodes, num_test_nodes).int()) # HW HW
+
+
+        train_batch_mask = torch.ones([train_batch_size*num_train_nodes, train_batch_size*num_train_nodes])
+        for batch_idx in range(train_batch_size):
+            train_batch_mask[(batch_idx*num_train_nodes):((batch_idx+1)*num_train_nodes), 
+                             batch_idx*num_train_nodes:((batch_idx+1)*num_train_nodes)].fill_(0)
+        train_batch_mask = train_batch_mask.bool()
+
+        eval_batch_mask = torch.zeros([num_test_nodes, num_test_nodes])
+        eval_batch_mask = eval_batch_mask.bool()
+
+        self.register_buffer('train_batch_mask', train_batch_mask)
+        self.register_buffer('eval_batch_mask', eval_batch_mask)    
 
 # 根据coco的instance标注，调整clustering的超参
 @register_model

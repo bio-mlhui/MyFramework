@@ -10,7 +10,7 @@ from .ms_deform_attn import MSDeformAttn, MSDeformAttn_with_GlobalRegisters
 # # from .deform_selective_scan_mamba_offset import MSDeformAttn_MambaOffset
 # from . import deform_selective_scan_mamba_scan
 # from . import deform_selective_scan_mamba_offset
-from . import temporal_ss
-from . import frame_query_ss2d
+# from . import temporal_ss
+# from . import frame_query_ss2d
 # from . import vheat
 

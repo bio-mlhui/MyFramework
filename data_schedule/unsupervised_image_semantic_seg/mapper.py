@@ -195,6 +195,32 @@ class UN_IMG_SEG_EvalMapper(Ori_Mapper):
            'mask': new_mask
        }
 
+class Uni_UNIMGSEM_AUXMapper:
+    def mapper(self, data_dict, mode,):
+        return data_dict
+    def collate(self, batch_dict, mode):
+        if mode == 'train':
+            return {
+                # list[3 3 h w] -> b 3 3 h w
+                'img': torch.stack([item['image'] for item in batch_dict], dim=0),
+                'label': torch.stack([item['mask'] for item in batch_dict], dim=0),
+                'img_aug': torch.stack([item['img_aug'] for item in batch_dict], dim=0),
+                'meta_idxs': [item['meta_idx'] for item in batch_dict],
+                'visualize': [item['visualize'] for item in batch_dict],
+                'image_ids':[item['image_id'] for item in batch_dict],
+            }
+        elif mode == 'evaluate':
+            return {
+                'metas': {
+                    'image_ids': [item['image_id'] for item in batch_dict],
+                    'meta_idxs': [item['meta_idx'] for item in batch_dict],
+                },
+                'images': torch.stack([item['image'] for item in batch_dict], dim=0), # b 3 h w
+                'masks': torch.stack([item['mask'] for item in batch_dict], dim=0), # b h w
+                'visualize': [item['visualize'] for item in batch_dict]
+            }
+        else:
+            raise ValueError()
 
 @MAPPER_REGISTRY.register()
 class AggSampleMapper(Ori_Mapper):
@@ -511,6 +537,64 @@ class CutLer_Mapper(Ori_Mapper):
            'image_id': image_id,
            'instance_mask': instance_masks
        }
+
+@MAPPER_REGISTRY.register()
+class Online_CutLer_EvalCluster_Mapper(Ori_Mapper):
+    def __init__(self,
+                 dataset_name,
+                 configs,
+                 mode, 
+                 meta_idx_shift,
+                 ): 
+        dataset_meta = MetadataCatalog.get(dataset_name)
+        assert dataset_meta.get('name') == dataset_name
+        mapper_config = configs['data'][mode][dataset_name]['mapper']
+        super().__init__(meta_idx_shift, dataset_meta)
+        self.get_image_fn = dataset_meta.get('get_image_fn')
+        self.get_instance_mask_fn = dataset_meta.get('get_instance_mask_fn')
+        self.transform = T.Compose([
+            T.Resize((mapper_config['res'],mapper_config['res']), interpolation=Image.BILINEAR), 
+            T.ToTensor()
+        ])
+
+    def _call(self, data_dict):
+        image_id = data_dict['image_id']
+        image = self.get_image_fn(image_id=image_id)  # PIL Image
+        (orig_W, orig_H) = image.size
+        # semantic_mask = self.get_semantic_mask_fn(image_id=image_id) # h w, -1是背景, 0-cls-1
+        instance_masks = self.get_instance_mask_fn(image_id=image_id, orig_height=image.size[1], orig_width=image.size[0]) # ni h w, bool
+        if instance_masks is None:
+            return None
+        image = self.transform(image)
+        instance_masks = F.interpolate(instance_masks[None, ...].float(), size=image.shape[-2:], align_corners=False, mode='bilinear')[0] > 0.5
+        # from data_schedule.unsupervised_image_semantic_seg.evaluator_alignseg import visualize_cutler
+        # whole_image = visualize_cutler(image, gt=instance_masks)
+        # Image.fromarray(whole_image.numpy()).save('./test.png')
+
+        return {
+           'image': image,
+           'image_id': image_id,
+           'instance_mask': instance_masks,
+           'orig_HW': (orig_H, orig_W),
+       }
+    
+class Online_Cutler_EvalCluster_AUXMapper:
+    def mapper(self, data_dict, mode,):
+        return data_dict
+    def collate(self, batch_dict, mode):
+        if mode == 'evaluate':
+            return {
+                'metas': {
+                    'image_ids': [item['image_id'] for item in batch_dict],
+                    'meta_idxs': [item['meta_idx'] for item in batch_dict],
+                    'orig_HWs': [item['orig_HW'] for item in batch_dict], # TODO: 原大小->224 -> 28 -> 原大小 有点问题
+                },
+                'instance_masks': [item['instance_mask'] for item in batch_dict],
+                'images': torch.stack([item['image'] for item in batch_dict], dim=0), # b 3 h w
+                'visualize': [item['visualize'] for item in batch_dict]
+            }
+        else:
+            raise ValueError()
 
 
 # bilinear resize到固定大小 没有mask

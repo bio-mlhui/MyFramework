@@ -1,4 +1,6 @@
 from .. import backbone
+from .. import decoder
+from .. import encoder
 # from . import alignseg
 from . import stego
 from . import kmeans

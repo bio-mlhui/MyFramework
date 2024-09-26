@@ -254,7 +254,7 @@ class VisionTransformer(nn.Module):
             if len(self.blocks) - i <= n:
                 features.append(self.norm(x))
                 attentions.append(attn)
-                qkvs.append(qkv)
+                qkvs.append(qkv) #  3 B head N head_dim  self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
 
         # for i, blk in enumerate(self.blocks):
         #     x, attn, qkv = blk(x)
