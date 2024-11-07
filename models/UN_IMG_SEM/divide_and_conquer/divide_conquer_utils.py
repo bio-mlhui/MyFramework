@@ -218,8 +218,10 @@ class DefaultPredictor:
             image = torch.as_tensor(image.astype("float32").transpose(2, 0, 1))
 
             inputs = {"image": image, "height": height, "width": width}
-            predictions = self.model([inputs])[0]
-            return predictions
+            model_out = self.model([inputs])
+            predictions = model_out['model_output'][0]
+            process_time = model_out['process_time']
+            return predictions, process_time
 
 
 def add_cutler_config(cfg):

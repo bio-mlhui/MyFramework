@@ -33,6 +33,8 @@ import torch.nn.functional as F
 import numpy as np
 from detectron2.modeling import BACKBONE_REGISTRY, META_ARCH_REGISTRY
 from torchvision.transforms.functional import normalize as torchv_Normalize
+from detectron2.structures import Instances, BitMasks
+
 def area(mask: Tensor):
     # h w, bool
     return torch.count_nonzero(mask) / mask.numel()
@@ -429,11 +431,13 @@ class Online_Cutler(OptimizeModel):
         self.encoder = Encoder(encoder_configs)
         self.hidden_dim = encoder_configs['out_dim']
 
+        eval_size = model_configs['eval_size']
         self.init_graph_utils(batch_size, train_size, eval_size)
         decoder_configs = model_configs['decoder']
         decoder_configs['d_model'] = self.hidden_dim
         decoder_configs['attn']['dim_feedforward'] = self.hidden_dim * 4
         decoder_configs['attn']['nheads'] = self.backbone.num_heads # TODO: 不一致的
+        self.eval_size = (eval_size, eval_size)
         # TODO: multiscale
         # TODO: loss不是Point_sample
         from models.backbone.utils import ImageMultiscale_Shape
@@ -558,38 +562,35 @@ class Online_Cutler(OptimizeModel):
         log_dict['loss'] = loss.item()
         return log_dict
 
+    # class-agnostic instance segmentation
     @torch.no_grad()
-    def sample_eval_onlineCluster(self, batch_dict, visualize_all=False):
-        """{'pred_masks': list[ni h w], batch}
-        """ # TODO: 调整大小，coco有很多小物体，如果图片能够大一些的话，和gt的iou会更大些
+    def sample_oap(self, batch_dict):
         assert not self.training
-        img: torch.Tensor = batch_dict['images'].to(self.device, non_blocking=True)
-        img = torchv_Normalize(img, self.pixel_mean, self.pixel_std, False) 
-        image_ids = batch_dict['metas']['image_ids']
-        B, _, H, W = img.shape    
-        with torch.cuda.amp.autocast(enabled=True):
-            # b c h w (patch_size)
-            image_feats = self.forward_backbone(img)
-            q_feats, q_masks, q_scores = self.forward_online_agg_clustering_orig_dino(image_feats, 
-                                                                                      orig_image=batch_dict['images'],
-                                                                                      image_ids=image_ids,) # list[ni c]
-            # # auxiliary mask score
-            # pred_scores = [] # list[ni], batch
-            # for batch_idx in range(B):
-            #     q_attns = torch.einsum('chw,nc->nhw', 
-            #                            F.normalize(image_feats[batch_idx], dim=0), F.normalize(q_feats[batch_idx], dim=-1))
-            #     # 前景的attn的平均值
-            #     q_score: Tensor = (q_masks[batch_idx].float() * q_attns).sum([1,2]) / (q_masks[batch_idx].float().sum([1,2])) # (ni h w * ni h w)
-            #     q_score = q_score.clamp(min=0.)
-            #     pred_scores.append(q_score)
-        
+        img = batch_dict[0]['image']
+        height, width, image_id = batch_dict[0]['height'], batch_dict[0]['width'], batch_dict[0]['image_id']
 
-        q_masks = [F.interpolate(foo[None, ...].float(), size=(H,W), align_corners=False, mode='bilinear')[0] > 0.5
-                    for foo in q_masks]
-        return  {
-            'pred_masks': q_masks,
-            'pred_scores': q_scores
-        }
+        img = torch.from_numpy(np.asarray(Image.fromarray(img.permute(1,2,0).numpy()).resize(self.eval_size)))
+        img = (img.float() / 255).permute(2, 0, 1).to(self.device) # 3 h w, [0,1]
+        img = torchv_Normalize(img, self.pixel_mean, self.pixel_std, False)  
+        with torch.cuda.amp.autocast(enabled=True):
+            # 探讨不同的scale对它的影响, scale-invariant, 只和图片中instance数量有关
+            image_feats = self.forward_backbone(img[None, ...]) # b c h w, patch_size
+            q_feats, q_masks, q_scores = self.forward_online_agg_clustering_withSimi(image_feats,) # list[ni c]
+        # list[nqi h_p w_p] -> list[nqi h w]
+        q_masks = [F.interpolate(foo[None, ...].float(), size=(height,width), 
+                                    align_corners=False, mode='bilinear')[0] > 0.5 for foo in q_masks]
+        pred_masks = q_masks[0]
+        N, image_size = pred_masks.shape[0],pred_masks.shape[-2:]
+        scores = torch.ones(N).float() # N
+        pred_masks = BitMasks(pred_masks)
+        pred_boxes = pred_masks.get_bounding_boxes()
+        pred_classes = torch.zeros(N).int()
+
+        return [{
+            'instances': Instances(image_size=image_size, pred_masks=pred_masks,scores=scores,
+                                   pred_boxes=pred_boxes, pred_classes=pred_classes)
+        }]     
+
 
     @torch.no_grad()
     def forward_online_agg_clustering_cntMaxArea(self, image_feats, orig_image=None):
@@ -842,7 +843,7 @@ class Online_Cutler(OptimizeModel):
                 return cnt_value - (cnt_value) / (1 - cnt) * (foo_x - cnt)
             else:
                 raise ValueError()
-
+        
         bhw_attns = self.batch_feat_attns(feat_attns=feats_attns, temperature=feature_merge_temperature) # N N
         bhw_features = image_feats.permute(0, 2, 3, 1).flatten(0, 2) # N c
         assert bhw_attns.shape[0] == bhw_features.shape[0] # N N
@@ -923,7 +924,18 @@ class Online_Cutler(OptimizeModel):
             nms_feats.append(nms_pool_feats)
             nms_masks.append(nms_pool)
             nms_instanceness.append(nms_pool_ins)
-        
+
+        # TODO: crf postprocess
+        # 每个ni的分数: 前景attn的平均值
+        # pred_scores = [] # list[ni], batch
+        # for batch_idx in range(B):
+        #     q_attns = torch.einsum('chw,nc->nhw', 
+        #                            F.normalize(image_feats[batch_idx], dim=0), F.normalize(q_feats[batch_idx], dim=-1))
+        #     # 前景的attn的平均值
+        #     q_score: Tensor = (q_masks[batch_idx].float() * q_attns).sum([1,2]) / (q_masks[batch_idx].float().sum([1,2])) # (ni h w * ni h w)
+        #     q_score = q_score.clamp(min=0.)
+        #     pred_scores.append(q_score)
+
         return nms_feats, nms_masks, nms_instanceness
         # NMS
         
@@ -996,9 +1008,7 @@ class Online_Cutler(OptimizeModel):
 
 
     @torch.no_grad()
-    def forward_online_agg_clustering_withSimi(self, image_feats, 
-                                                orig_image=None,
-                                                image_ids=None):
+    def forward_online_agg_clustering_withSimi(self, image_feats,):
         """
         image_feats: b c h w
         feats_attns: b hw hw, [-1, 1]
@@ -1009,23 +1019,15 @@ class Online_Cutler(OptimizeModel):
         """
         # b c h w -> bhw c
         batch_size, _, H, W = image_feats.shape
+        feature_merge_temperature = 0.07
         clustering_threshold_list = [0.8, 0.7, 0.6, 0.5, 0.4]
         clustering_area_threshold = 4 # TODO:一个物体的大小4*32像素
         # TODO: self.的attention永远是1， 可不可以用dino的attn, self.就不是1了
-        feats_attns = torch.einsum('bcs,bcd->bsd', F.normalize(image_feats.flatten(2), dim=1),  
+        feats_attns = torch.einsum('bcs,bcd->bsd', 
+                                   F.normalize(image_feats.flatten(2), dim=1),  
                                    F.normalize(image_feats.flatten(2), dim=1)) # -1, 1
-        def instanceness_function(foo_x, start=0.25, cnt=0.35, cnt_value=0.2):
-            # 0到cnt是从1到cnt_value, cnt到1是从cnt_value到0
-            if foo_x < start:
-                return 1.
-            elif foo_x < cnt:
-                return 1 - (1-cnt_value) / (cnt-start) * (foo_x-start)
-            elif foo_x >= cnt:
-                return cnt_value - (cnt_value) / (1 - cnt) * (foo_x - cnt)
-            else:
-                raise ValueError()
-
-        bhw_attns = self.batch_feat_attns(feat_attns=feats_attns) # N N
+        
+        bhw_attns = self.batch_feat_attns(feat_attns=feats_attns, temporature=feature_merge_temperature) # N N, /temperature
         bhw_features = image_feats.permute(0, 2, 3, 1).flatten(0, 2) # N c
         assert bhw_attns.shape[0] == bhw_features.shape[0] # N N
         
@@ -1326,7 +1328,7 @@ class Online_Cutler(OptimizeModel):
         self.register_buffer('train_batch_mask', train_batch_mask)
         self.register_buffer('eval_batch_mask', eval_batch_mask)    
 
-# 根据coco的instance标注，调整clustering的超参
+
 @register_model
 def online_cutler_evalCluster(configs, device):
     from data_schedule.unsupervised_image_semantic_seg.mapper import Online_Cutler_EvalCluster_AUXMapper
@@ -1344,7 +1346,7 @@ def online_cutler_evalCluster(configs, device):
                            eval_size=configs['data']['evaluate'][eval_dataset_name]['mapper']['res'])
     model.to(device)
     model.optimize_setup(configs)
-    model.sample = model.sample_eval_onlineCluster
+    model.sample = model.sample_oap
     logging.debug(f'模型的总参数数量:{sum(p.numel() for p in model.parameters())}')
     logging.debug(f'模型的可训练参数数量:{sum(p.numel() for p in model.parameters() if p.requires_grad)}')
     return model, train_loader, eval_function

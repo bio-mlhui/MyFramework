@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 from pycocotools import mask as mask_util
 from tqdm import tqdm
-
+from detectron2.structures import Boxes, BitMasks
 def area(mask):
     return np.count_nonzero(mask) / mask.size
 
@@ -14,7 +14,9 @@ def iou(mask1, mask2):
     if union == 0: return 0
     return intersection / union
 
-def postprocess(args, refiner, annotations, image):
+
+
+def postprocess_orig(args, refiner, annotations, image):
     H, W = image.shape[:2]
 
     start_id = annotations["annotations"][0]['id']
@@ -63,3 +65,43 @@ def postprocess(args, refiner, annotations, image):
 
     annotations["annotations"] = refined_annotations
     return annotations
+
+def postprocess(args, refiner, pred_masks, image):
+    """
+    n h w, numpy bool;  h w 3, 0-255
+    """
+    H, W = image.shape[:2]
+
+    refined_annotations = []
+
+    for mask in tqdm(pred_masks):
+        x1, y1, x2, y2 = BitMasks(mask[None, ...]).get_bounding_boxes().tensor[0]
+        w = x2 - x1
+        h = y2 - y1
+        x_center = x1 + w / 2
+        y_center = y1 + h / 2
+
+        longer_side = max(w, h)
+        x1_resized = int(max(0, x_center - longer_side))
+        y1_resized = int(max(0, y_center - longer_side))
+        x2_resized = int(min(W, x_center + longer_side))
+        y2_resized = int(min(H, y_center + longer_side))
+
+        image_crop = image[y1_resized:y2_resized, x1_resized:x2_resized, :]
+        mask_crop = mask[y1_resized:y2_resized, x1_resized:x2_resized]
+
+        L = max(min(max(x2_resized-x1_resized, y2_resized-y1_resized) * args.refine_scale, args.refine_max_L), args.refine_min_L)
+        refined_mask_crop = refiner.refine(image_crop, mask_crop * 255, fast=True, L=L)
+        refined_mask_crop = (refined_mask_crop > 128).astype(np.uint8)
+
+        refined_mask = np.zeros((H, W), dtype=np.uint8)
+        refined_mask[y1_resized:y2_resized, x1_resized:x2_resized] = refined_mask_crop
+
+        if area(refined_mask) < args.min_area_thresh or area(refined_mask) > args.max_area_thresh:
+            continue
+        if iou(mask, refined_mask) < args.iou_thresh:
+            continue
+
+        refined_annotations.append(refined_mask)
+
+    return refined_annotations

@@ -116,4 +116,39 @@ def visualize_cluster(image, gt, pred, num_classes, save_dir):
     
     Image.fromarray(whole_image.numpy()).save(save_dir)
     
-       
+
+def generate_instance_canvas(image, H, W, mask,dataset_name):
+    """pred_mask: h w, score:float"""
+    metadata = MetadataCatalog.get(dataset_name)
+    istce_canvas = MyVisualizer(img_rgb=image, metadata=metadata, instance_mode=ColorMode.SEGMENTATION)
+    
+    pred_masks = mask # n h w
+    scores = torch.ones(pred_masks.shape[0])
+    pred_classes = torch.arange(pred_masks.shape[0]).int()
+
+    istce = Instances([H, W], 
+        pred_masks=pred_masks, # nq H W
+        scores=scores, # nq
+        pred_classes=pred_classes # nq
+    )
+    istce_canvas.draw_instance_predictions(istce)
+    istce_canvas = istce_canvas.get_output()
+    return istce_canvas.get_image()
+
+def cls_ag_visualize_pred(image, pred, save_dir):
+    """
+    image: 3 h w, 0-1
+    pred: n h w, bool
+    """
+    H, W = image.shape[-2:]
+    num_classes = pred.shape[0]
+    image = (image.permute(1,2,0).numpy() * 255).astype('uint8')
+    random_name = f'color_pred_{time.time()}'
+    MetadataCatalog.get(random_name).set(thing_classes = [str(idx) for idx in range(num_classes)], thing_colors = rbg_colors[:num_classes])
+    
+    pred_image = torch.from_numpy(generate_instance_canvas(image=image,  H=H, W=W, mask=pred, dataset_name=random_name,))  
+    
+    whole_image = torch.cat([torch.from_numpy(image), pred_image], dim=1)
+    
+    Image.fromarray(whole_image.numpy()).save(save_dir)
+         

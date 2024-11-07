@@ -20,7 +20,7 @@ import json
 from collections import defaultdict
 # TODO: 添加Test-TIme augmentation
 import torch.nn.functional as F
-
+from argparse import Namespace
 import time
 from typing import Tuple, List, Dict
 
@@ -422,8 +422,46 @@ class SingleImageHugMatching(Metric):
         mIoU = np.mean(self.iou)
         return {'miou': mIoU}
 
+# 为每个gt找到最优的pred
+class SingleImage_ForeachInstance(Metric):
+    def __init__(self,):
+        super().__init__(dist_sync_on_step=False, compute_on_step=False)
+        self.add_state("iou", [])
+        self.n_jobs = -1
+        self.temporary_match = None
+
+    def update(self, gt: torch.Tensor, pred: torch.Tensor):
+        # float,0-1, n h w
+        src = gt.flatten(1) # N hw
+        tgt = pred.flatten(1) # M hw
+        numerator = 2 * torch.einsum("nc,mc->nm", src, tgt)
+        denominator = src.sum(-1)[:, None] + tgt.sum(-1)[None, :] # N 1 + 1 M -> N M
+        dice_coeff = (numerator + 1) / (denominator + 1)
+        _, matched_indices = torch.max(dice_coeff, dim=1, keepdim=False) # gt
+
+        for src_idx, tgt_idx in enumerate(matched_indices):
+            src_mask = gt[src_idx] # h w
+            tgt_mask = pred[tgt_idx] # h w
+
+            inter = torch.logical_and(src_mask, tgt_mask)
+            union = torch.logical_or(src_mask, tgt_mask)
+
+            iou = inter.float().sum() / union.float().sum()
+            self.iou.append(iou)
+        self.temporary_match = matched_indices
+
+    def compute(self):
+        """
+        Compute mIoU
+        """
+        mIoU = np.mean(self.iou)
+        return {'miou': mIoU}
+
+
 from detectron2.evaluation import COCOEvaluator
 from detectron2.structures import Instances, Boxes
+
+
 @EVALUATOR_REGISTRY.register()
 class CutLER_Evaluator:
     def __init__(self,
@@ -435,65 +473,129 @@ class CutLER_Evaluator:
         self.loader = data_loader
         eval_configs: dict = configs['data']['evaluate'][dataset_name]['evaluator']
         self.visualize = eval_configs.get('visualize_all', False)
+        self.method_name = eval_configs['method_name'] # oap/maskcut/divide_conquer/cutler
+        self.eval_type = eval_configs['eval_meta'][0]
+        self.eval_dataset = eval_configs['eval_meta'][1] # cls_agnostic_coco20k/cls_agnostic_coco/cls_agnostic_lvis/cls_agnostic_uvo
+        
+    def __call__(self, model, output_dir):
+        if self.eval_type == 'cls_ag_instance':
+            # coco, coco20k, lvis, uvo, 只关注segmentation
+            return self.eval_cls_ag_instance(model, output_dir)
+        elif self.eval_type == 'instance':
+            return self.eval_instance(model, output_dir)
+        elif self.eval_type == 'semantic':
+             return self.eval_semantic(model, output_dir)
+        elif self.eval_type == 'panoptic':
+             return self.eval_panoptic(model, output_dir)
+        else:
+            raise ValueError()
+        
     def visualize_path(self, meta_idxs, visualize, evaluator_path):
         return [os.path.join(evaluator_path, f'meta_{meta_idx}') if vis else None for (meta_idx, vis) in zip(meta_idxs, visualize)]
-    
+
+    # cls_agnostic instance
     @torch.no_grad()
-    def __call__(self, model, output_dir):
+    def eval_cls_ag_instance(self, model, output_dir):
+        from data_schedule.unsupervised_image_semantic_seg.eval_cls_agnostic_seg.train_net import setup, Trainer, verify_results
+        args = Namespace(config_file="/home/xuhuihui/workspace/rvos_encoder/models/UN_IMG_SEM/divide_and_conquer/model_zoo/configs/CutLER-ImageNet/cascade_mask_rcnn_R_50_FPN.yaml",
+                            test_dataset=self.eval_dataset,
+                            train_dataset='',
+                            no_segm=False,
+                            resume=False,
+                            eval_only=True,
+                            opts=["TEST.DETECTIONS_PER_IMAGE", "300",
+                                  "OUTPUT_DIR", output_dir] if self.eval_dataset == 'cls_agnostic_lvis' else ["OUTPUT_DIR", output_dir])
+        cfg = setup(args)
+        original_forward_fn = model.forward
+        model.forward = model.sample
+
+        # 训练调参只测试100张图片, 或者看coco的loss
+        res = Trainer.test(cfg, model)
+        logging.debug(res)
+
+        target_key = [key for key in res.keys() if key.startswith('segm')][0]
+        res = res[target_key]
+        if cfg.TEST.AUG.ENABLED:
+            res.update(Trainer.test_with_TTA(cfg, model))
+        if comm.is_main_process():
+            verify_results(cfg, res)
+        model.forward = original_forward_fn
+
+        # self.self_eval(model, output_dir=output_dir)
+        return res        
+
+
+    # instance
+    @torch.no_grad()
+    def self_eval(self, model, output_dir):
+        from data_schedule.unsupervised_image_semantic_seg import UNSEG_Eval_GenPseudoMask_API
         # 假设: 固定输入输出大小, evaluate也在固定大小上测试
         # 假设: B=1
-        # 1 3 h w -> 1 nq h w, 然后单图matching
         model.eval()                    
-        visualize_path = os.path.join(output_dir, f'eval_{self.dataset_name}')
+        visualize_path = os.path.join(output_dir, f'{self.method_name}_eval_{self.dataset_name}')
         os.makedirs(visualize_path, exist_ok=True)
-        num_droped = 0
-        # instance_eval = COCOEvaluator(dataset_name='coco_2017_val', output_dir=visualize_path)
-        # instance_eval.reset()
-        metric = SingleImageHugMatching()
+        coco_eval = COCOEvaluator(dataset_name='coco_2017_val', output_dir=visualize_path)
+        coco_eval.reset()
+        match_iou_eval = SingleImage_ForeachInstance() # 每个gt mask找到最匹配的pred mask
+        num_pred_gt = [] # 大部分时间，cutler预测的物体的数量小于gt的个数
+        total_time = []
         coco_eval_ids = []
-        previous_images_ids = []
+        num_dropped = 0
         for batch_dict in tqdm(self.loader):
             eval_metas = batch_dict['metas'] # image_ids: list[str]
             image_id = eval_metas['image_ids'][0]
-            previous_images_ids.append(image_id)
-            orig_HWs = eval_metas['orig_HWs'][0] # (H W)
+            orig_HW = eval_metas['orig_HWs'][0]
+            image_path = os.path.join(visualize_path, f'{image_id}.jpg') # 2行图，上面是gt, 下面是对应的pred
             image = batch_dict['images'][0] # 3 h w, 0-1
             instance_gt_masks = batch_dict['instance_masks'][0] # N h w;bool
             _, H, W = image.shape
-
-            model_out = model.sample(batch_dict) # dict{'pred_masks': b nq h w / list[nq h w],batch, bool}
+            UNSEG_Eval_GenPseudoMask_API
+            model_out = model.sample(batch_dict)
+            total_time.append(model_out['total_time'])
             pred_masks: torch.Tensor = model_out['pred_masks'][0].cpu() # nq h w, bool  
-            pred_score = model_out['pred_scores'][0].cpu() # nq [0, 1]
-            # TODO: 每个mask的confidence分数
-            num_pred_classes = pred_masks.shape[0]
-            if pred_masks.shape[0] < instance_gt_masks.shape[0]:
-                num_droped += 1
-                continue
-            else:
-                if int(image_id) in coco_eval_ids:
-                    continue # 因为mapper的这个index没有成功，所以重新选了一个新的
-                coco_eval_ids.append(int(image_id))
+            pred_score = model_out['pred_scores'][0].cpu() # nq 0-1
+            # if pred_masks.shape[0] < instance_gt_masks.shape[0]:
+            #     num_dropped += 1
+            #     continue
+            if int(image_id) in coco_eval_ids:
+                continue # 因为mapper的这个index没有成功，所以重新选了一个新的
+            num_pred_gt.append(pred_masks.shape[0] / instance_gt_masks.shape[0])
+            coco_eval_ids.append(int(image_id))
 
-            # AP
-            # coco_eval_inputs = [{'image_id': int(image_id)}]
-            # coco_eval_outputs = self.instance_inference(mask_pred=pred_masks, orig_HWs=orig_HWs, pred_score=pred_score)
-            # instance_eval.process(inputs=coco_eval_inputs, outputs=coco_eval_outputs)
-            # matched mIou
-            metric.update(instance_gt_masks, pred_masks)
-            matched_indices = metric.temporary_match
-            not_matched_src_idxs = list(set(list(range(num_pred_classes))) - set(matched_indices[0]))
-            instance_gt_masks = torch.stack([instance_gt_masks[foo_idx] for foo_idx in matched_indices[1]], dim=0)
-            pred_masks = torch.stack([pred_masks[foo_idx] for foo_idx in (matched_indices[0].tolist() + not_matched_src_idxs)], dim=0)
+            coco_eval_inputs = [{'image_id': int(image_id)}]
+            coco_eval_outputs = self.instance_inference(mask_pred=pred_masks, orig_HWs=orig_HW, pred_score=pred_score)
+            coco_eval.process(inputs=coco_eval_inputs, outputs=coco_eval_outputs)
+            match_iou_eval.update(instance_gt_masks.float(), pred_masks.float())
+
+            # region
+            # matched_indices = match_iou_eval.temporary_match.tolist() # gt
+            # not_matched_src_idxs = list(set(list(range(pred_masks.shape[0]))) - set(matched_indices))
+            # rearrange = matched_indices + not_matched_src_idxs
+            # pred_masks = pred_masks[rearrange]
+            # cluster_image = visualize_cutler(image, gt=instance_gt_masks, pred=pred_masks, ) # H W*3 3
+            # cluster_image = cluster_image[:5000, :30000, :]
+            # Image.fromarray(cluster_image.numpy()).save(image_path)
+
+            # matched_indices = match_iou_eval.temporary_match # nq
+            # not_matched_src_idxs = list(set(list(range(num_pred_classes))) - set(matched_indices[0]))
+            # instance_gt_masks = torch.stack([instance_gt_masks[foo_idx] for foo_idx in matched_indices[1]], dim=0)
+            # pred_masks = torch.stack([pred_masks[foo_idx] for foo_idx in (matched_indices[0].tolist() + not_matched_src_idxs)], dim=0)
 
             # image_path = os.path.join(visualize_path, f'{image_id}.jpg')
             # cluster_image = visualize_cutler(image, gt=instance_gt_masks, pred=pred_masks, ) # H W*3 3
             # cluster_image = cluster_image[:5000, :30000, :]
             # Image.fromarray(cluster_image.numpy()).save(image_path)
+            # endregion
 
-        # results = instance_eval.evaluate(coco_eval_ids)            
-        logging.warning(f'there are {num_droped} instances dropped')
+        match_iou_result =  match_iou_eval.compute()['miou'] * 100
+        coco_result = coco_eval.evaluate(coco_eval_ids)   
+        time_per_image = torch.tensor(total_time).mean() 
+        num_pred_gt = torch.tensor(num_pred_gt).mean()        
         return {
-            'matched_miou': metric.compute()['miou'] * 100
+            'match_iou':match_iou_result,
+            'coco_result': coco_result,
+            'time_per_image': time_per_image,
+            'num_pred_gt': num_pred_gt,
         }
 
     def instance_inference(self, mask_pred, orig_HWs, pred_score, test_topk_per_image=100):
@@ -513,6 +615,11 @@ class CutLER_Evaluator:
         return [{
             'instances': result
         }]
+    
+    def eval_semantic(self, model, output_dir):
+        pass
+    
+
 
 
 def visualize_cutler(image, gt=None, pred=None,):

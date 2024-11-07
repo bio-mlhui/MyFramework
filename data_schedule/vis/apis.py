@@ -63,7 +63,7 @@ class VIS_EvalAPI_clipped_video_request_ann:
         'video_dict': {
             'video': t 3 h w, 0-1,
         }
-        'meta': {
+        'metas': {
             'video_id': str, 
             'frames': list[str], t'
             'request_ann': t, bool

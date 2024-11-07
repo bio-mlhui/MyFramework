@@ -26,7 +26,8 @@ class VIS_TrainMapper(VIS_Mapper):
  
         # assert mapper_config['augmentation']['name'] in ['Hflip_RandomResize', 'WeakPolyP_TrainAug', 'Flanet_TrainAug',
         #                                                  'WeakPolyP_TrainAug_RotateImageToClip']
-        self.augmentation = VIS_TRAIN_AUG_REGISTRY.get(mapper_config['augmentation']['name'])(mapper_config['augmentation'])
+        if 'augmentation' in mapper_config:
+            self.augmentation = VIS_TRAIN_AUG_REGISTRY.get(mapper_config['augmentation']['name'])(mapper_config['augmentation'])
 
     def map_to_frame_targets(self, clip_targets):
         VIS_TrainAPI_clipped_video
@@ -74,4 +75,32 @@ class VIS_EvalMapper(VIS_Mapper):
         self.augmentation = VIS_EVAL_AUG_REGISTRY.get(mapper_config['augmentation']['name'])(mapper_config['augmentation'])
         
 
+def get_frames_from_middle_frame(all_frames, mid_frame_id, step_size):
+    # 根据step_size进行选择中间的
+    # 5, 7 -> range(2, 9):2345678; 5, 6 -> range(2, 8):234567
+    ann_frame_idx = all_frames.index(mid_frame_id)
+    all_idxs = list(range(ann_frame_idx - step_size// 2, ann_frame_idx + (step_size+1)//2))
+    all_idxs = torch.tensor(all_idxs).clamp(0, max=len(all_frames)-1).int() # annotate_frame_idx = T//2
+    frames = [all_frames[idx] for idx in all_idxs]
+    return frames
 
+import torch.nn.functional as F
+def bilinear_resize_mask(mask, shape):
+    # h w, uint8, 0-255, label, bilinear
+    H, W = mask.shape
+    unique_labels = mask.unique()
+    lab_to_mask = []
+    for lab in unique_labels:
+        binary_mask = (mask == lab).float()
+        binary_mask = F.interpolate(binary_mask[None, None], size=shape, mode='bilinear', align_corners=False)[0, 0]
+        lab_to_mask.append(binary_mask)
+    lab_to_mask = torch.stack(lab_to_mask, dim=-1) # h w num_class
+    new_mask = lab_to_mask.max(dim=-1)[1] # h w, indices
+    new_label = unique_labels[new_mask.flatten()].reshape(shape)
+    return new_label
+
+
+def bilinear_semantic_resize_mask(mask, shape):
+    # k h w, bool, -> k h w
+    mask = F.interpolate(mask[None, ...].float(), size=shape, align_corners=False, mode='bilinear')[0] > 0.5 # k h w
+    return mask

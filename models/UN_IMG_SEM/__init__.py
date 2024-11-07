@@ -1,7 +1,8 @@
 from .. import backbone
 from .. import decoder
 from .. import encoder
-# from . import alignseg
+from . import maskcut
+from . import cutler
 from . import stego
 from . import kmeans
 from . import common

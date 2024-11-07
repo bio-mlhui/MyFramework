@@ -19,7 +19,7 @@ from detectron2.modeling.postprocessing import detector_postprocess
 from detectron2.modeling.proposal_generator import build_proposal_generator
 from ..roi_heads import build_roi_heads
 from .build import META_ARCH_REGISTRY
-
+import time
 __all__ = ["GeneralizedRCNN", "ProposalNetwork"]
 
 def move_device_like(src: torch.Tensor, dst: torch.Tensor) -> torch.Tensor:
@@ -210,7 +210,7 @@ class GeneralizedRCNN(nn.Module):
 
         images = self.preprocess_image(batched_inputs)
         features = self.backbone(images.tensor)
-
+        process_time = time.time()
         if detected_instances is None:
             if self.proposal_generator is not None:
                 proposals, _ = self.proposal_generator(images, features, None)
@@ -223,11 +223,17 @@ class GeneralizedRCNN(nn.Module):
             detected_instances = [x.to(self.device) for x in detected_instances]
             results = self.roi_heads.forward_with_given_boxes(features, detected_instances)
 
+        process_time = time.time() - process_time
         if do_postprocess:
             assert not torch.jit.is_scripting(), "Scripting is not supported for postprocess."
-            return GeneralizedRCNN._postprocess(results, batched_inputs, images.image_sizes)
+            ret = GeneralizedRCNN._postprocess(results, batched_inputs, images.image_sizes)
         else:
-            return results
+            ret = results
+
+        return {
+            'model_output': ret,
+            'process_time': process_time
+        }
 
     def preprocess_image(self, batched_inputs: List[Dict[str, torch.Tensor]]):
         """

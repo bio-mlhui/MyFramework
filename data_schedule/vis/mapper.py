@@ -11,7 +11,8 @@ import logging
 from einops import rearrange
 from data_schedule.utils.segmentation import bounding_box_from_mask
 from detectron2.data import MetadataCatalog
-
+from torchvision import transforms as T
+from PIL import Image
 from data_schedule.registry import MAPPER_REGISTRY
 from .mapper_utils import VIS_TrainMapper, VIS_EvalMapper
 from .vis_frame_sampler import VIS_FRAMES_SAMPLER_REGISTRY
@@ -226,6 +227,129 @@ class VIS_Step_EvalMapper(VIS_EvalMapper):
         }
 
 
+from .mapper_utils import bilinear_resize_mask, get_frames_from_middle_frame, bilinear_semantic_resize_mask
+from .mapper_utils import VIS_Mapper
+# 根据有annotation帧进行测试
+# 可以是有监督，可以是半监督
+@MAPPER_REGISTRY.register()
+class Card_EvalMapper(VIS_Mapper):
+    def __init__(self, 
+                 configs,
+                 dataset_name,
+                 mode,
+                 meta_idx_shift,) -> None:
+        assert mode == 'evaluate'
+        dataset_meta = MetadataCatalog.get(dataset_name)
+        mapper_config = configs['data'][mode][dataset_name]['mapper']
+        super().__init__(meta_idx_shift=meta_idx_shift,
+                         dataset_meta=dataset_meta)
+        self.step_size = mapper_config.get('step_size')
+        # define your test augmentations
+        resolution = mapper_config['res']
+        self.transform = T.Compose([
+            T.Resize((resolution,resolution), interpolation=Image.BILINEAR), 
+            T.ToTensor()
+        ])
+        
+
+    def _call(self, data_dict):
+        video_id, all_frames, frame_idx = data_dict['video_id'], data_dict['all_frames'], data_dict['frame_idx']
+        frames = get_frames_from_middle_frame(all_frames=all_frames,  mid_frame_id=frame_idx, step_size=self.step_size)
+        video_frames = self.get_frames_fn(video_id=video_id, frames=frames) # Image 
+        video_frames = [self.transform(frame) for frame in video_frames] # list[3 h w]
+        video_frames = torch.stack(video_frames, dim=0) # t 3 h w, 0-1
+        request_ann = torch.zeros(len(video_frames)).int()
+        request_ann[len(frames) // 2] = 1
+        request_ann = request_ann.bool()
+        
+        return {
+            'video_dict': {'video': video_frames},
+            'meta': {
+                'video_id': video_id,
+                'frames': frames,
+                'request_ann': request_ann,            
+            }
+        }
+
+@MAPPER_REGISTRY.register()
+class Card_TrainMapper(VIS_TrainMapper):
+    def __init__(self, 
+                 configs,
+                 dataset_name,
+                 mode,
+                 meta_idx_shift,) -> None:
+        dataset_meta = MetadataCatalog.get(dataset_name)
+        mapper_config = configs['data'][mode][dataset_name]['mapper']
+        super().__init__(meta_idx_shift=meta_idx_shift,
+                         dataset_meta=dataset_meta,
+                         mapper_config=mapper_config)
+        self.step_size = mapper_config.get('step_size')
+        self.transform = T.Compose([
+            T.Resize((mapper_config['res'],mapper_config['res']), interpolation=Image.BILINEAR), 
+            T.ToTensor()
+        ])
+        if mode == 'train':
+            self.local_global_sampling = mapper_config['local_global_sampling']
+        
+        self.get_frames_mask_fn = dataset_meta.get('get_frames_mask_fn')
+
+    def _call(self, data_dict):
+        video_id, all_frames, frame_idx = data_dict['video_id'], data_dict['all_frames'], data_dict['frame_idx']
+        frames = get_frames_from_middle_frame(all_frames=all_frames,  mid_frame_id=frame_idx, step_size=self.step_size)
+        video_frames = self.get_frames_fn(video_id=video_id, frames=frames) 
+        video_frames = [self.transform(frame) for frame in video_frames] # list[3 h w]
+        video_frames = torch.stack(video_frames, dim=0) # t 3 h w, 0-1
+        if video_frames.shape[1] == 1:
+            video_frames = video_frames.repeat(1, 3, 1, 1)
+            
+        gt_masks = self.get_frames_mask_fn(video_id=video_id, mid_frame=frame_idx) # K h w
+        if gt_masks is not None:
+            gt_masks = bilinear_semantic_resize_mask(gt_masks, shape=video_frames.shape[-2:])
+        request_ann = torch.zeros(len(video_frames)).int()
+        if gt_masks is not None:
+            request_ann[len(frames) // 2] = 1
+        gt_masks = gt_masks.unsqueeze(1) # K 1 h w
+        request_ann = request_ann.bool()           
+        ret = {}
+        ret['video_dict'] = {'video': video_frames}
+        ret['targets'] = {
+            'has_ann': request_ann, # K
+            'masks': gt_masks, # K t' h w
+            'classes': torch.arange(len(gt_masks)), # K
+        }
+        frame_targets = self.map_to_frame_targets(ret['targets'])
+        ret['frame_targets'] = frame_targets
+        return ret
+
+# class Card_AuxMapper:
+#     def mapper(self, data_dict, mode,):
+#         return data_dict
+    
+#     def collate(self, batch_dict, mode):
+#         if mode == 'train':
+#             return {
+#                 'videos': torch.stack([item['video'] for item in batch_dict], dim=0), # b t 3 h w
+#                 'masks': torch.stack([item['mask'] for item in batch_dict], dim=0),
+#                 'video_ids':[item['video_id'] for item in batch_dict],
+#                 'frame_idxs': [item['frame_idx'] for item in batch_dict],
+                               
+#                 'meta_idxs': [item['meta_idx'] for item in batch_dict],
+#                 'visualize': [item['visualize'] for item in batch_dict],
+#             }
+#         elif mode == 'evaluate':
+#             return {
+#                 'visualize': [item['visualize'] for item in batch_dict],
+#                 'metas': {
+#                     'video_ids': [item['video_id'] for item in batch_dict],
+#                     'frame_idxs': [item['frame_idx'] for item in batch_dict],
+#                     'meta_idxs': [item['meta_idx'] for item in batch_dict],
+#                 },
+                
+#                 'videos': torch.stack([item['video'] for item in batch_dict], dim=0), # b t 3 h w
+                
+#             }
+#         else:
+#             raise ValueError()
 
 
 

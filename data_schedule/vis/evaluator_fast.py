@@ -129,3 +129,73 @@ class VIS_Evaluator_FrameFast:
         comm.synchronize() 
         return eval_metrics
 
+
+import torch.nn.functional as F
+@EVALUATOR_REGISTRY.register()
+class Card_Evaluator:
+    def __init__(self,
+                 dataset_name,
+                 data_loader,
+                 configs) -> None:
+        self.dataset_name = dataset_name
+        self.loader = data_loader
+        dataset_meta = MetadataCatalog.get(dataset_name)
+        self.get_frame_mask_fn = dataset_meta.get('get_frames_gt_mask_fn')
+
+    def visualize_path(self, meta_idxs, visualize, evaluator_path):
+        return [os.path.join(evaluator_path, f'meta_{meta_idx}') if vis else None for (meta_idx, vis) in zip(meta_idxs, visualize)]
+    
+    @torch.no_grad()
+    def __call__(self, model, output_dir):
+        evaluator_path = os.path.join(output_dir, f'eval_{self.dataset_name}')
+        os.makedirs(evaluator_path, exist_ok=True)
+        all_dices = []
+        all_ious = []
+        # batch_size = 1
+        for batch_dict in tqdm(self.loader):
+            VIS_EvalAPI_clipped_video_request_ann
+            meta_info = batch_dict['metas'] 
+            video_id, frames, request_ann = meta_info['video_id'][0], meta_info['frames'][0], meta_info['request_ann'][0]
+            assert request_ann[len(request_ann) // 2]
+            assert len(frames) == len(request_ann)
+            visualize_path = self.visualize_path(meta_idxs=batch_dict['meta_idxs'], visualize=batch_dict['visualize'], 
+                                                 evaluator_path=os.path.join(evaluator_path, 'visualize_model')) # 模型的可视化
+            batch_dict['visualize_paths'] = visualize_path
+            batch_dict = to_device(batch_dict, device=model.device)
+            gt_masks = self.get_frame_mask_fn(video_id=video_id, mid_frame=frames[len(frames) // 2]) # K h w
+            
+            model_outputs = model.sample(batch_dict) 
+            
+            pred_masks = [haosen for idx, haosen in enumerate(model_outputs['pred_masks'][0]) if request_ann[idx]] # list[nt h w], t'
+            pred_scores = [haosen for idx, haosen in enumerate(model_outputs['pred_class'][0]) if request_ann[idx]] # list[nt K], t',
+            
+            assert len(pred_masks) == 1 and len(pred_scores) == 1
+            pred_masks = pred_masks[0] # nt h w, logits
+            pred_scores = pred_scores[0] # nt K
+            # semantic inference
+            # K h w
+            pred_masks = F.interpolate(pred_masks[None, ...], size=gt_masks.shape[-2:], mode='biliear', align_corners=False)[0]
+            
+            # K h w, K h w
+            dice, iou = computer_dice_iou(pred_masks, gt_masks)
+            all_dices.append(dice)
+            all_ious.append(iou)
+
+        return {'dice': torch.tensor(all_dices).mean(),
+                'iou': torch.tensor(all_ious).mean()}
+
+
+def computer_dice_iou(pred, gt):
+    # K hw
+    # K hw， 每个类别的平均值, float
+    dices = []
+    ious = []
+    for cls_id in range(len(pred)):
+        inter, union = (pred[cls_id]*gt[cls_id]).sum(), (pred[cls_id]+gt[cls_id]).sum()
+        dice = (2*inter+1)/(union+1)
+        iou = (inter+1)/(union-inter+1)
+
+        dices.append(dice)
+        ious.append(iou)
+    
+    return torch.tensor(dices).mean(), torch.tensor(ious).mean()

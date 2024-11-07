@@ -56,7 +56,13 @@ from detectron2.modeling import BACKBONE_REGISTRY
 from detectron2.data import MetadataCatalog
 import cv2
 from argparse import Namespace
-
+def resize_binary_mask(array, new_size):
+    """
+    h w, bool -> n h wbool
+    """
+    image = Image.fromarray(array.astype(np.uint8)*255)
+    image = image.resize(new_size)
+    return np.asarray(image).astype(np.bool_)
 class AUXMapper:
     def mapper(self, data_dict, mode,):
         return data_dict
@@ -89,7 +95,7 @@ from PIL import Image
 from .coco_annotator import create_annotation_info, output, category_info
 from .cascadepsp import postprocess
 from pycocotools import mask as mask_utils
-
+from detectron2.structures import BitMasks, Instances
 class Divide_and_Conquer(OptimizeModel):
     def __init__(
         self,
@@ -127,16 +133,16 @@ class Divide_and_Conquer(OptimizeModel):
         segmentation_id = 1
         assert not self.training
         self.backbone.eval()
-        image = batch_dict['images'][0].permute(1,2,0) # h w 3, 0-1float
-
+        image = batch_dict[0]['image'].permute(1,2,0) # h w 3, 0-1float
+        height, width = batch_dict[0]['height'], batch_dict[0]['width']
+        
         # coco format annotator initialization
         divide_conquer_masks = []
-        output["image"], output["annotations"] = {}, []
 
         # Divide phase
         # input: bgr numpy
         image = np.copy((image * 255).numpy().astype(np.uint8)[:, :, ::-1])
-        predictions = self.predictor(image)
+        predictions, _ = self.predictor(image)
         divide_masks_tensor = predictions["instances"].get("pred_masks")
         divide_masks = []
         for i in range(divide_masks_tensor.shape[0]):
@@ -171,27 +177,34 @@ class Divide_and_Conquer(OptimizeModel):
             conquer_masks = NMS(conquer_masks, self.parser_args.NMS_iou, self.parser_args.NMS_step)
             divide_conquer_masks.extend(conquer_masks)
 
-        for m in divide_conquer_masks:
-            # create coco-style annotation info 
-            annotation_info = create_annotation_info(
-                segmentation_id, 0, category_info, m.astype(np.uint8), None)
-            if annotation_info is not None:
-                output["annotations"].append(annotation_info)
-                segmentation_id += 1
-        
-        # postprocess CascadePSP
+        # postprocess_input = {
+        #     'annotations': []
+        # }
+        # for m in divide_conquer_masks:
+        #     # create coco-style annotation info 
+        #     annotation_info = create_annotation_info(
+        #         segmentation_id, 0, category_info, m.astype(np.uint8), None)
+        #     if annotation_info is not None:
+        #         postprocess_input["annotations"].append(annotation_info)
+        #         segmentation_id += 1
+
+        # # postprocess CascadePSP
         if self.parser_args.postprocess:    
-            refined_annotations = postprocess(self.parser_args, self.refiner, output, image)
-            output["annotations"] = refined_annotations["annotations"]
-        
-        visualized_masks = []
-        for mask_encoded in output["annotations"]:
-            mask = mask_utils.decode(mask_encoded['segmentation'])
-            visualized_masks.append(mask)
-        sorted_masks = sorted(visualized_masks, key=lambda m: area(m), reverse=True)
-        sorted_masks = [torch.from_numpy(foo) for foo in sorted_masks]
-        sorted_masks = torch.stack(sorted_masks, dim=0).bool()[None, ...] # N h w 
-        return {'pred_masks': sorted_masks}
+            divide_conquer_masks = postprocess(self.parser_args, self.refiner, divide_conquer_masks, image)
+
+
+        pred_masks = [resize_binary_mask(foo, (width, height)) for foo in divide_conquer_masks]
+        pred_masks = torch.from_numpy(np.stack(pred_masks, axis=0)) # n h w
+
+        N, image_size = pred_masks.shape[0],pred_masks.shape[-2:]
+        scores = torch.ones(N).float() # N
+        pred_masks = BitMasks(pred_masks)
+        pred_boxes = pred_masks.get_bounding_boxes()
+        pred_classes = torch.zeros(N).int()
+        return [{
+            'instances': Instances(image_size=image_size, pred_masks=pred_masks,scores=scores,
+                                   pred_boxes=pred_boxes, pred_classes=pred_classes)
+        }]    
 
         
     def optimize_state_dict(self,):
@@ -205,9 +218,9 @@ class Divide_and_Conquer(OptimizeModel):
     
 @register_model
 def divide_and_conquer(configs, device):
-    train_dataset_name = list(configs['data']['train'].keys())[0]
-    aux_mapper = AUXMapper()
+    from data_schedule.unsupervised_image_semantic_seg.mapper import Online_Cutler_EvalCluster_AUXMapper
     from data_schedule import build_singleProcess_schedule
+    aux_mapper = Online_Cutler_EvalCluster_AUXMapper()
     train_loader, eval_function = build_singleProcess_schedule(configs, aux_mapper.mapper, partial(aux_mapper.collate))
 
     model = Divide_and_Conquer(configs)

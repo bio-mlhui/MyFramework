@@ -193,9 +193,21 @@ MetadataCatalog.get('cocostuff27_train').set(**tep_meta,
                                             visualize_meta_idxs=visualize_meta_idxs['cocostuff27_train']) 
 
 
+tep_meta = {'mode': 'evaluate', 
+            'name': 'cocoval2017_instance_cls_agnostic',
+            'get_image_fn': partial(get_image, path=os.path.join(root, 'images/val2017',)),
+            'get_instance_mask_fn': partial(get_instance_mask, dataset_name='cocoval2017_instance_cls_agnostic'),}
 
-
-
+def cocoval2017_instance_cls_agnostic():
+    with contextlib.redirect_stdout(io.StringIO()):
+        coco_api = COCO(os.path.join(root, 'annotations/annotations/coco_cls_agnostic_instances_val2017.json'))
+    MetadataCatalog.get('cocoval2017_instance_cls_agnostic').set(coco_instance_api=coco_api)
+    file_list = os.listdir(os.path.join(root, "images/val2017"))
+    return [{'image_id': os.path.splitext(image_id)[0], 'meta_idx': idx} for idx, image_id in enumerate(file_list)]
+DatasetCatalog.register('cocoval2017_instance_cls_agnostic', cocoval2017_instance_cls_agnostic)    
+MetadataCatalog.get('cocoval2017_instance_cls_agnostic').set(**tep_meta, 
+                                                json_file=os.path.join(root, 'annotations/annotations/instances_val2017.json'),
+                                               visualize_meta_idxs=visualize_meta_idxs['cocoval2017_instance_cls_agnostic_meta']) 
 
 # def get_image_mask_fivecrop(path, image_id):
 #     mask = torch.from_numpy(np.array(Image.open(os.path.join(path, f'{image_id}.png')))).long()

@@ -489,67 +489,69 @@
 # import torch
 # vits8 = torch.hub.load('facebookresearch/dino:main', 'dino_vitb16')
 
-import os
-import torch
-from PIL import Image
-import numpy as np
-original_images_dir = '/home/xuhuihui/datasets/med_sam_workshop_data/train_npy/imgs'
-original_images = os.listdir(original_images_dir)
-# original_images = [foo for foo in original_images if 'Chest' in foo]
-original_gt_dir = '/home/xuhuihui/datasets/med_sam_workshop_data/train_npy/gts'
+# import os
+# import torch
+# from PIL import Image
+# import numpy as np
+# original_images_dir = '/home/xuhuihui/datasets/med_sam_workshop_data/train_npy/imgs'
+# original_images = os.listdir(original_images_dir)
+# # original_images = [foo for foo in original_images if 'Chest' in foo]
+# original_gt_dir = '/home/xuhuihui/datasets/med_sam_workshop_data/train_npy/gts'
 
-target_dir = '/home/xuhuihui/workspace/rvos_encoder/data_schedule/unsupervised_image_semantic_seg/sample_dataset/sample_data'
+# target_dir = '/home/xuhuihui/workspace/rvos_encoder/data_schedule/unsupervised_image_semantic_seg/sample_dataset/sample_data'
 
-rand_perm = torch.randperm(len(original_images))
+# rand_perm = torch.randperm(len(original_images))
 
-rbg_colors = [
-    (156, 31, 23),
-    (58, 90, 221),
-    (223, 123, 119),
-    (46, 140, 40),
-    (201, 221, 213),
-    (222, 32, 106),
-    (145, 70, 230),
-    (131, 225, 124),
-    (29, 88, 111),
-    (157, 113, 153),
-    (31, 196, 212),
-    (52, 32, 38),
-    (156, 238, 33),
-    (145, 135, 47),
-    (102, 50, 128),
-    (210, 145, 215),
-    (218, 215, 141),
-    (145, 30, 84),
-    (226, 40, 207),
-    (212, 195, 48),
-    (84, 144, 146),
-    (51, 29, 193),
-    (68, 213, 30),
-    (212, 98, 34),
-    (162, 23, 188),
-    (112, 202, 216),
-    (44, 214, 110)
-]
+# rbg_colors = [
+#     (156, 31, 23),
+#     (58, 90, 221),
+#     (223, 123, 119),
+#     (46, 140, 40),
+#     (201, 221, 213),
+#     (222, 32, 106),
+#     (145, 70, 230),
+#     (131, 225, 124),
+#     (29, 88, 111),
+#     (157, 113, 153),
+#     (31, 196, 212),
+#     (52, 32, 38),
+#     (156, 238, 33),
+#     (145, 135, 47),
+#     (102, 50, 128),
+#     (210, 145, 215),
+#     (218, 215, 141),
+#     (145, 30, 84),
+#     (226, 40, 207),
+#     (212, 195, 48),
+#     (84, 144, 146),
+#     (51, 29, 193),
+#     (68, 213, 30),
+#     (212, 98, 34),
+#     (162, 23, 188),
+#     (112, 202, 216),
+#     (44, 214, 110)
+# ]
 
-rbg_colors = {key: value for key, value in enumerate(rbg_colors)}
+# rbg_colors = {key: value for key, value in enumerate(rbg_colors)}
 
-for idx in rand_perm.tolist()[:30]:
-    img_id = original_images[idx][:-4]
-    ori_img = Image.fromarray((np.load(f'{original_images_dir}/{original_images[idx]}') * 255).astype('uint8'))\
-        .save(f'{target_dir}/images/{img_id}.jpg')
+# for idx in rand_perm.tolist()[:30]:
+#     img_id = original_images[idx][:-4]
+#     ori_img = Image.fromarray((np.load(f'{original_images_dir}/{original_images[idx]}') * 255).astype('uint8'))\
+#         .save(f'{target_dir}/images/{img_id}.jpg')
     
-    gt_label = np.load(f'{original_gt_dir}/{img_id}.npy').astype('uint8') # h w
-    assert gt_label.max() < 255
-    ori_mask = Image.fromarray(gt_label)\
-        .save(f'{target_dir}/labels/{img_id}.png')
+#     gt_label = np.load(f'{original_gt_dir}/{img_id}.npy').astype('uint8') # h w
+#     assert gt_label.max() < 255
+#     ori_mask = Image.fromarray(gt_label)\
+#         .save(f'{target_dir}/labels/{img_id}.png')
 
-    visualize_label = []
-    gt_label = torch.from_numpy(gt_label).long()
+#     visualize_label = []
+#     gt_label = torch.from_numpy(gt_label).long()
 
-    for sidx in gt_label.flatten():
-        visualize_label.append(rbg_colors[sidx.item()])
+#     for sidx in gt_label.flatten():
+#         visualize_label.append(rbg_colors[sidx.item()])
     
-    visualize_label = torch.tensor(visualize_label).reshape(gt_label.shape[0], gt_label.shape[1], 3).to(torch.uint8).numpy()
-    ori_mask = Image.fromarray(visualize_label)\
-        .save(f'{target_dir}/visualize_labels/{img_id}.png')
+#     visualize_label = torch.tensor(visualize_label).reshape(gt_label.shape[0], gt_label.shape[1], 3).to(torch.uint8).numpy()
+#     ori_mask = Image.fromarray(visualize_label)\
+#         .save(f'{target_dir}/visualize_labels/{img_id}.png')
+
+
